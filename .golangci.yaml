@@ -1,0 +1,9 @@
+#
+# Golangci-lint is a fast linters runner for Go
+# https://golangci-lint.run/
+#
+version: "2"
+linters:
+  enable:
+    - noinlineerr
+    - errcheck
