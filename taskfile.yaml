@@ -1,0 +1,112 @@
+# https://taskfile.dev/
+version: '3'
+
+
+dotenv: ['.env', '{{.ENV}}/.env', '{{.HOME}}/.env']
+env:
+  ENV: develop
+
+
+
+vars:
+  z_name: farc
+  z_file_name: "{{.z_name}}{{exeExt}}"
+
+
+
+tasks:
+  db/up:
+    desc: "запустить контейнер с базой для sqlc"
+    cmds:
+      - >
+        docker run
+        -d
+        --rm
+        --name authz_db_for_sqlc
+        -e POSTGRES_USER=postgres
+        -e POSTGRES_PASSWORD=postgres
+        -e POSTGRES_DB=authz
+        -p 5432:5432
+        postgres:15.14-alpine3.22
+
+  db/down:
+    desc: "остановить контейнер с базой"
+    cmds:
+      - docker stop authz_db_for_sqlc
+
+  test:
+    desc: "запустить тесты"
+    dir: "{{.USER_WORKING_DIR}}"
+    cmds:
+      - go test ./...
+
+  test/cover:
+    desc: "создать результат покрытия тестами"
+    dir: "{{.USER_WORKING_DIR}}/.tests"
+    cmds:
+      - >
+        go test
+        ../internal/usecase/roles
+        -coverprofile="cover.o"
+      - go tool cover -html="cover.o" -o "index.html"
+
+  env/up:
+    desc: "поднимает окружение для работы сервиса"
+    aliases: [up]
+    cmds:
+      - docker-compose up -d
+
+  env/down:
+    desc: "остановить, ранее запущенное, окружение"
+    aliases: [down]
+    cmds:
+      - docker-compose down
+
+  build/app:
+    desc: "собирает проект {{.z_name}}"
+    cmds:
+      - >
+        go build
+        -o {{.z_file_name}}
+        ./cmd/{{.z_name}}
+    sources:
+      - ./cmd/{{.z_name}}/**/*.go
+      - ./internal/**/*.go
+      - ./pkg/**/*.go
+      - ./cmd/**/*.go
+    generates:
+      - "./{{.z_file_name}}"
+
+  build:
+    desc: "собирает все проекты"
+    cmds:
+      - task: build/app
+
+  run:
+    desc: "запускает проект {{.z_name}}"
+    deps:
+      - task: build
+    vars:
+      WD: 
+        sh: pwsh{{exeExt}} -NoProfile -NoLogo -NonInteractive -C "(Get-Location).Path.Replace('\', '/')"
+    cmds:
+      - >
+        ./{{.z_file_name}}
+        cmd
+        update
+        --config {{.WD}}/docs.yml
+        --readme {{.WD}}/readme.md
+        --suffix "/docs/docs/"
+
+  help:
+    desc: "запускает help проекта {{.z_name}}"
+    aliases: [h]
+    deps:
+      - task: build
+    cmds:
+      - "./{{.z_file_name}} --help"
+
+  lint:
+    desc: "выполнить линтинг кода"
+    cmds:
+      - golangci-lint run  
