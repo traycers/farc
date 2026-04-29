@@ -86,7 +86,9 @@
 | Ключ | Тип | Описание |
 |------|-----|----------|
 | `fchunk_size` | integer | Размер фчанка в байтах. |
+| `read_chunk_size` | integer | Размер порции чтения в байтах (ADR-005). По умолчанию равен `fchunk_size`. Должен быть кратен размеру кластера диска. |
 | `recording.mode` | string | Режим записи: `"cyclic"` или `"fill_once"`. |
+| `retention.days` | integer | Минимальный срок хранения фблока в днях после `end` (последнего timestamp данных в фблоке). |
 
 Пример:
 
@@ -95,6 +97,9 @@
   "fchunk_size": 4194304,
   "recording": {
     "mode": "cyclic"
+  },
+  "retention": {
+    "days": 30
   }
 }
 ```
