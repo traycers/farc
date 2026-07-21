@@ -13,6 +13,8 @@ dist
 vendor
 loki-config.yaml
 tests_output.txt
+.claude
+CLAUDE.md
 
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,go,hugo
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,go,hugo
