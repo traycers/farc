@@ -51,8 +51,6 @@ nav:
       - Концепция хранилища: archive/01-storage.md
       - Формат хранилища: archive/02-storage-format.md
       - Операции хранилища: archive/03-storage-operations.md
-      - Формат фблока: archive/04-fblock-format.md
-      - Операции с фблоком: archive/05-fblock-operations.md
   - ADR:
       - header-location: archive/adr/001-header-location.md
       - index-storage: archive/adr/002-index-storage.md
@@ -63,3 +61,6 @@ nav:
       - external-catalog: archive/adr/007-external-catalog.md
       - write-sequence: archive/adr/008-write-sequence.md
       - params-json: archive/adr/009-params-json.md
+      - direct-io: archive/adr/010-direct-io.md
+      - read-bandwidth: archive/adr/011-read-bandwidth.md
+      - retention-clock: archive/adr/012-retention-clock.md
