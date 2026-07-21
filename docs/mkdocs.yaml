@@ -64,3 +64,4 @@ nav:
       - direct-io: archive/adr/010-direct-io.md
       - read-bandwidth: archive/adr/011-read-bandwidth.md
       - retention-clock: archive/adr/012-retention-clock.md
+      - fcontainer-term: archive/adr/013-fcontainer-term.md

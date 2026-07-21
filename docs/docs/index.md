@@ -37,6 +37,7 @@
 | [010](archive/adr/010-direct-io.md) | Два бэкенда дискового I/O: O_DIRECT (Linux) и стандартная библиотека |
 | [011](archive/adr/011-read-bandwidth.md) | Гарантированный прогресс чтения при непрерывной записи *(предложено)* |
 | [012](archive/adr/012-retention-clock.md) | Отсчёт срока хранения при скачках системных часов *(предложено)* |
+| [013](archive/adr/013-fcontainer-term.md) | Разделение терминов fblock и fcontainer |
 
 ## Статус проекта
 
