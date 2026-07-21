@@ -1,0 +1,65 @@
+site_name: farc docs
+site_description: Документация архива farc
+site_author: dim shu
+site_url: https://github.com/traycers/farc
+docs_dir: ./docs/
+site_dir: ../build/site/
+
+theme:
+  name: material
+  language: ru
+
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - header.autohide
+    - search.highlight
+    - search.suggest
+
+copyright: "© 2026 farc"
+
+plugins:
+  - search
+
+markdown_extensions:
+  - tables
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.tabbed
+  - pymdownx.emoji
+  - toc:
+      permalink: true
+
+nav:
+  - Главная: index.md
+  - Архив:
+      - Вводная: archive/index.md
+      - Требования: archive/00-requirements.md
+      - Архитектура: archive/01-architecture.md
+      - Концепция хранилища: archive/01-storage.md
+      - Формат хранилища: archive/02-storage-format.md
+      - Операции хранилища: archive/03-storage-operations.md
+      - Формат фблока: archive/04-fblock-format.md
+      - Операции с фблоком: archive/05-fblock-operations.md
+  - ADR:
+      - header-location: archive/adr/001-header-location.md
+      - index-storage: archive/adr/002-index-storage.md
+      - data-delivery: archive/adr/003-data-delivery.md
+      - read-strategy: archive/adr/004-read-strategy.md
+      - write-priority: archive/adr/005-write-priority.md
+      - lazy-init: archive/adr/006-lazy-init.md
+      - external-catalog: archive/adr/007-external-catalog.md
+      - write-sequence: archive/adr/008-write-sequence.md
+      - params-json: archive/adr/009-params-json.md
