@@ -21,8 +21,10 @@
 /root/channels/id/streams/id/{video,audio}/params/id
 /root/channels/id/streams/id/{video,audio}/params/id/data      // сами параметры кодека
 /root/channels/id/streams/id/{video,audio}/params/id/frames
-/root/channels/id/streams/id/{video,audio}/params/id/frames/I  // ключевой кадр
-/root/channels/id/streams/id/{video,audio}/params/id/frames/I/P // не ключевые кадры того же GOP
+/root/channels/id/streams/id/{video,audio}/params/id/frames/frame        // кадр (видео и звук — общий контейнер)
+/root/channels/id/streams/id/{video,audio}/params/id/frames/frame/data   // байты кадра
+/root/channels/id/streams/id/{video,audio}/params/id/frames/frame/time   // время кадра
+/root/channels/id/streams/id/{video,audio}/params/id/frames/frame/kind   // video: I/P; audio: кодек (pcm/aac/g.711)
 ```
 
 `id` в пути — доменный идентификатор (номер канала, номер потока, номер версии параметров), не путать с `id` узла дерева (§4).
@@ -43,18 +45,19 @@ flowchart TD
     vver["params_version (×N)"]
     vdata["data"]
     vframes["frames"]
-    vI1["frame_i"]
-    vP1["frame_p"]
-    vP2["frame_p"]
-    vI2["frame_i"]
-    vP3["frame_p"]
+    vframe["frame (×N)"]
+    vfdata["frame_data"]
+    vftime["frame_time"]
+    vfkind["frame_kind_video (0..1)"]
 
     aparams["params"]
     aver["params_version (×N)"]
     adata["data"]
     aframes["frames"]
-    aI["frame_i (×N)"]
-    aP["frame_p (×N)"]
+    aframe["frame (×N)"]
+    afdata["frame_data"]
+    aftime["frame_time"]
+    afcodec["frame_codec_audio (0..1)"]
 
     root --> channels --> channel --> streams --> stream
     stream --> video
@@ -63,17 +66,21 @@ flowchart TD
     video --> vparams --> vver
     vver --> vdata
     vver --> vframes
-    vframes --> vI1 --> vP1
-    vI1 --> vP2
-    vframes --> vI2 --> vP3
+    vframes --> vframe
+    vframe --> vfdata
+    vframe --> vftime
+    vframe --> vfkind
 
     audio --> aparams --> aver
     aver --> adata
     aver --> aframes
-    aframes --> aI --> aP
+    aframes --> aframe
+    aframe --> afdata
+    aframe --> aftime
+    aframe --> afcodec
 ```
 
-`frame_i` → `frame_p` на схеме — это `parent` (кадр GOP принадлежит своему ключевому кадру), а не `sibling`; связный список соседей (§3 в `05-data-format.md`) на схеме не показан — он определяет физический порядок создания, а не иерархию.
+`frame` — общий контейнер для видео и звука; у звука нет разбиения на ключевые/неключевые кадры, поэтому дерево для обеих веток одинаковое по форме, различается только тип узла-«вида» (`frame_kind_video` против `frame_codec_audio`, см. §3). Порядок `frame` под одним `frames` — цепочка `sibling` (`05-data-format.md` §3), это физический порядок создания; для видео он же — порядок декодирования, включая P-кадры внутри GOP.
 
 ## 3. Типы узлов
 
@@ -90,10 +97,15 @@ flowchart TD
 | `params_version`   | `params`          | N                      | — (см. §5) |
 | `data`             | `params_version`  | 1                      | параметры кодека |
 | `frames`           | `params_version`  | 1                      | — (контейнер) |
-| `frame_i`          | `frames`          | N                      | байты ключевого кадра |
-| `frame_p`          | `frame_i`         | N                      | байты не-ключевого кадра |
+| `frame`            | `frames`          | N                      | — (контейнер, атрибуты в детях) |
+| `frame_data`       | `frame`           | 1                      | байты кадра |
+| `frame_time`       | `frame`           | 1                      | — (время в базовом поле `timestamp` узла) |
+| `frame_kind_video` | `frame` (только video) | 0..1              | `I` (ключевой кадр) или `P` |
+| `frame_codec_audio`| `frame` (только audio) | 0..1              | код кодека (`pcm`/`aac`/`g711`) |
 
 `video`/`audio` — не контейнеры и не повторяются: у потока не более одного узла каждого вида; отсутствие узла означает отсутствие соответствующей дорожки в потоке.
+
+`frame_data` (а не `data`) и раздельные `frame_kind_video`/`frame_codec_audio` (а не общий `kind`) — намеренно уникальные имена типа, а не переиспользование `data`/общего тега вида: один и тот же `type` не должен означать разные вещи в разных ветках дерева (иначе подсчёт/индексация по `type` становится неоднозначной, см. `06-toc-format.md`). Тип узла сам по себе однозначно определяет ветку и семантику — доп. поле-скоуп не нужно.
 
 ## 4. Доменные идентификаторы vs id узла дерева
 
@@ -104,10 +116,15 @@ flowchart TD
 ## 5. Заполнение узлов
 
 - **`data`** — параметры кодека (например, SPS/PPS для H.264, ASC для AAC), непрозрачны для farc.
-- **`frame_i`** — ключевой кадр (I-frame), начало новой GOP; `timestamp` — абсолютное время кадра (Unix, наносекунды; источник — микросекундная точность, младшие 3 разряда всегда нулевые, см. `05-data-format.md` §3); `value` — закодированные байты кадра.
-- **`frame_p`** — не ключевой кадр той же GOP; родитель — узел `frame_i`, с которого GOP началась; `timestamp` заполняется так же, как у `frame_i`.
-- **`params_version`** — фиксирует момент смены параметров кодека внутри потока (например, смена разрешения); `timestamp` — момент смены (тот же базовый механизм, что и у кадров); `value` не используется.
+- **`frame`** — контейнер; `value` не используется, `timestamp` базового элемента тоже не используется (см. `frame_time`). Атрибуты кадра — в дочерних узлах ниже.
+- **`frame_data`** — закодированные байты кадра (ключевого или нет — см. `frame_kind_video`).
+- **`frame_time`** — абсолютное время кадра хранится в базовом поле `timestamp` этого узла (Unix, наносекунды; источник — микросекундная точность, младшие 3 разряда всегда нулевые, см. `05-data-format.md` §3); `value` не используется (`size = 0`).
+- **`frame_kind_video`** — только для video-ветки; `value` — маркер `I` (ключевой кадр, начало новой GOP) или `P` (не ключевой, той же GOP).
+- **`frame_codec_audio`** — только для audio-ветки; `value` — идентификатор кодека кадра (`pcm`/`aac`/`g711`).
+- **`params_version`** — фиксирует момент смены параметров кодека внутри потока (например, смена разрешения); `timestamp` — момент смены (тот же базовый механизм, что и у `frame_time`); `value` не используется.
 
 ## 6. Открытые вопросы
 
 - Точный формат доменного идентификатора в `value` узлов `channel`/`stream` (просто число фиксированного размера, или с дополнительными полями) — согласовать с `00-requirements.md`/ADR-014, где уже определён номер канала.
+- Точное байтовое представление `value` у `frame_kind_video` (`I`/`P`) и `frame_codec_audio` (`pcm`/`aac`/`g711`) — enum фиксированного размера или иначе.
+- Связь P-кадра со своим ключевым кадром GOP раньше выражалась через `parent` (`frame_p`, родитель — `frame_i`); теперь все `frame` — плоские дети `frames`, а видовой признак I/P вынесен в `frame_kind_video`. Предполагается, что потребителю достаточно восстанавливать GOP сканированием цепочки `sibling` назад до ближайшего `frame` с `frame_kind_video = I` (декодер всегда идёт последовательно). Если нужен произвольный доступ к «своему» I-кадру без обхода соседей — потребуется дополнительная ссылка.
