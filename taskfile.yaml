@@ -110,3 +110,17 @@ tasks:
     desc: "выполнить линтинг кода"
     cmds:
       - golangci-lint run  
+
+  build-docs:
+    desc: "Собрать все .md файлы из archive в один __docs__.md"
+    aliases: [bd]
+    cmds:
+      - |
+        > __docs__.md
+        find docs/docs/archive -type f -name "*.md" | sort | while read file; do
+          echo -e "\n\n" >> __docs__.md
+          echo "#### $file" >> __docs__.md
+          echo -e "\n" >> __docs__.md
+          cat "$file" >> __docs__.md
+        done
+    silent: true
