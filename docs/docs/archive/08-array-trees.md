@@ -2,7 +2,7 @@
 
 ## 1. Назначение документа
 
-Справочная глава: как устроены деревья на базе массивов в подходе Aaron W. Hsu (co-dfns, APL) и как с ними работать. Первоисточники со ссылками — §17.1. Документ объясняет теорию, на которую опирается формат дерева фконтейнера (`05-data-format.md` §2–§3) и производные индексы TOC (`06-toc-format.md` §3).
+Справочная глава: как устроены деревья на базе массивов в подходе Aaron W. Hsu (co-dfns, APL) и как с ними работать. Первоисточники со ссылками — §17.1, видеодоклады — §17.3. Документ объясняет теорию, на которую опирается формат дерева фконтейнера (`05-data-format.md` §2–§3) и производные индексы TOC (`06-toc-format.md` §3).
 
 Разбираются:
 
@@ -480,7 +480,7 @@ gather:   dst[i]      = src[idx[i]]     // читаем вразнобой, пи
 scatter:  dst[idx[i]] = src[i]          // читаем подряд, пишем вразнобой
 ```
 
-Gather безопасен всегда. Scatter корректен только если `idx` — перестановка (иначе конфликт записи) или если запись идёт с коммутативной редукцией (§5.2).
+Gather безопасен всегда. Scatter корректен только если `idx` — перестановка (иначе конфликт записи) или если запись идёт с коммутативной редукцией (§5.2). Наглядный разбор обеих операций и приёма «переписать scatter как gather» — в видео из §17.3.
 
 ### 7.2. Две таблицы, и обе нужны
 
@@ -1176,7 +1176,28 @@ sibling[F] = L, если L != x, иначе F                // дети вст�
 - **Joseph JáJá. *An Introduction to Parallel Algorithms*.** Addison-Wesley, 1992.
   Классическое изложение pointer jumping (§5.4) и параллельных обходов; свободной онлайн-версии нет.
 
-### 17.3. Документы farc
+### 17.3. Видео
+
+**Деревья Hsu — доклады автора.**
+
+- [**High-performance Tree Wrangling, the APL Way**](https://www.youtube.com/watch?v=hzPd3umu78g) // Dyalog '18, канал Dyalog User Meetings ([слайды PDF](https://www.dyalog.com/uploads/conference/dyalog18/presentations/U19_Tree_Wrangling_the_APL_Way.pdf)).
+  Самый прямой доклад по теме этого документа: подход к работе с деревьями, дающий сокращение кода, производительность и параллелизуемость. Если смотреть что-то одно — это.
+- **Parallel-by-construction Tree Manipulation with APL**, LambdaConf 2018 — [Часть 1](https://www.youtube.com/watch?v=lc4IjR1iJTg), [Часть 2](https://www.youtube.com/watch?v=X5_5MtOYNos).
+  Формат воркшопа, а не доклада: то же самое, но длиннее и с разбором по шагам.
+- [**Designing your Data: The Bread & Butter of APL Performance**](https://www.youtube.com/watch?v=ozlxUmdYsHA) // FnConf 2025.
+  Свежий доклад про выбор представления данных — тот самый вопрос, который в §3.4–§3.6 решается в пользу `parent` + `sibling`.
+- [**Co-dfns Report: GPU Performance, Workflow and Usability**](https://www.youtube.com/watch?v=xZru2zXSzMA) // Dyalog '16 и [**revolutionary GPU data compiler using APL**](https://www.youtube.com/watch?v=2uGg2n7BGZs) // ConfEngine.
+  Контекст вокруг метода: зачем компилятор на GPU и что из этого вышло.
+
+**Gather, scatter и сопутствующие примитивы.** Курс Udacity CS344 *Intro to Parallel Programming* (John Owens, UC Davis / David Luebke, NVIDIA) — короткие ролики, разбитые по темам:
+
+- [**Communication Patterns**](https://www.youtube.com/watch?v=HPxjXSMIGc0) — обзорный: map, gather, scatter, stencil, transpose. Ключевая формулировка та же, что в §7.1: gather — «много входов в один выход», scatter — «один вход во много выходов».
+- [**Map and Gather**](https://www.youtube.com/watch?v=eZxbwnABmTM) — gather как выборка по вектору индексов (§7.1, `Ak[A]` в §10.5).
+- [**Scatter To Gather Transformation**](https://www.youtube.com/watch?v=feGeUehFtQ4) — почему scatter стараются переписать в gather. Прямо про конфликт записи из §5.2 и §7.1.
+- [**Blelloch Scan**](https://www.youtube.com/watch?v=mmYv3Haj6uc) и [**Hillis Steele vs Blelloch Scan**](https://www.youtube.com/watch?v=_5sM-4ODXaA) — префиксные суммы, на которых стоят §8.2 (сегментированный scan) и §11.5 (компактификация).
+- [Плейлист курса целиком](https://www.youtube.com/playlist?list=PLAwxTw4SYaPnFKojVQrmyOGFCqHTxfdv2).
+
+### 17.4. Документы farc
 
 - `05-data-format.md` — формат дерева фконтейнера.
 - `06-toc-format.md` — TOC и производные индексы.
