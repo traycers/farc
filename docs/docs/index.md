@@ -23,7 +23,7 @@
 | [Формат данных](archive/05-data-format.md) | Дерево фконтейнера на базе массивов: элемент, `parent`/`sibling`, инварианты |
 | [Формат TOC](archive/06-toc-format.md) | Базовый TOC и производные индексы для поиска без обхода дерева |
 | [Дерево данных](archive/07-media-tree.md) | Доменная иерархия: каналы, потоки, версии параметров, кадры |
-| [Деревья на базе массивов](archive/08-array-trees.md) | Справочник по деревьям Aaron W. Hsu: path coordinate matrix, propagation, DFS/BFS, LCA |
+| [Деревья на базе массивов](archive/08-array-trees.md) | Справочник по деревьям Aaron W. Hsu: path coordinate matrix, propagation, DFS/BFS, LCA, изменение дерева |
 
 ## Архитектурные решения (ADR)
 
