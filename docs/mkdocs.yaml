@@ -52,9 +52,13 @@ nav:
       - Вводная: archive/index.md
       - Требования: archive/00-requirements.md
       - Архитектура: archive/01-architecture.md
-      - Концепция хранилища: archive/01-storage.md
-      - Формат хранилища: archive/02-storage-format.md
-      - Операции хранилища: archive/03-storage-operations.md
+      - Концепция хранилища: archive/02-storage.md
+      - Формат фблока: archive/03-storage-format.md
+      - Операции хранилища: archive/04-storage-operations.md
+      - Формат данных: archive/05-data-format.md
+      - Формат TOC: archive/06-toc-format.md
+      - Дерево данных: archive/07-media-tree.md
+      - Деревья на базе массивов: archive/08-array-trees.md
   - ADR:
       - header-location: archive/adr/001-header-location.md
       - index-storage: archive/adr/002-index-storage.md
