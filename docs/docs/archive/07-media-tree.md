@@ -41,6 +41,11 @@ flowchart TD
     aconfigs["configs"]
     acfg["config (×N)"]
     adata["data"]
+    acodec["codec_audio"]
+    aprofile["codec_profile (0..1)"]
+    asr["sample_rate"]
+    ach["channel_count"]
+    aacfg["param_audio_config (0..1)"]
     aframes["frames"]
     aframe["frame (×N)"]
     afdata["frame_data"]
@@ -66,6 +71,11 @@ flowchart TD
 
     audio --> aconfigs --> acfg
     acfg --> adata
+    adata --> acodec
+    adata --> aprofile
+    adata --> asr
+    adata --> ach
+    adata --> aacfg
     acfg --> aframes
     aframes --> aframe
     aframe --> afdata
@@ -91,11 +101,15 @@ flowchart TD
 | `config`            | `timestamp` | `configs`      | N                      | — (см. §5) |
 | `data`              | `void`   | `config`          | 1                      | — (контейнер, дочерние узлы — §3.2) |
 | `codec_video`       | `uint8`  | `data` (только video) | 1                  | `h264` = 0, `h265` = 1 |
-| `codec_profile`     | `bytes`  | `data` (только video) | 0..1               | сырой `profile-level-id`/`profile-id` из SDP, как есть, информационно |
+| `codec_profile`     | `bytes`  | `data` (video/audio) | 0..1                | сырой `profile-level-id`/`profile-id` из SDP, как есть, информационно |
 | `framerate`         | `float64` | `data` (только video) | 0..1              | номинальный fps из SDP `a=framerate`, информационно |
 | `param_vps`         | `bytes`  | `data` (только video, H.265) | 0..1        | сырой VPS NAL, без старт-кода |
 | `param_sps`         | `bytes`  | `data` (только video) | 1                  | сырой SPS NAL, без старт-кода |
 | `param_pps`         | `bytes`  | `data` (только video) | 1                  | сырой PPS NAL, без старт-кода |
+| `codec_audio`       | `uint8`  | `data` (только audio) | 1                  | `pcm` = 0, `aac` = 1, `g711a` (PCMA) = 2, `g711u` (PCMU) = 3 |
+| `sample_rate`       | `uint32` | `data` (только audio) | 1                  | частота дискретизации, Гц |
+| `channel_count`     | `uint8`  | `data` (только audio) | 1                  | число каналов (обычно 1) |
+| `param_audio_config` | `bytes` | `data` (только audio, AAC) | 0..1          | сырой AudioSpecificConfig, без изменений |
 | `frames`            | `void`   | `config`          | 1                      | — (контейнер) |
 | `frame`             | `void`   | `frames`          | N                      | — (контейнер, атрибуты в детях) |
 | `frame_data`        | `bytes`  | `frame`           | 1                      | байты кадра |
@@ -138,6 +152,10 @@ flowchart TD
 | 19 | `param_pps` |
 | 20 | `framerate` |
 | 21 | `codec_profile` |
+| 22 | `codec_audio` |
+| 23 | `sample_rate` |
+| 24 | `channel_count` |
+| 25 | `param_audio_config` |
 
 `frame_data` (а не `data`) и `codec_video`/`codec_audio` как отдельные от `frame_kind` роли (а не общая роль `kind`/`codec`) — намеренно уникальные роли, а не переиспользование одного и того же имени: одна и та же `role` не должна означать разные вещи в разных ветках или на разных уровнях дерева (иначе подсчёт/индексация по `role` становится неоднозначной, см. `06-toc-format.md`). Роль узла сама по себе однозначно определяет ветку, уровень и семантику — доп. поле-скоуп не нужно.
 
@@ -161,16 +179,24 @@ flowchart TD
 
 `packetization-mode` из `fmtp` не хранится — это параметр RTP-упаковки (как NAL резался на пакеты по сети), к результату декодирования и к самому потоку данных отношения не имеет.
 
-### 3.3. Параметры потока (дети `data`, аудио) — черновик
+### 3.3. Параметры потока (дети `data`, аудио)
 
-Реального SDP с аудио-треком пока не снято, поэтому раздел — набросок по аналогии с RTP-схемами для типичных кодеков (RFC 3640 `mpeg4-generic` для AAC, RFC 3551 для G.711/PCM), **не зафиксирован** и не входит в таблицу кодов ролей (§3.1) до проверки реальным SDP:
+Источник — та же RTSP-камера, две реальные аудио-дорожки в одном SDP-сеансе (разные `stream`):
 
-| Узел (черновик) | Откуда ожидается | Комментарий |
+- **AAC**: `a=rtpmap:97 MPEG4-GENERIC/48000`, `a=fmtp:97 streamtype=5;profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1188`.
+- **G.711 A-law**: `a=rtpmap:8 PCMA/8000` (без `fmtp` — кодек статический, RFC 3551, доп. параметры не нужны).
+
+Разбор на узлы:
+
+| Узел | Откуда в SDP | Комментарий |
 |---|---|---|
-| `codec_audio` | `rtpmap` (`PCMU`/`PCMA`/`mpeg4-generic`) | код кодека (`pcm`/`aac`/`g711`) — единственный источник истины, на уровне `config`; per-frame поля для этого больше нет (§2) |
-| `sample_rate` | `rtpmap` (например, `mpeg4-generic/44100/2`) | Гц |
-| `channels` | `rtpmap` | обычно 1 или 2 |
-| `param_audio_config` | `config=` в `fmtp` (только AAC, `mpeg4-generic`) | AudioSpecificConfig, hex-декод как есть; для `pcm`/`g711` extradata не нужна, узел отсутствует |
+| `codec_audio` | по `rtpmap` (`MPEG4-GENERIC` → `aac`; `PCMA`/`PCMU` → `g711a`/`g711u`) | код кодека — единственный источник истины, на уровне `config`; per-frame поля для этого нет (§2) |
+| `sample_rate` | клок-рейт из `rtpmap` (второе поле: `MPEG4-GENERIC/48000` → 48000; `PCMA/8000` → 8000) | Гц, для обоих кодеков даётся прямо в `rtpmap`, декодировать `config` не нужно |
+| `channel_count` | для AAC — не в `rtpmap` (там только клок-рейт), а декодируется из `channelConfiguration` внутри `config` (см. ниже); для G.711 статический тип (`PCMA`/`PCMU`) по RFC 3551 — 1, если `rtpmap` явно не указал третьим полем другое | пример: `config=1188` → 1 (моно) |
+| `codec_profile` | `profile-level-id` из `fmtp` (AAC) — то же поле и та же роль, что у видео (§3.2), теперь с родителем `data` (video/audio) | здесь `profile-level-id=1`, информационно |
+| `param_audio_config` | `config=` в `fmtp` (только AAC/`mpeg4-generic`) | AudioSpecificConfig (ISO/IEC 14496-3), hex-декод как есть, без изменений; для `pcm`/`g711a`/`g711u` extradata не нужна — узел отсутствует |
+
+Разбор `config=1188` (AudioSpecificConfig, для примера — `channel_count` в дереве получается именно так, парсинг битов не хранится, только результат): байты `0x11 0x88` = `00010001 10001000`. Первые 5 бит — `audioObjectType = 00010 = 2` (AAC LC); следующие 4 бита — `samplingFrequencyIndex = 0011 = 3` (48000 Гц, совпадает с `rtpmap`); следующие 4 бита — `channelConfiguration = 0001 = 1` (моно). Дерево хранит только сырые байты `param_audio_config` и уже готовое число `channel_count = 1` — сам разбор ASC (как и разбор SPS для видео, §3.2) не входит в область farc, только источник данных для его результата, зафиксированного в `channel_count`.
 
 ## 4. Доменные идентификаторы vs id узла дерева
 
@@ -180,7 +206,7 @@ flowchart TD
 
 ## 5. Заполнение узлов
 
-- **`data`** — контейнер параметров кодека; сами параметры — прозрачные дочерние узлы (`codec_video`, `param_sps`/`param_pps`/`param_vps`, `framerate`, `codec_profile` — видео, §3.2; аудио — черновик, §3.3), а не единый непрозрачный блоб.
+- **`data`** — контейнер параметров кодека; сами параметры — прозрачные дочерние узлы (`codec_video`, `param_sps`/`param_pps`/`param_vps`, `framerate` — видео, §3.2; `codec_audio`, `sample_rate`, `channel_count`, `param_audio_config` — аудио, §3.3; `codec_profile` — общий для обеих веток), а не единый непрозрачный блоб.
 - **`frame`** — контейнер; `value` не используется. Атрибуты кадра — в дочерних узлах ниже.
 - **`frame_data`** — закодированные байты кадра (ключевого или нет — см. `frame_kind`).
 - **`frame_time`** — `value` — абсолютное время кадра, `timestamp` (`05-data-format.md` §3.1, Unix-наносекунды; источник — микросекундная точность, младшие 3 разряда всегда нулевые).
@@ -190,7 +216,7 @@ flowchart TD
 ## 6. Открытые вопросы
 
 - ~~Точный формат доменного идентификатора в `value` узлов `channel`/`stream`~~ — решено: простое число без дополнительных полей, физически `uint32` (единственный подходящий тип из закрытого набора, `05-data-format.md` §3.1); логический потолок — `uint16` у обоих, согласовано с ADR-014 (§3 выше).
-- ~~Конкретное числовое значение `frame_kind` для каждого варианта~~ — решено, см. §5: ASCII-коды `I`/`P`. Значения кодека аудио (`pcm`/`aac`/`g711`) переехали на уровень потока — см. §3.3 (черновик).
+- ~~Конкретное числовое значение `frame_kind` для каждого варианта~~ — решено, см. §5: ASCII-коды `I`/`P`. Значения кодека аудио (`pcm`/`aac`/`g711a`/`g711u`) переехали на уровень потока — см. `codec_audio`, §3.3.
 - ~~Связь P-кадра со своим ключевым кадром GOP~~ — решено: P и I лежат на одном уровне, оба как плоские дети `frames`; связь раньше выражалась через `parent` (`frame_p`, родитель — `frame_i`), теперь видовой признак I/P — атрибут `frame_kind`. Восстановление GOP — сканирование цепочки `sibling` назад до ближайшего `frame` с `frame_kind = I` (декодер всегда идёт последовательно). Произвольный доступ к «своему» I-кадру без обхода соседей не требуется — дополнительная ссылка не нужна.
 - ~~Дублирование кодека аудио на двух уровнях (кадр и поток)~~ — решено: `frame_codec_audio` был ошибкой (кодек — свойство потока, не кадра, у аудио нет per-frame варьирования вроде I/P), роль удалена (§3.1, код 15 отозван), единственный источник — `codec_audio` на уровне `data` (§3.3).
-- Схема дочерних узлов `data` для аудио-ветки (§3.3) — черновик по аналогии, не проверен реальным SDP с аудио-треком; коды ролей под неё не выделены.
+- ~~Схема дочерних узлов `data` для аудио-ветки~~ — решено реальным SDP (AAC/`mpeg4-generic` и G.711 A-law/`PCMA`, §3.3), коды ролей зафиксированы (§3.1, 22–25). G.711 μ-law (`PCMU`) в захвате не встретился, но заведён как `g711u` = 3 по аналогии с `PCMA` (RFC 3551, тот же кодек, другой закон компандирования) — при первом реальном SDP с `PCMU` сверить, что предположение верно.
