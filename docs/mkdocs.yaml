@@ -48,8 +48,8 @@ markdown_extensions:
 
 nav:
   - Главная: index.md
+  - Как писать архитектуру: guides/writing-architecture-docs.md
   - Архив:
-      - Вводная: archive/index.md
       - Требования: archive/00-requirements.md
       - Архитектура: archive/01-architecture.md
       - Концепция хранилища: archive/02-storage.md
@@ -74,3 +74,5 @@ nav:
       - retention-clock: archive/adr/012-retention-clock.md
       - fcontainer-term: archive/adr/013-fcontainer-term.md
       - channel-registry: archive/adr/014-channel-registry.md
+      - toc-push: archive/adr/015-toc-push.md
+      - toc-resolve-fallback: archive/adr/016-toc-resolve-fallback.md
