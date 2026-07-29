@@ -56,6 +56,7 @@ nav:
       - Формат фблока: archive/03-storage-format.md
       - Операции хранилища: archive/04-storage-operations.md
       - Формат данных: archive/05-data-format.md
+      - Заполнение фконтейнера: archive/09-fcontainer-write-path.md
       - Формат TOC: archive/06-toc-format.md
       - Дерево данных: archive/07-media-tree.md
       - Деревья на базе массивов: archive/08-array-trees.md
