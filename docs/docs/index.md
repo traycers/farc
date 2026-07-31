@@ -45,6 +45,7 @@
 | [014](archive/adr/014-channel-registry.md) | Поиск фблоков по каналу и времени — компактный регистр каналов |
 | [015](archive/adr/015-toc-push.md) | Push TOC подписчикам по WebSocket при завершении записи фблока |
 | [016](archive/adr/016-toc-resolve-fallback.md) | Fallback-резолв смещений по (канал, время) внутри farcd |
+| [017](archive/adr/017-periodic-fchunk-flush.md) | Периодическая запись готовых фчанков по таймауту, не дожидаясь закрытия фконтейнера |
 
 ## Статус проекта
 

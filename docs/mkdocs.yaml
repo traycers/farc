@@ -78,3 +78,4 @@ nav:
       - channel-registry: archive/adr/014-channel-registry.md
       - toc-push: archive/adr/015-toc-push.md
       - toc-resolve-fallback: archive/adr/016-toc-resolve-fallback.md
+      - periodic-fchunk-flush: archive/adr/017-periodic-fchunk-flush.md
