@@ -40,7 +40,7 @@ C4-диаграммы физически живут внутри arc42: сист
 |---|---|---|
 | **1. System Context** | Систему как чёрный ящик и её внешних акторов/системы | farc, оператор, потребитель библиотеки, Prometheus, диск, SSD-каталог — уже нарисовано в `01-architecture.md`, раздел 0, но обычным `graph LR`, а не диаграммой C4 |
 | **2. Container** | Отдельно деплоящиеся/исполняемые единицы и протоколы между ними | Archive-процесс (`cmd/arch`), CLI восстановления, Storage (диск/блочное устройство), SSD-каталог |
-| **3. Component** | Внутренние компоненты одного контейнера | Внутри Archive: WritePool, WriteQueue, StorageEngine, ReadPool, Catalog — то, что сейчас в разделах 2.1 и 3.1 текстом |
+| **3. Component** | Внутренние компоненты одного контейнера | Внутри Archive: FreeFblocksPool, WriteQueue, StorageEngine, ReadPool, Catalog — то, что сейчас в разделах 2.1 и 3.1 текстом |
 | **4. Code** | Классы/структуры конкретного компонента | Обычно не нужен — код и так самодокументируется (`internal/traa` и т.п.); рисовать только для действительно неочевидных структур данных |
 
 Правило: **не пропускать уровни и не смешивать их на одной диаграмме.** Если на диаграмме контекста (уровень 1) появляется "WriteQueue" — это компонент уровня 3, ему там не место.
@@ -87,7 +87,7 @@ C4Container
     Person(consumer, "Потребитель библиотеки")
 
     Container_Boundary(farc, "farc / Archive (cmd/arch)") {
-        Container(write, "Write Path", "Go", "WritePool → WriteQueue → StorageEngine")
+        Container(write, "Write Path", "Go", "FreeFblocksPool → WriteQueue → StorageEngine")
         Container(read, "Read Path", "Go", "ReadPool, группировка запросов")
     }
 

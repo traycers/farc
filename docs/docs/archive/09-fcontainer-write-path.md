@@ -7,7 +7,7 @@
 Документ **не описывает**:
 - Сам бинарный формат дерева/фконтейнера — `05-data-format.md`.
 - Доменные роли и иерархию дерева — `07-media-tree.md`.
-- Работу с фконтейнером целиком как буфером WritePool/WriteQueue Storage — `01-architecture.md` §2.1, `00-requirements.md` §4.7–4.8.
+- Работу с фконтейнером целиком как буфером FreeFblocksPool/WriteQueue Storage — `01-architecture.md` §2.1, `00-requirements.md` §4.7–4.8.
 
 ## 2. Заполнитель
 
