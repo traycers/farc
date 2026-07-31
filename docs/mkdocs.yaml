@@ -60,7 +60,7 @@ nav:
       - Формат TOC: archive/06-toc-format.md
       - Дерево данных: archive/07-media-tree.md
       - Деревья на базе массивов: archive/08-array-trees.md
-      - Политика захвата: archive/10-write-policy.md
+      - Политика захвата: archive/10-capture-policy.md
       - Композиция сервиса: archive/11-service-composition.md
   - ADR:
       - header-location: archive/adr/001-header-location.md
