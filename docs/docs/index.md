@@ -44,8 +44,8 @@
 | [013](archive/adr/013-fcontainer-term.md) | Разделение терминов fblock и fcontainer |
 | [014](archive/adr/014-channel-registry.md) | Поиск фблоков по каналу и времени — компактный регистр каналов |
 | [015](archive/adr/015-toc-push.md) | Push TOC подписчикам по WebSocket при завершении записи фблока |
-| [016](archive/adr/016-toc-resolve-fallback.md) | Fallback-резолв смещений по (канал, время) внутри farc |
+| [016](archive/adr/016-toc-resolve-fallback.md) | Fallback-резолв смещений по (канал, время) внутри farcd |
 
 ## Статус проекта
 
-Проект на этапе проектирования: спецификации формата и операций проработаны, реализация на Go начата. Модуль — `traycers/farc`, CLI — `cmd/arch`.
+Проект на этапе проектирования: спецификации формата и операций проработаны, реализация на Go начата. Модуль — `traycers/farc`, сервис — `farcd`, CLI-реализация — `cmd/arch`.

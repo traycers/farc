@@ -38,8 +38,8 @@ C4-диаграммы физически живут внутри arc42: сист
 
 | Уровень | Что показывает | Для farc |
 |---|---|---|
-| **1. System Context** | Систему как чёрный ящик и её внешних акторов/системы | farc, оператор, потребитель библиотеки, Prometheus, диск, SSD-каталог — уже нарисовано в `01-architecture.md`, раздел 0, но обычным `graph LR`, а не диаграммой C4 |
-| **2. Container** | Отдельно деплоящиеся/исполняемые единицы и протоколы между ними | Archive-процесс (`cmd/arch`), CLI восстановления, Storage (диск/блочное устройство), SSD-каталог |
+| **1. System Context** | Систему как чёрный ящик и её внешних акторов/системы | farcd, оператор, потребитель библиотеки, Prometheus, диск, SSD-каталог — уже нарисовано в `01-architecture.md`, раздел 0, но обычным `graph LR`, а не диаграммой C4 |
+| **2. Container** | Отдельно деплоящиеся/исполняемые единицы и протоколы между ними | Archive-процесс (`farcd`), CLI восстановления, Storage (диск/блочное устройство), SSD-каталог |
 | **3. Component** | Внутренние компоненты одного контейнера | Внутри Archive: FreeFblocksPool, WriteQueue, StorageEngine, ReadPool, Catalog — то, что сейчас в разделах 2.1 и 3.1 текстом |
 | **4. Code** | Классы/структуры конкретного компонента | Обычно не нужен — код и так самодокументируется (`internal/traa` и т.п.); рисовать только для действительно неочевидных структур данных |
 
@@ -62,7 +62,7 @@ C4Context
     Person(operator, "Оператор")
     Person(consumer, "Потребитель библиотеки")
 
-    System(farc, "farc / Archive", "cmd/arch")
+    System(farc, "farcd / Archive")
     System_Ext(recovery, "CLI восстановления")
 
     SystemDb_Ext(disk, "Диск / блочное устройство")
@@ -86,7 +86,7 @@ C4Container
 
     Person(consumer, "Потребитель библиотеки")
 
-    Container_Boundary(farc, "farc / Archive (cmd/arch)") {
+    Container_Boundary(farc, "farcd / Archive") {
         Container(write, "Write Path", "Go", "FreeFblocksPool → WriteQueue → StorageEngine")
         Container(read, "Read Path", "Go", "ReadPool, группировка запросов")
     }
