@@ -66,7 +66,7 @@ Storage работает в одном из двух режимов, задав�
 
 **Взаимодействие:**
 - **Чтение** (ADR-003, ADR-004, ADR-016): фблок целиком; TOC фконтейнера; произвольные диапазоны данных фконтейнера по UUID; поиск кандидатов по `(канал, t1, t2)` (ADR-014); резолв «канал+время» без смещений (ADR-016 fallback).
-- **Управление**: запуск операций через `JobRunner` (расширение, сужение, импорт), установка/снятие `protected` через `IndexManager` целевого `StorageUnit`, изменение `retention.days`.
+- **Управление**: запуск операций через `JobRunner` (инициализация нового Storage, расширение, сужение, импорт), установка/снятие `protected` через `IndexManager` целевого `StorageUnit`, изменение `retention.days`.
 - Каждый запрос сначала резолвится в конкретный `StorageUnit` через `StorageRegistry` по идентификатору хранилища, дальше делегируется в `Reader`/`IndexManager`/`JobRunner` этого `StorageUnit`.
 - Не хранит состояние между запросами — оно всё в `StorageUnit`.
 
@@ -92,11 +92,11 @@ Storage работает в одном из двух режимов, задав�
 
 #### 5.1.5. JobRunner
 
-**Ответственность:** оркеструет долгие операции над Storage: `ConsistencyCheck` (проверка целостности при старте), `GeometryManager` (расширение/сужение, включая расширение ёмкости регистра каналов), `Importer` (импорт данных из другого Storage). Все выполняются только над остановленным Storage. Алгоритмы каждой операции — `04-storage-operations.md` §5, §9–11.
+**Ответственность:** оркеструет долгие операции над Storage: `Initializer` (первичная инициализация нового Storage, назначенного архиву оператором), `ConsistencyCheck` (проверка целостности при старте), `GeometryManager` (расширение/сужение, включая расширение ёмкости регистра каналов), `Importer` (импорт данных из другого Storage). Все, кроме `Initializer`, выполняются только над остановленным Storage — `Initializer` работает над Storage, который ещё не открыт `StorageRegistry` вовсе (раздел 5.1.6). Алгоритмы каждой операции — `04-storage-operations.md` §3, §5, §9–11.
 
 **Взаимодействие:**
-- Принимает запросы на запуск операций от `HttpApiServer`.
-- Через `StorageRegistry` переводит целевой Storage в состояние `stopped` (если он работает) и фиксирует статус `job-in-progress`; на время операции `Recorder`/`Reader` этого `StorageUnit` не существуют.
+- Принимает запросы на запуск операций от `HttpApiServer`, включая назначение нового Storage архиву (запуск `Initializer`).
+- Через `StorageRegistry` переводит целевой Storage в состояние `stopped` (если он работает) и фиксирует статус `job-in-progress`; на время операции `Recorder`/`Reader` этого `StorageUnit` не существуют. Для `Initializer` — регистрирует Storage в `StorageRegistry` только по завершении успешной инициализации.
 - Запускает нужную операцию, которая работает с файлом Storage через `IoBackend` напрямую, в обход `Recorder`/`Reader`.
 - По завершении операции возвращает Storage в состояние `stopped` или `running`, в зависимости от команды.
 - Публикует события `job.started`/`job.completed` в `NotificationBus` целевого `StorageUnit` (раздел 8).
@@ -107,6 +107,7 @@ Storage работает в одном из двух режимов, задав�
 
 **Взаимодействие:**
 - Принимает команды «открыть Storage», «закрыть Storage» — при старте процесса и по явной команде.
+- Не владеет Storage, пока он не инициализирован (`Initializer`, `JobRunner`, §5.1.5) — назначение нового Storage архиву регистрирует его здесь только после успешного завершения инициализации.
 - Отдаёт `StorageUnit` компонентам `HttpApiServer`, `MetricsEndpoint`, `EventPushServer`, `JobRunner` по идентификатору хранилища.
 - Блокирует операции, несовместимые со статусом Storage (например, нельзя запустить `Importer` поверх `running`).
 
@@ -237,7 +238,7 @@ graph TB
 
     VideoGW -->|чтение, ADR-003/004/016| HttpApiServer
     VideoGW -.подписка: события/TOC, ADR-015.-> EventPushServer
-    Operator -->|расширение/сужение/импорт,<br/>protected, retention| HttpApiServer
+    Operator -->|инициализация/расширение/сужение/импорт,<br/>protected, retention| HttpApiServer
     Prom -->|GET /metrics| MetricsEndpoint
 
     HttpApiServer --> StorageRegistry
@@ -422,7 +423,7 @@ sequenceDiagram
     JR->>JR: publish job.completed
 ```
 
-Алгоритмы самих операций (`ConsistencyCheck`, `GeometryManager`, `Importer`) — `04-storage-operations.md` §5, §9–11.
+Диаграмма выше — для операций над уже зарегистрированным Storage (`ConsistencyCheck`, `GeometryManager`, `Importer`; алгоритмы — `04-storage-operations.md` §5, §9–11). `Initializer` (§3) идёт по тому же пути `Operator → HttpApiServer → JobRunner → IoBackend`, но без шага «перевести в `stopped`» — Storage X ещё не зарегистрирован в `StorageRegistry`; вместо возврата в `running`/`stopped` по завершении `JobRunner` регистрирует новый Storage в `StorageRegistry` (§5.1.6).
 
 ## 8. События
 
