@@ -15,15 +15,50 @@
 
 ### 2.1. Конфигурация farc (один сервис на сервер)
 
-Конфигурация сервиса farc хранится в отдельном файле и содержит:
+Конфигурация сервиса farc хранится в отдельном файле (JSON) и содержит:
 
-- Список Storage:
-  - идентификатор Storage;
-  - путь к файлу или блочному устройству;
-  - путь к файлу каталога на SSD (опционально, см. ADR-007);
-- Параметры HTTP-сервера, метрик, событий.
+- Список Storage: идентификатор, путь к файлу/устройству, путь к файлу каталога на SSD (опционально, см. ADR-007).
+- Список каналов приёма: идентификатор канала, RTSP-ссылка, целевой Storage, конфигурация `CapturePolicy` (`10-capture-policy.md` §7).
+- Параметры HTTP-сервера (`HttpApiServer`).
+- Параметры WebSocket-сервера (`EventPushServer`): адрес, лимиты подключений — отдельно от HTTP-параметров, это разные серверы (могут слушать разные порты).
+- Параметры метрик (`MetricsEndpoint`).
 
-Пути к каталогам на SSD задаются здесь, а не в самом Storage. Это позволяет переносить Storage между серверами без необходимости править внутренние данные хранилища.
+Пути к каталогам на SSD задаются здесь, а не в самом Storage. Это позволяет переносить Storage между серверами без необходимости править внутренние данные хранилища. По той же причине здесь **не задаются** `write_mode`, `retention.days` и прочие параметры конкретного Storage (§2.2) — они устанавливаются один раз оператором при инициализации (раздел 3) и живут в самом Storage, а не в этом файле.
+
+**Формат временных величин** (`prerecord`, `postrecord` и другие продолжительности в этом файле) — строка-длительность вида `"30s"`, `"1h"` (Go-стиль, `time.ParseDuration`), не число секунд.
+
+Пример:
+
+```json
+{
+  "http": { "ip": "0.0.0.0", "port": 8080 },
+  "ws": { "ip": "0.0.0.0", "port": 8081, "max_connections": 100 },
+  "metrics": { "ip": "0.0.0.0", "port": 9090 },
+  "storages": [
+    {
+      "id": "disk0",
+      "path": "/dev/sdb1",
+      "catalog_path": "/mnt/ssd/disk0.catalog"
+    }
+  ],
+  "channels": [
+    {
+      "id": 42,
+      "rtsp_url": "rtsp://camera1/stream",
+      "storage": "disk0",
+      "capture_policy": { "type": "continuous", "max_deferred_start": "30s" }
+    },
+    {
+      "id": 43,
+      "rtsp_url": "rtsp://camera2/stream",
+      "storage": "disk0",
+      "capture_policy": { "type": "event", "prerecord": "10s", "postrecord": "30s" }
+    }
+  ]
+}
+```
+
+Канал → хранилище задаётся полем `storage` в записи канала (маршрутизация постоянна, перенос — только через ручную реконфигурацию плюс импорт, ADR-014, `11-service-composition.md` §5.1.1), а не списком каналов внутри записи хранилища — конфигурация `CapturePolicy` (`prerecord`/`postrecord`/тип стратегии) принадлежит каналу, а не хранилищу, в которое он пишет.
 
 ### 2.2. Параметры Storage (в фблоке 0)
 
@@ -172,8 +207,10 @@ ConsistencyCheck выполняется один раз при старте Stor
 
 ### 6.2. Алгоритм
 
+`write_mode` — параметр Storage из JSON-параметров пролога (`03-storage-format.md` §5.2, ADR-009): `cyclic` или `fill_until_full` (`11-service-composition.md` §3, §5.2.4).
+
 ```
-function select_next_index(indexes, cursor, retention_days, now):
+function select_next_index(indexes, cursor, retention_days, now, write_mode):
     n = len(indexes)
     
     # Приоритет 1: первый uninitialized по кругу от cursor+1
@@ -182,12 +219,14 @@ function select_next_index(indexes, cursor, retention_days, now):
         if indexes[idx].state == uninitialized:
             return idx
     
-    # Приоритет 2: первый ready с истёкшим сроком хранения, не protected
-    for i in range(n):
-        idx = (cursor + 1 + i) mod n
-        e = indexes[idx]
-        if e.state == ready and not e.protected and (now - e.end >= retention_days):
-            return idx
+    # Приоритет 2: первый ready с истёкшим сроком хранения, не protected —
+    # только в режиме cyclic; fill_until_full не перезаписывает ready вообще
+    if write_mode == cyclic:
+        for i in range(n):
+            idx = (cursor + 1 + i) mod n
+            e = indexes[idx]
+            if e.state == ready and not e.protected and (now - e.end >= retention_days):
+                return idx
     
     return NO_SPACE
 ```
@@ -196,11 +235,12 @@ function select_next_index(indexes, cursor, retention_days, now):
 
 - Циклическое движение от позиции последней записи.
 - Приоритет `uninitialized` — первый полный проход заполняет диск без перезаписей.
-- Только после заполнения всех `uninitialized` начинается циклическая перезапись `ready` фблоков по сроку хранения.
+- В режиме `cyclic`: только после заполнения всех `uninitialized` начинается циклическая перезапись `ready` фблоков по сроку хранения.
+- В режиме `fill_until_full`: после заполнения всех `uninitialized` алгоритм не переходит к перезаписи `ready` вообще — каждый вызов сразу возвращает `NO_SPACE`, независимо от истёкшего срока хранения (§6.4).
 
 ### 6.4. Алерт «нет места»
 
-Если `select_next_index` вернул `NO_SPACE`, `Recorder` публикует событие `storage.alert` с `severity=critical` и `reason=no_free_fblocks`. Storage продолжает работать (буфер записи остаётся в очереди), новый вызов будет повторён при изменении состояния (например, истёк срок хранения какого-то фблока).
+Если `select_next_index` вернул `NO_SPACE`, `Recorder` публикует событие `storage.alert` с `severity=critical` и `reason=no_free_fblocks`. Storage продолжает работать (буфер записи остаётся в очереди). В режиме `cyclic` новый вызов будет повторён при изменении состояния (например, истёк срок хранения какого-то фблока). В режиме `fill_until_full` повтор не имеет смысла до операции расширения (`GeometryManager`, раздел 9) или сужения с освобождением места — `ready` не перезаписывается никогда, независимо от срока хранения.
 
 ## 7. Запись фблока
 
