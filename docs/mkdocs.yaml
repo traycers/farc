@@ -80,11 +80,14 @@ nav:
       - toc-push: archive/adr/015-toc-push.md
       - toc-resolve-fallback: archive/adr/016-toc-resolve-fallback.md
       - periodic-fchunk-flush: archive/adr/017-periodic-fchunk-flush.md
-  - "Конспект: Hsu, A Data Parallel Compiler Hosted on the GPU":
-      - Обзор: hsu-dissertation/index.md
-      - 1. APL, Co-dfns и Nanopass: hsu-dissertation/01-apl-and-background.md
-      - 2. Архитектура компилятора и AST: hsu-dissertation/02-ast-representation.md
-      - 3. Проходы компилятора 3.5-3.13: hsu-dissertation/03-compiler-passes.md
-      - 4. Производительность: hsu-dissertation/04-performance.md
-      - 5. Идиомы, преимущества, ограничения: hsu-dissertation/05-discussion-idioms.md
-      - 6. Future/Related Work, выводы: hsu-dissertation/06-future-related-conclusion.md
+  - Обучение:
+      - Merkle-дерево (parent/sibling/value): learning/merkle-tree.md
+      - Reed-Solomon (восстановление после потери блоков): learning/reed-solomon.md
+      - "Конспект: Hsu, A Data Parallel Compiler Hosted on the GPU":
+          - Обзор: hsu-dissertation/index.md
+          - 1. APL, Co-dfns и Nanopass: hsu-dissertation/01-apl-and-background.md
+          - 2. Архитектура компилятора и AST: hsu-dissertation/02-ast-representation.md
+          - 3. Проходы компилятора 3.5-3.13: hsu-dissertation/03-compiler-passes.md
+          - 4. Производительность: hsu-dissertation/04-performance.md
+          - 5. Идиомы, преимущества, ограничения: hsu-dissertation/05-discussion-idioms.md
+          - 6. Future/Related Work, выводы: hsu-dissertation/06-future-related-conclusion.md
