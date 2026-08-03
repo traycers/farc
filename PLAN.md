@@ -7,7 +7,7 @@
 - [x] Phase 3 — `farc/toc` (`Build`/`Decode`/query primitives; verified byte-for-byte against `08-array-trees.md` §8.3-8.4's own worked output)
 - [x] Phase 4 — `internal/fcontainer` (Filler + concurrent allocator; single Filler-wide mutex, verified under `-race`)
 - [x] Phase 5 — `internal/index` (IndexManager; found and fixed a real batch-allocation race in the channel-registry reuse rule, see below)
-- [ ] Phase 6 — `internal/ioengine` (IoBackend: direct/standard)
+- [x] Phase 6 — `internal/ioengine` (IoBackend: `direct`/`standard`; added `golang.org/x/sys` dependency; O_DIRECT actually works on this sandbox's tmpfs, no skip needed)
 - [ ] Phase 7 — `internal/storageengine` (write-verify + read/write arbitration)
 - [ ] Phase 8 — `internal/storage` (StorageUnit: Initializer, Startup, ConsistencyCheck, Recorder, Reader)
 - [ ] Phase 9 — `internal/ingest` (IngestManager, ChannelIngest, CapturePolicy + gortsplib deps)
@@ -15,6 +15,8 @@
 - [ ] Phase 11 — `internal/farcd` wiring + `cmd/arch` rewire + `internal/config`
 
 **Deviation from the original sketch below (Phase 3):** to avoid an import cycle, `farc/toc` depends on `farc/mediatree` (not the reverse as first sketched) — it uses `mediatree.NodeType`/`Role`/`Element` directly. The "mediatree query helpers built on toc" (e.g. `FindFrameTimesNear`) don't live inside package `mediatree` itself; they'll be added one layer up (Phase 8's Reader code, which already depends on both packages).
+
+**Stopping point (2026-08-03):** Phases 1–6 done, `go build ./... && go vet ./... && go test ./... -race` all green. Next: Phase 7, `internal/storageengine` — fchunk write-verify loop plus read/write arbitration (ADR-005 write priority, ADR-011 M=16/K=4 read quota disabled under BACKPRESSURE), built on Phase 6's `ioengine.Backend`. Verification per the build order below: a fake `IoBackend` that can be told to corrupt fchunk N (assert bad+retry-on-next-index) and a simulated saturated write queue (assert the M/K accounting exactly, zeroed under BACKPRESSURE).
 
 ## Context
 
