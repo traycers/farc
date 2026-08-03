@@ -16,6 +16,8 @@ tests_output.txt
 .claude
 CLAUDE.md
 __docs__.md
+*.pdf
+
 
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,go,hugo
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,go,hugo
