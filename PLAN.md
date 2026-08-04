@@ -8,7 +8,7 @@
 - [x] Phase 4 — `internal/fcontainer` (Filler + concurrent allocator; single Filler-wide mutex, verified under `-race`)
 - [x] Phase 5 — `internal/index` (IndexManager; found and fixed a real batch-allocation race in the channel-registry reuse rule, see below)
 - [x] Phase 6 — `internal/ioengine` (IoBackend: `direct`/`standard`; added `golang.org/x/sys` dependency; O_DIRECT actually works on this sandbox's tmpfs, no skip needed)
-- [ ] Phase 7 — `internal/storageengine` (write-verify + read/write arbitration)
+- [x] Phase 7 — `internal/storageengine` (write-verify + read/write arbitration; found and fixed a quota-leak race, see below)
 - [ ] Phase 8 — `internal/storage` (StorageUnit: Initializer, Startup, ConsistencyCheck, Recorder, Reader)
 - [ ] Phase 9 — `internal/ingest` (IngestManager, ChannelIngest, CapturePolicy + gortsplib deps)
 - [ ] Phase 10 — `internal/api` (HttpApiServer, EventPushServer, MetricsEndpoint)
@@ -16,7 +16,11 @@
 
 **Deviation from the original sketch below (Phase 3):** to avoid an import cycle, `farc/toc` depends on `farc/mediatree` (not the reverse as first sketched) — it uses `mediatree.NodeType`/`Role`/`Element` directly. The "mediatree query helpers built on toc" (e.g. `FindFrameTimesNear`) don't live inside package `mediatree` itself; they'll be added one layer up (Phase 8's Reader code, which already depends on both packages).
 
-**Stopping point (2026-08-03):** Phases 1–6 done, `go build ./... && go vet ./... && go test ./... -race` all green. Next: Phase 7, `internal/storageengine` — fchunk write-verify loop plus read/write arbitration (ADR-005 write priority, ADR-011 M=16/K=4 read quota disabled under BACKPRESSURE), built on Phase 6's `ioengine.Backend`. Verification per the build order below: a fake `IoBackend` that can be told to corrupt fchunk N (assert bad+retry-on-next-index) and a simulated saturated write queue (assert the M/K accounting exactly, zeroed under BACKPRESSURE).
+**Stopping point (2026-08-04):** Phases 1–7 done, `go build ./... && go vet ./... && go test ./... -race` all green. Next: Phase 8, `internal/storage` (StorageUnit) — see its sub-order in the build list below.
+
+**Phase 7 design note.** `storageengine.Engine` exposes a deterministic `Step()` (one fchunk write-verify or one read portion per call, chosen per ADR-005/ADR-011) instead of an opaque background loop, specifically so tests can drive it synchronously and assert exact M/K interleaving order without timing dependence; `Run(ctx)` is a thin convenience wrapper looping `Step()` on its own goroutine for production use, added even though no caller wires it up yet (Phase 8's Recorder will be the first). `EnqueueWrite`/`EnqueueRead` return tickets (`Wait()` blocks on a channel) rather than blocking the caller directly, so producer goroutines (Recorder, multiple Readers) and the single `Step()`-driving goroutine stay decoupled. Retry-on-a-new-index after a corrupted write-verify is explicitly **not** this package's job (`WriteResult.Corrupted` + `FailedOffset` is all it reports) — picking a new physical index belongs to Recorder/`IndexManager` in Phase 8, matching the dependency direction (`storageengine` depends only on `ioengine`, not `index`).
+
+**Bug found during verification:** the M/K quota (ADR-011) must go fully dormant under BACKPRESSURE, not just get zeroed at the moment a `Step()` call observes it — an earlier version reset `quotaRemaining` to 0 only at the top of `Step()`, but `stepWriteLocked` unconditionally re-granted a fresh quota window after every `QuotaEvery`-th chunk regardless of level, so a grant earned while still under backpressure survived into the very next `Step()` call and fired a read one step early the instant the queue dropped back below the backpressure threshold. Fixed by also gating the grant logic itself on `level != LevelBackpressure` (both the reset and the accrual live under the same condition now) — caught by `TestQuota_DisabledUnderBackpressure`, which drains a saturated write queue down through the backpressure threshold and asserts every single step in that transition is a write.
 
 ## Context
 
