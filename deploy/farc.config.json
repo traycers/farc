@@ -12,11 +12,6 @@
     "ip": "0.0.0.0",
     "port": 9090
   },
-  "storages": [
-    {
-      "id": "e51186c3-db82-40f3-98ab-6c27ee518c5a",
-      "path": "/data/first.farc"
-    }
-  ],
+  "storages": [],
   "channels": []
 }
