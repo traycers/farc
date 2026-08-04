@@ -84,6 +84,11 @@ func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if err := s.onStorageCreated(req.ID, req.Path, req.CatalogPath); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q: %w", req.ID, err))
+		return
+	}
+
 	writeJSON(w, http.StatusCreated, StorageInfo{ID: req.ID, Path: req.Path, Geometry: req.Geometry})
 }
 

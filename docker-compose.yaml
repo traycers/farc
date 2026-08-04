@@ -4,7 +4,10 @@ services:
       context: .
       dockerfile: Dockerfile.farc
     volumes:
-      - ./deploy/farc.config.json:/etc/farc/farc.config.json:ro
+      # Writable, not :ro -- farcd persists storages created via POST
+      # /storages (e.g. through the web client) back into this file, so a
+      # container restart doesn't lose them (internal/farcd.persistNewStorage).
+      - ./deploy/farc.config.json:/etc/farc/farc.config.json
       - farc_data:/data
     restart: unless-stopped
 

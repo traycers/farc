@@ -1,6 +1,7 @@
 package farcd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -65,9 +66,12 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-func testConfig(t *testing.T, channels []config.Channel) *config.Config {
+// testConfig returns a fresh config plus the path of a real file it was
+// saved to -- New's second argument, and what persistNewStorage writes back
+// to when a test exercises POST /storages through a live Farcd.
+func testConfig(t *testing.T, channels []config.Channel) (*config.Config, string) {
 	t.Helper()
-	return &config.Config{
+	cfg := &config.Config{
 		HTTP:    config.Addr{IP: "127.0.0.1", Port: freePort(t)},
 		WS:      config.WSAddr{IP: "127.0.0.1", Port: freePort(t)},
 		Metrics: config.Addr{IP: "127.0.0.1", Port: freePort(t)},
@@ -76,10 +80,15 @@ func testConfig(t *testing.T, channels []config.Channel) *config.Config {
 		},
 		Channels: channels,
 	}
+	path := filepath.Join(t.TempDir(), "farc.config.json")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	return cfg, path
 }
 
 func TestNew_OpensStorageAndBuildsChannelConfig(t *testing.T) {
-	cfg := testConfig(t, []config.Channel{
+	cfg, path := testConfig(t, []config.Channel{
 		{
 			ID: 1, RTSPURL: "rtsp://127.0.0.1:1/x", Storage: "disk0",
 			CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous, MaxDeferredStart: config.Duration(30 * time.Second)},
@@ -90,7 +99,7 @@ func TestNew_OpensStorageAndBuildsChannelConfig(t *testing.T) {
 		},
 	})
 
-	f, err := New(cfg)
+	f, err := New(cfg, path)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -121,20 +130,20 @@ func TestNew_OpensStorageAndBuildsChannelConfig(t *testing.T) {
 }
 
 func TestNew_UnknownStorageReferenceCleansUpAndErrors(t *testing.T) {
-	cfg := testConfig(t, []config.Channel{
+	cfg, path := testConfig(t, []config.Channel{
 		{ID: 1, RTSPURL: "rtsp://127.0.0.1:1/x", Storage: "nope",
 			CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
 	})
 
-	_, err := New(cfg)
+	_, err := New(cfg, path)
 	if err == nil {
 		t.Fatalf("New: want error for unknown storage reference, got nil")
 	}
 }
 
 func TestRun_ServesAndShutsDownGracefully(t *testing.T) {
-	cfg := testConfig(t, nil)
-	f, err := New(cfg)
+	cfg, path := testConfig(t, nil)
+	f, err := New(cfg, path)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -176,6 +185,78 @@ func TestRun_ServesAndShutsDownGracefully(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after context cancellation")
+	}
+}
+
+func TestRun_CreateStorageOverHTTP_PersistsToConfigFile(t *testing.T) {
+	cfg, path := testConfig(t, nil)
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+
+	imgPath := filepath.Join(t.TempDir(), "new.img")
+	catalogPath := filepath.Join(t.TempDir(), "new0.catalog")
+	body := map[string]any{
+		"id":   "new0",
+		"path": imgPath,
+		"geometry": map[string]any{
+			"FblockSize": smallGeometry().FblockSize, "N": smallGeometry().N, "MaxChannels": smallGeometry().MaxChannels,
+		},
+		"params": map[string]any{
+			"fchunk_size": 1024, "write_mode": "cyclic",
+			"retention": map[string]any{"days": 30}, "min_container_share": 0.1,
+		},
+		"catalog_path": catalogPath,
+		"backend":      "standard",
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	resp, err := http.Post("http://"+cfg.HTTP.String()+"/storages", "application/json", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("POST /storages: %v", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after context cancellation")
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load after restart: %v", err)
+	}
+	if len(reloaded.Storages) != 2 {
+		t.Fatalf("Storages after restart = %+v, want disk0 + new0", reloaded.Storages)
+	}
+	var found bool
+	for _, s := range reloaded.Storages {
+		if s.ID == "new0" {
+			found = true
+			if s.Path != imgPath || s.CatalogPath != catalogPath {
+				t.Fatalf("new0 entry = %+v", s)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("new0 not present after restart: %+v", reloaded.Storages)
 	}
 }
 

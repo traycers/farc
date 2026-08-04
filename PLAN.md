@@ -10,6 +10,7 @@
 - [x] Phase 6 — routing/shell, `web/nginx.conf`, `web/Dockerfile`
 - [x] Phase 7 — `taskfile.yaml` `build/web` task
 - [x] Phase 8 — `Dockerfile.farc`, `Dockerfile.hls_server`, `docker-compose.yaml`, `deploy/` example configs
+- [x] Phase 9 — `farcd` persists storages created via `POST /storages` back into its own config file (closes Gap 3)
 
 ## Context
 
@@ -62,25 +63,26 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 
 1. **Scaffold `web/`.** `package.json` (react, react-dom, react-router-dom, hls.js, typescript, vite, `@vitejs/plugin-react`), `vite.config.ts`, `tsconfig.json`, `index.html`, `src/main.tsx`. Verify: `npm install && npm run build` produces `web/dist`.
 2. **`src/api/ns.ts` + `src/api/farcd.ts`.** All timestamps as `bigint`; `parseCandidatesJSON` regex-quotes the `begin`/`end` integer literals before `JSON.parse` (native JSON parsing silently rounds nanosecond epoch values — they're already past `Number.MAX_SAFE_INTEGER`). Verify: a quick manual check that a known large literal round-trips exactly through `parseCandidatesJSON`.
-3. **`StoragesPage`.** Table from `listStorages`; create form posts full `createStorage` body; inline `retention_days`/`write_mode` edits call `patchStorage` then optimistically update local state (the `GET /storages` response never echoes these back — see Gap 3 below).
+3. **`StoragesPage`.** Table from `listStorages`; create form posts full `createStorage` body; inline `retention_days`/`write_mode` edits call `patchStorage` — `GET /storages` never echoes these back (`StorageInfo` only carries `id`/`path`/`geometry`), so the page just reports success/failure rather than reflecting a value it doesn't have.
 4. **`ChannelsPage`.** Channel-id free-text input (Gap 1) feeding two independent forms: set capture-policy, trigger event. No "current policy" display (Gap 2) — UI copy says so explicitly rather than showing stale/fake data.
 5. **`PlayerPage`.** Storage-id (populated from `listStorages`) + channel-id + `datetime-local` from/to → `candidates()`; render `{uuid, begin, end}` rows with a protected-toggle button and a "Play" button that points an `<video>` (hls.js) at `/api/hls/channels/{channel}/hls/{t1}/{t2}/playlist.m3u8`.
 6. **Shell + nginx.** `App.tsx` routing; `web/nginx.conf` proxy rules; `web/Dockerfile`. Verify: `docker build ./web`.
 7. **`taskfile.yaml`.** New `build/web` task (`dir: web`, `npm ci && npm run build`), wired into the aggregate `build` task.
 8. **Root Dockerfiles + compose.** `Dockerfile.farc`/`Dockerfile.hls_server`, `.dockerignore`, `docker-compose.yaml`, `deploy/*.config.json`. Verify: `docker build -f Dockerfile.farc .`, `-f Dockerfile.hls_server .`; `docker compose config` validates the compose file.
+9. **Persist storages to `farc.config.json`.** `internal/config.Save` (new: `json.MarshalIndent` + `os.WriteFile`, overwriting in place rather than temp-file-plus-rename — a rename would detach from a single-file Docker bind mount instead of updating the host-visible file). `internal/config.Duration` gained `MarshalJSON` (it only had `UnmarshalJSON` before; `Save` needs both directions or every duration field round-trips as a raw nanosecond number `Load` then rejects). `internal/api.HttpApiServer` gained `SetOnStorageCreated(func(id, path, catalogPath string) error)`, called by `handleCreateStorage` right after a successful `Register`, before the response is written; a nil/unset hook is a no-op (existing callers unaffected). `internal/farcd.New` now takes `configPath` alongside `cfg` and wires `Farcd.persistNewStorage` (mutex-guarded append to `cfg.Storages` + `config.Save`) as that hook — `docker-compose.yaml`'s `farc.config.json` mount is no longer `:ro`. Verify: `internal/config`'s `TestSave_RoundTripsThroughLoad`/`TestSave_OverwritesInPlace`; `internal/api`'s `TestHandleCreateStorage_CallsOnStorageCreatedHook`/`..._OnStorageCreatedErrorFailsRequestButKeepsRegistration`; `internal/farcd`'s `TestRun_CreateStorageOverHTTP_PersistsToConfigFile` (real HTTP POST, then `config.Load` the file back and confirm the entry survived).
 
-## Gap resolutions (documented, not fixed — no Go changes in this plan)
+## Gap resolutions
 
-- **Gap 1 — no channel discovery.** Channels exist only in farcd's static config; there is no list/create route. `ChannelsPage` takes a raw channel-id input.
-- **Gap 2 — no GET for capture-policy.** Only the setter exists. The UI never claims to show a "current" policy.
-- **Gap 3 — `POST /storages` doesn't persist into farcd's config.** `internal/farcd/farcd.go`'s startup path only reopens storages already listed in the static config JSON (`storage.Open`, never `Init`); a storage created at runtime via the SPA is registered in-memory only and is gone on container restart unless the operator also adds the same `id`/`path` to `farc.config.json` and restarts. Re-POSTing the same storage is not a safe "re-register": `storage.Init` with `force:false` returns `ErrAlreadyInitialized`, and `force:true` destroys the existing catalog. `deploy/` ships with `storages: []`; the intended first-run flow is create-via-SPA, then hand-edit the config for persistence.
+- **Gap 1 — no channel discovery.** Channels exist only in farcd's static config; there is no list/create route. `ChannelsPage` takes a raw channel-id input. Not fixed (no Go changes for this one — out of scope, see Critical files).
+- **Gap 2 — no GET for capture-policy.** Only the setter exists. The UI never claims to show a "current" policy. Not fixed.
+- **Gap 3 — `POST /storages` didn't persist into farcd's config — fixed in Phase 9.** `internal/farcd`'s `persistNewStorage` now appends the new entry to the in-memory `*config.Config` and calls `config.Save` before the HTTP response is written; a save failure rolls back the in-memory append and fails the request with 500 (the storage stays registered and usable for this process's lifetime regardless — persistence failing doesn't undo an already-completed `storage.Init`). Re-POSTing the same storage is still not a safe way to "repair" a missed persist: `storage.Init` with `force:false` returns `ErrAlreadyInitialized`, and `force:true` destroys the existing catalog.
 - **Gap 4 — nanosecond timestamps exceed JS safe-integer range.** Handled client-side per the `ns.ts` design above; not a backend defect.
 
 ## Critical files
 
-- `internal/api/{server,storages,channels,query,fcontainers}.go` — exact farcd route/body/response shapes this client mirrors.
+- `internal/api/{server,storages,channels,query,fcontainers}.go` — exact farcd route/body/response shapes this client mirrors; `server.go` also has `SetOnStorageCreated`.
 - `internal/hlsapi/server.go` — exact hls_server route shapes.
-- `internal/config/config.go`, `internal/hlsconfig/config.go` — exact JSON shapes for `deploy/*.config.json`.
-- `internal/farcd/farcd.go` (`openStorage`) — source of Gap 3.
+- `internal/config/config.go`, `internal/hlsconfig/config.go` — exact JSON shapes for `deploy/*.config.json`; `config.go` also has `Save`/`Duration.MarshalJSON`.
+- `internal/farcd/farcd.go` (`persistNewStorage`, `openStorage`) — Gap 3's fix and its remaining edge (a storage that predates this feature, or was created before, must still be added to the config manually).
 - `cmd/farc/commands/index.go`, `cmd/hls_server/commands/index.go` — `-c/--config` flag both Dockerfiles' `CMD` must match.
 - `taskfile.yaml` — existing `build/app`/`build/hls_server` tasks `build/web` mirrors; per `CLAUDE.md`, leave the unrelated stale tasks (`run`, `help`, `db/*`, `env/*`) untouched.

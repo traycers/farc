@@ -29,6 +29,13 @@ type Duration time.Duration
 
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
+// MarshalJSON is UnmarshalJSON's inverse -- needed once Save (not just
+// Load) exists, or round-tripping a Config through Save would silently turn
+// every duration field back into a bare nanosecond number Load then rejects.
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -107,6 +114,23 @@ type Config struct {
 	Metrics  Addr      `json:"metrics"`
 	Storages []Storage `json:"storages"`
 	Channels []Channel `json:"channels"`
+}
+
+// Save serializes cfg as indented JSON and writes it to path, overwriting
+// any existing content in place. Deliberately not a temp-file-plus-rename
+// swap: internal/farcd uses this to persist a storage created at runtime
+// (POST /storages) back into the same file docker-compose.yaml bind-mounts
+// as a single file, and a rename would detach from that mount point rather
+// than updating the file the host actually sees.
+func Save(path string, cfg *Config) error {
+	buf, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: marshal: %w", err)
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		return fmt.Errorf("config: write %s: %w", path, err)
+	}
+	return nil
 }
 
 // Load reads and validates the config file at path.

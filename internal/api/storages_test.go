@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -58,6 +60,68 @@ func TestHandleCreateStorage_InitsOpensAndRegisters(t *testing.T) {
 	if unit.Geometry() != smallGeometry() {
 		t.Fatalf("geometry = %+v, want %+v", unit.Geometry(), smallGeometry())
 	}
+}
+
+func TestHandleCreateStorage_CallsOnStorageCreatedHook(t *testing.T) {
+	reg := NewStorageRegistry()
+	s := NewHttpApiServer(reg, nil, nil)
+
+	type call struct{ id, path, catalogPath string }
+	var got *call
+	s.SetOnStorageCreated(func(id, path, catalogPath string) error {
+		got = &call{id, path, catalogPath}
+		return nil
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	catalogPath := filepath.Join(t.TempDir(), "hooked.catalog")
+	req := createStorageRequest{
+		ID: "hooked", Path: filepath.Join(t.TempDir(), "storage.img"),
+		Geometry: smallGeometry(), Params: smallParams(), Backend: "standard", CatalogPath: catalogPath,
+	}
+	resp := postJSON(t, srv, "/storages", req)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, body)
+	}
+	if u, ok := reg.Get("hooked"); ok {
+		defer u.Close()
+	}
+
+	if got == nil {
+		t.Fatalf("onStorageCreated was not called")
+	}
+	if got.id != "hooked" || got.path != req.Path || got.catalogPath != catalogPath {
+		t.Fatalf("hook called with %+v", got)
+	}
+}
+
+func TestHandleCreateStorage_OnStorageCreatedErrorFailsRequestButKeepsRegistration(t *testing.T) {
+	reg := NewStorageRegistry()
+	s := NewHttpApiServer(reg, nil, nil)
+	s.SetOnStorageCreated(func(id, path, catalogPath string) error {
+		return fmt.Errorf("disk full")
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req := createStorageRequest{
+		ID: "still-registered", Path: filepath.Join(t.TempDir(), "storage.img"),
+		Geometry: smallGeometry(), Params: smallParams(), Backend: "standard",
+	}
+	resp := postJSON(t, srv, "/storages", req)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+
+	u, ok := reg.Get("still-registered")
+	if !ok {
+		t.Fatalf("storage should stay registered in-memory even though persistence failed")
+	}
+	u.Close()
 }
 
 func TestHandleCreateStorage_DuplicateIDConflicts(t *testing.T) {

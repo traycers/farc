@@ -45,7 +45,7 @@ Both binaries take a `-c`/`--config` flag pointing at a JSON config file (`inter
 ./hls_server -c hls_server.config.json
 ```
 
-`farc.config.json`'s `storages` list must reference already-initialized storage image files — `farcd` never creates them itself. A fresh storage is initialized once via `POST /storages` on `farcd`'s HTTP API (or through the web client's Storages page); to survive a process restart, add the same `id`/`path` to the config file afterward (see `PLAN.md`, Gap 3).
+`farc.config.json`'s `storages` list must reference already-initialized storage image files — `farcd` never creates them itself (the operator only needs to size a partition/file up front; `farcd` initializes it via `POST /storages`, e.g. through the web client's Storages page). `farcd` persists a newly created storage back into `farc.config.json` itself, so it's picked up again on the next restart — the config file must be writable by the process (see `docker-compose.yaml`'s `farc` service, which mounts it read-write for exactly this reason).
 
 ## Docker / full stack
 

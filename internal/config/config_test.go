@@ -149,3 +149,54 @@ func TestLoad_MissingFile(t *testing.T) {
 		t.Fatalf("Load: want error for missing file, got nil")
 	}
 }
+
+func TestSave_RoundTripsThroughLoad(t *testing.T) {
+	path := writeConfig(t, docExample)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Storages = append(cfg.Storages, Storage{ID: "disk1", Path: "/dev/sdc1"})
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	if len(got.Storages) != 2 || got.Storages[1].ID != "disk1" || got.Storages[1].Path != "/dev/sdc1" {
+		t.Fatalf("Storages after round-trip = %+v", got.Storages)
+	}
+	if got.HTTP.String() != cfg.HTTP.String() || len(got.Channels) != len(cfg.Channels) {
+		t.Fatalf("Save lost unrelated fields: got = %+v", got)
+	}
+}
+
+func TestSave_OverwritesInPlace(t *testing.T) {
+	// docker-compose.yaml bind-mounts farc.config.json as a single file --
+	// Save must overwrite the same inode, not swap it via rename, or the
+	// write would silently detach from the host-visible file under Docker.
+	path := writeConfig(t, docExample)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after Save: %v", err)
+	}
+	if !os.SameFile(info, after) {
+		t.Fatalf("Save replaced the file's inode instead of overwriting it in place")
+	}
+}

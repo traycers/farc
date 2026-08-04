@@ -22,7 +22,7 @@ func doByDefault(cmd *cobra.Command, args []string) {
 		log.Fatalf("farcd: %v", err)
 	}
 
-	f, err := farcd.New(cfg)
+	f, err := farcd.New(cfg, configPath)
 	if err != nil {
 		log.Fatalf("farcd: %v", err)
 	}

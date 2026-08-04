@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"traycers/farc/internal/api"
@@ -56,6 +57,15 @@ type Farcd struct {
 	ing      *ingest.IngestManager
 	channels []ingest.ChannelConfig
 
+	// cfg/configPath/cfgMu back persistNewStorage: a storage created at
+	// runtime via POST /storages only lives in registry's in-memory map
+	// unless it's also appended here and saved back to configPath (PLAN.md's
+	// Gap 3) -- cfgMu serializes concurrent creates' read-modify-write of
+	// cfg.Storages plus the file write.
+	cfg        *config.Config
+	configPath string
+	cfgMu      sync.Mutex
+
 	httpSrv    *http.Server
 	wsSrv      *http.Server
 	metricsSrv *http.Server
@@ -67,11 +77,15 @@ type Farcd struct {
 // for IngestManager, but starts nothing yet -- call Run to actually start
 // serving. On error, every Storage opened so far is closed before
 // returning, so a caller never has to clean up a partial Farcd itself.
-func New(cfg *config.Config) (*Farcd, error) {
+// configPath is the file cfg was loaded from -- kept so a storage created
+// later via POST /storages can be persisted back into it (persistNewStorage).
+func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	f := &Farcd{
-		registry: api.NewStorageRegistry(),
-		ing:      ingest.NewIngestManager(),
-		logf:     func(string, ...any) {},
+		registry:   api.NewStorageRegistry(),
+		ing:        ingest.NewIngestManager(),
+		cfg:        cfg,
+		configPath: configPath,
+		logf:       func(string, ...any) {},
 	}
 
 	for _, sc := range cfg.Storages {
@@ -102,6 +116,7 @@ func New(cfg *config.Config) (*Farcd, error) {
 	// (see api.go's own package doc for the alternative, single-port mode
 	// that combined routing still supports for tests/simple deployments).
 	apiServer := api.NewHttpApiServer(f.registry, f.ing, nil)
+	apiServer.SetOnStorageCreated(f.persistNewStorage)
 
 	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler()}
 	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: push}
@@ -184,6 +199,29 @@ func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, err
 		// already a cheap, mutex-guarded read, so there's nothing to cache.
 		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
 	}, nil
+}
+
+// persistNewStorage appends a storage created via POST /storages to farcd's
+// own config file, wired into HttpApiServer via SetOnStorageCreated -- the
+// only reason a runtime-created storage survives farcd's next restart
+// (config.Load is the only thing New's own storage-opening loop ever reads;
+// it never Inits, see this package's own doc comment). If Save fails, the
+// in-memory append is rolled back so cfg still matches what's on disk.
+func (f *Farcd) persistNewStorage(id, path, catalogPath string) error {
+	f.cfgMu.Lock()
+	defer f.cfgMu.Unlock()
+
+	for _, s := range f.cfg.Storages {
+		if s.ID == id {
+			return nil
+		}
+	}
+	f.cfg.Storages = append(f.cfg.Storages, config.Storage{ID: id, Path: path, CatalogPath: catalogPath})
+	if err := config.Save(f.configPath, f.cfg); err != nil {
+		f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
+		return fmt.Errorf("farcd: persist storage %q to %s: %w", id, f.configPath, err)
+	}
+	return nil
 }
 
 func (f *Farcd) closeUnits() {

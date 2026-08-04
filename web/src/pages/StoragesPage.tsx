@@ -113,9 +113,9 @@ export default function StoragesPage() {
 
       <h2>Create storage</h2>
       <p>
-        Registration is in-memory for the running farcd process only — it is <em>not</em> written back into
-        farcd's config file. To survive a container restart, add the same <code>id</code>/<code>path</code> to
-        the mounted <code>farc.config.json</code> and restart <code>farc</code> (see PLAN.md, Gap 3).
+        farcd persists this into its own config file on creation, so it survives a restart. You only need to
+        provide a path to an already-sized partition/file — farcd initializes it (fblock 0 only, per ADR-006's
+        lazy init).
       </p>
       <form onSubmit={onCreate}>
         <label>

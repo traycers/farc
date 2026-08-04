@@ -15,15 +15,36 @@ type HttpApiServer struct {
 	ing  *ingest.IngestManager
 	push *EventPushServer
 	mux  *http.ServeMux
+
+	onStorageCreated func(id, path, catalogPath string) error
 }
 
 // NewHttpApiServer builds the full route set. ing and push may be nil (e.g.
 // a read-only deployment, or tests exercising only the storage routes) —
 // routes that need them report 501 Not Implemented rather than panicking.
 func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *EventPushServer) *HttpApiServer {
-	s := &HttpApiServer{reg: reg, ing: ing, push: push, mux: http.NewServeMux()}
+	s := &HttpApiServer{
+		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
+		onStorageCreated: func(string, string, string) error { return nil },
+	}
 	s.routes()
 	return s
+}
+
+// SetOnStorageCreated installs a hook run synchronously by POST /storages,
+// after the new storage is initialized and registered but before the
+// response is written — internal/farcd uses this to persist the entry into
+// its own config file, so it survives a process restart (PLAN.md's Gap 3
+// otherwise leaves a storage created at runtime in-memory-only). A returned
+// error fails the request with 500, even though the storage stays
+// registered and usable for this process's lifetime — persistence failing
+// doesn't undo an already-completed (and possibly expensive) Init. A nil fn
+// restores the default no-op, matching this package's original behavior.
+func (s *HttpApiServer) SetOnStorageCreated(fn func(id, path, catalogPath string) error) {
+	if fn == nil {
+		fn = func(string, string, string) error { return nil }
+	}
+	s.onStorageCreated = fn
 }
 
 // Handler returns the server's http.Handler, e.g. for http.Server.Handler or
