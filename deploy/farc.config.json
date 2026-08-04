@@ -12,34 +12,6 @@
     "ip": "0.0.0.0",
     "port": 9090
   },
-  "storages": [
-    {
-      "id": "01d37913-4bc2-4410-999b-ff9a94e543a6",
-      "path": "/data/test.farc"
-    }
-  ],
-  "channels": [
-    {
-      "id": 1,
-      "rtsp_url": "rtsp://admin:admin@192.168.71.59:554/cam/realmonitor?channel=1\u0026subtype=0",
-      "storage": "01d37913-4bc2-4410-999b-ff9a94e543a6",
-      "capture_policy": {
-        "type": "continuous",
-        "max_deferred_start": "30s",
-        "prerecord": "5s",
-        "postrecord": "5s"
-      }
-    },
-    {
-      "id": 2,
-      "rtsp_url": "rtsp://admin:admin@192.168.71.59:554/cam/realmonitor?channel=1\u0026subtype=0",
-      "storage": "01d37913-4bc2-4410-999b-ff9a94e543a6",
-      "capture_policy": {
-        "type": "event",
-        "max_deferred_start": "30s",
-        "prerecord": "5s",
-        "postrecord": "5s"
-      }
-    }
-  ]
+  "storages": [],
+  "channels": []
 }

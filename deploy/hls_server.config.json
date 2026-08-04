@@ -1,7 +1,16 @@
 {
-  "http": { "ip": "0.0.0.0", "port": 8090 },
-  "farcds": [{ "id": "farc0", "http": "http://farc:8080", "ws": "ws://farc:8081" }],
-  "channels": [{ "id": 2, "farcd": "farc0", "storage": "01d37913-4bc2-4410-999b-ff9a94e543a6" }],
+  "http": {
+    "ip": "0.0.0.0",
+    "port": 8090
+  },
+  "farcds": [
+    {
+      "id": "farc0",
+      "http": "http://farc:8080",
+      "ws": "ws://farc:8081"
+    }
+  ],
+  "channels": [],
   "target_segment_duration": "2s",
   "cache_dir": "/var/cache/hls_server",
   "cache_quota_bytes": 10737418240
