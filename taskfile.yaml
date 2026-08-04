@@ -124,3 +124,28 @@ tasks:
           cat "$file" >> __docs__.md
         done
     silent: true
+
+  spec/install:
+    desc: "установить зависимости TypeSpec-проекта в spec/"
+    dir: "{{.USER_WORKING_DIR}}/spec"
+    cmds:
+      - npm install
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+
+  spec/build:
+    desc: "скомпилировать spec/ (TypeSpec) в OpenAPI 3.1 -> spec/tsp-output/openapi.yaml"
+    aliases: [spec]
+    deps:
+      - task: spec/install
+    dir: "{{.USER_WORKING_DIR}}/spec"
+    cmds:
+      - npx tsp compile .
+    sources:
+      - "./**/*.tsp"
+      - tspconfig.yaml
+    generates:
+      - tsp-output/openapi.yaml
