@@ -86,118 +86,197 @@ export default function StoragesPage() {
 
   return (
     <section>
-      <h1>Storages</h1>
-      {error && <p className="error">{error}</p>}
+      <h1 className="mb-3">Storages</h1>
+      {error && <div className="alert alert-danger">{error}</div>}
 
-      <table>
-        <thead>
-          <tr>
-            <th>id</th>
-            <th>path</th>
-            <th>size</th>
-            <th>fblock size × N</th>
-            <th>max channels</th>
-            <th>set retention (days)</th>
-            <th>set write mode</th>
-          </tr>
-        </thead>
-        <tbody>
-          {storages.map((s) => (
-            <tr key={s.id}>
-              <td>{s.id}</td>
-              <td>{s.path}</td>
-              <td>{formatGiB(s.geometry.FblockSize * s.geometry.N)} GiB</td>
-              <td>
-                {s.geometry.FblockSize} × {s.geometry.N}
-              </td>
-              <td>{s.geometry.MaxChannels}</td>
-              <td>
-                <RetentionEditor onSave={(days) => onPatch(s.id, { retention_days: days })} />
-              </td>
-              <td>
-                <select onChange={(e) => onPatch(s.id, { write_mode: e.target.value })} defaultValue="">
-                  <option value="" disabled>
-                    choose…
-                  </option>
+      <div className="table-responsive">
+        <table className="table table-striped table-hover align-middle">
+          <thead>
+            <tr>
+              <th>id</th>
+              <th>path</th>
+              <th>size</th>
+              <th>fblock size × N</th>
+              <th>max channels</th>
+              <th>set retention (days)</th>
+              <th>set write mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            {storages.map((s) => (
+              <tr key={s.id}>
+                <td>{s.id}</td>
+                <td>{s.path}</td>
+                <td>{formatGiB(s.geometry.FblockSize * s.geometry.N)} GiB</td>
+                <td>
+                  {s.geometry.FblockSize} × {s.geometry.N}
+                </td>
+                <td>{s.geometry.MaxChannels}</td>
+                <td>
+                  <RetentionEditor onSave={(days) => onPatch(s.id, { retention_days: days })} />
+                </td>
+                <td>
+                  <select
+                    className="form-select form-select-sm"
+                    onChange={(e) => onPatch(s.id, { write_mode: e.target.value })}
+                    defaultValue=""
+                  >
+                    <option value="" disabled>
+                      choose…
+                    </option>
+                    {WRITE_MODES.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <div className="card-body">
+          <h2 className="card-title h4">Create storage</h2>
+          <p className="card-text text-body-secondary">
+            For a plain file path, farcd creates and sizes the file itself (to <code>desired size</code> below,
+            rounded down to a whole number of fblocks) — nothing to pre-create. For a raw block device/partition
+            path, the partition must already be at least that size. Either way, farcd persists the new entry into
+            its own config file on creation, so it survives a restart.
+          </p>
+          <form onSubmit={onCreate} className="row g-3 align-items-end">
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                id
+                <input className="form-control" value={id} onChange={(e) => setId(e.target.value)} required />
+              </label>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                path
+                <input
+                  className="form-control"
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  placeholder="/data/disk0.img"
+                  required
+                />
+              </label>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                desired size (GiB)
+                <input
+                  type="number"
+                  className="form-control"
+                  value={desiredSizeGiB}
+                  onChange={(e) => setDesiredSizeGiB(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                fblock size (MiB)
+                <input
+                  type="number"
+                  className="form-control"
+                  value={fblockSizeMiB}
+                  onChange={(e) => setFblockSizeMiB(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="col-md-8">
+              <div className="form-text">
+                → N = {n} fblocks, actual size = {formatGiB(actualSizeBytes)} GiB
+                {actualSizeBytes !== desiredSizeGiB * GiB &&
+                  ' (not an exact multiple of the fblock size — rounded down)'}
+              </div>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                max channels
+                <input
+                  type="number"
+                  className="form-control"
+                  value={maxChannels}
+                  onChange={(e) => setMaxChannels(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                fchunk size (bytes)
+                <input
+                  type="number"
+                  className="form-control"
+                  value={fchunkSize}
+                  onChange={(e) => setFchunkSize(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                write mode
+                <select
+                  className="form-select"
+                  value={writeMode}
+                  onChange={(e) => setWriteMode(e.target.value as (typeof WRITE_MODES)[number])}
+                >
                   {WRITE_MODES.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
                   ))}
                 </select>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h2>Create storage</h2>
-      <p>
-        For a plain file path, farcd creates and sizes the file itself (to <code>desired size</code> below, rounded
-        down to a whole number of fblocks) — nothing to pre-create. For a raw block device/partition path, the
-        partition must already be at least that size. Either way, farcd persists the new entry into its own config
-        file on creation, so it survives a restart.
-      </p>
-      <form onSubmit={onCreate}>
-        <label>
-          id
-          <input value={id} onChange={(e) => setId(e.target.value)} required />
-        </label>
-        <label>
-          path
-          <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/data/disk0.img" required />
-        </label>
-        <label>
-          desired size (GiB)
-          <input type="number" value={desiredSizeGiB} onChange={(e) => setDesiredSizeGiB(Number(e.target.value))} />
-        </label>
-        <label>
-          fblock size (MiB)
-          <input type="number" value={fblockSizeMiB} onChange={(e) => setFblockSizeMiB(Number(e.target.value))} />
-        </label>
-        <span>
-          → N = {n} fblocks, actual size = {formatGiB(actualSizeBytes)} GiB
-          {actualSizeBytes !== desiredSizeGiB * GiB && ' (not an exact multiple of the fblock size — rounded down)'}
-        </span>
-        <label>
-          max channels
-          <input type="number" value={maxChannels} onChange={(e) => setMaxChannels(Number(e.target.value))} />
-        </label>
-        <label>
-          fchunk size (bytes)
-          <input type="number" value={fchunkSize} onChange={(e) => setFchunkSize(Number(e.target.value))} />
-        </label>
-        <label>
-          write mode
-          <select value={writeMode} onChange={(e) => setWriteMode(e.target.value as (typeof WRITE_MODES)[number])}>
-            {WRITE_MODES.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          retention (days)
-          <input type="number" value={retentionDays} onChange={(e) => setRetentionDays(Number(e.target.value))} />
-        </label>
-        <label>
-          min container share
-          <input
-            type="number"
-            step="0.01"
-            value={minContainerShare}
-            onChange={(e) => setMinContainerShare(Number(e.target.value))}
-          />
-        </label>
-        <label>
-          force (re-init even if already initialized)
-          <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
-        </label>
-        <button type="submit" disabled={busy}>
-          Create
-        </button>
-      </form>
+              </label>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                retention (days)
+                <input
+                  type="number"
+                  className="form-control"
+                  value={retentionDays}
+                  onChange={(e) => setRetentionDays(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="col-sm-6 col-md-4">
+              <label className="form-label">
+                min container share
+                <input
+                  type="number"
+                  step="0.01"
+                  className="form-control"
+                  value={minContainerShare}
+                  onChange={(e) => setMinContainerShare(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="col-md-4">
+              <div className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="force-reinit"
+                  checked={force}
+                  onChange={(e) => setForce(e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="force-reinit">
+                  force (re-init even if already initialized)
+                </label>
+              </div>
+            </div>
+            <div className="col-12">
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                Create
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </section>
   )
 }
@@ -205,11 +284,16 @@ export default function StoragesPage() {
 function RetentionEditor({ onSave }: { onSave: (days: number) => void }) {
   const [days, setDays] = useState(30)
   return (
-    <span style={{ display: 'flex', gap: '0.25rem' }}>
-      <input type="number" value={days} onChange={(e) => setDays(Number(e.target.value))} style={{ width: '4rem' }} />
-      <button type="button" onClick={() => onSave(days)}>
+    <div className="input-group input-group-sm" style={{ width: '8rem' }}>
+      <input
+        type="number"
+        className="form-control"
+        value={days}
+        onChange={(e) => setDays(Number(e.target.value))}
+      />
+      <button type="button" className="btn btn-outline-secondary" onClick={() => onSave(days)}>
         Set
       </button>
-    </span>
+    </div>
   )
 }
