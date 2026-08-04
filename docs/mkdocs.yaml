@@ -62,6 +62,7 @@ nav:
       - Деревья на базе массивов: archive/08-array-trees.md
       - Политика захвата: archive/10-capture-policy.md
       - Композиция сервиса: archive/11-service-composition.md
+      - hls_server (HLS-воспроизведение): archive/12-hls-server.md
   - ADR:
       - header-location: archive/adr/001-header-location.md
       - index-storage: archive/adr/002-index-storage.md
@@ -80,6 +81,8 @@ nav:
       - toc-push: archive/adr/015-toc-push.md
       - toc-resolve-fallback: archive/adr/016-toc-resolve-fallback.md
       - periodic-fchunk-flush: archive/adr/017-periodic-fchunk-flush.md
+      - hls-index-toc-push: archive/adr/018-hls-index-toc-push.md
+      - hls-segment-fcontainer-boundary: archive/adr/019-hls-segment-fcontainer-boundary.md
   - Обучение:
       - Merkle-дерево (parent/sibling/value): learning/merkle-tree.md
       - Reed-Solomon (восстановление после потери блоков): learning/reed-solomon.md
