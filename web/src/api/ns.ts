@@ -40,3 +40,13 @@ export function nsToLocalInputValue(ns: bigint): string {
 export function nsFromLocalInputValue(v: string): bigint {
   return nsFromDate(new Date(v))
 }
+
+// For read-only display where seconds matter (e.g. the candidates table) --
+// nsToLocalInputValue intentionally truncates to minutes to match
+// <input type="datetime-local">'s default step, which loses too much
+// precision for two candidates that differ by only a few seconds.
+export function nsToDisplayString(ns: bigint): string {
+  const d = nsToDate(ns)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}

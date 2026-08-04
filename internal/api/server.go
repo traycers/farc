@@ -118,6 +118,8 @@ func (s *HttpApiServer) routes() {
 	s.mux.HandleFunc("DELETE /channels/{id}", s.handleRemoveChannel)
 	s.mux.HandleFunc("POST /channels/{id}/capture-policy", s.handleSetCapturePolicy)
 	s.mux.HandleFunc("POST /channels/{id}/events", s.handleTriggerEvent)
+	s.mux.HandleFunc("POST /channels/{id}/recording/start", s.handleStartRecording)
+	s.mux.HandleFunc("POST /channels/{id}/recording/stop", s.handleStopRecording)
 
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 

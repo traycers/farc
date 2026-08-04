@@ -120,6 +120,61 @@ func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type startRecordingRequest struct {
+	FromTimeNS *uint64 `json:"from_time_ns,omitempty"`
+}
+
+func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Request) {
+	if s.ing == nil {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		return
+	}
+	channel, err := parseChannelID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req startRecordingRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	now := uint64(time.Now().UnixNano())
+	if err := s.ing.StartRecording(channel, now, req.FromTimeNS); err != nil {
+		status := http.StatusNotFound
+		if errors.Is(err, ingest.ErrWrongPolicyType) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *HttpApiServer) handleStopRecording(w http.ResponseWriter, r *http.Request) {
+	if s.ing == nil {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		return
+	}
+	channel, err := parseChannelID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	now := uint64(time.Now().UnixNano())
+	if err := s.ing.StopRecording(channel, now); err != nil {
+		status := http.StatusNotFound
+		if errors.Is(err, ingest.ErrWrongPolicyType) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // channelInfo is GET /channels' listing shape -- a plain projection of
 // ingest.ChannelInfo with the wire's usual snake_case/string conventions
 // (PolicyType as its String() form, not the bare int ingest.PolicyType is

@@ -101,6 +101,54 @@ func TestIngestManager_List_ReflectsLiveSetPolicyNotStaleConfig(t *testing.T) {
 	}
 }
 
+func TestIngestManager_StartRecording_UnknownErrors(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	if err := m.StartRecording(99, 1, nil); err == nil {
+		t.Fatalf("StartRecording: want error for unknown channel, got nil")
+	}
+}
+
+func TestIngestManager_StartRecording_WrongPolicyTypeErrors(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	cfg := testChannelConfig(1, "disk0")
+	cfg.PolicyType = PolicyEvent
+	if err := m.AddChannel(cfg); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+
+	if err := m.StartRecording(1, 1, nil); err == nil {
+		t.Fatalf("StartRecording: want ErrWrongPolicyType, got nil")
+	}
+}
+
+func TestIngestManager_StopRecording_UnknownErrors(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	if err := m.StopRecording(99, 1); err == nil {
+		t.Fatalf("StopRecording: want error for unknown channel, got nil")
+	}
+}
+
+func TestIngestManager_StopRecording_WrongPolicyTypeErrors(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	cfg := testChannelConfig(1, "disk0")
+	cfg.PolicyType = PolicyEvent
+	if err := m.AddChannel(cfg); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+
+	if err := m.StopRecording(1, 1); err == nil {
+		t.Fatalf("StopRecording: want ErrWrongPolicyType, got nil")
+	}
+}
+
 func TestIngestManager_StartThenAddChannel_BothPresent(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()

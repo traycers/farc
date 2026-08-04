@@ -137,6 +137,134 @@ func TestHandleTriggerEvent_UnknownChannel(t *testing.T) {
 	}
 }
 
+func TestHandleStartRecording(t *testing.T) {
+	im := newTestIngestManager(t)
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postJSON(t, srv, "/channels/1/recording/start", startRecordingRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestHandleStartRecording_WithFromTime(t *testing.T) {
+	im := newTestIngestManager(t)
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	from := uint64(123)
+	resp := postJSON(t, srv, "/channels/1/recording/start", startRecordingRequest{FromTimeNS: &from})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestHandleStartRecording_WrongPolicyType(t *testing.T) {
+	im := newTestIngestManager(t)
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp1 := postJSON(t, srv, "/channels/1/capture-policy", setCapturePolicyRequest{Type: "event"})
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusNoContent {
+		t.Fatalf("capture-policy status = %d, want 204", resp1.StatusCode)
+	}
+
+	resp := postJSON(t, srv, "/channels/1/recording/start", startRecordingRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+}
+
+func TestHandleStartRecording_UnknownChannel(t *testing.T) {
+	im := newTestIngestManager(t)
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postJSON(t, srv, "/channels/999/recording/start", startRecordingRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestHandleStartRecording_NoIngestManager(t *testing.T) {
+	s := NewHttpApiServer(NewStorageRegistry(), nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postJSON(t, srv, "/channels/1/recording/start", startRecordingRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", resp.StatusCode)
+	}
+}
+
+func TestHandleStopRecording(t *testing.T) {
+	im := newTestIngestManager(t)
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postJSON(t, srv, "/channels/1/recording/stop", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestHandleStopRecording_WrongPolicyType(t *testing.T) {
+	im := newTestIngestManager(t)
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp1 := postJSON(t, srv, "/channels/1/capture-policy", setCapturePolicyRequest{Type: "event"})
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusNoContent {
+		t.Fatalf("capture-policy status = %d, want 204", resp1.StatusCode)
+	}
+
+	resp := postJSON(t, srv, "/channels/1/recording/stop", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+}
+
+func TestHandleStopRecording_UnknownChannel(t *testing.T) {
+	im := newTestIngestManager(t)
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postJSON(t, srv, "/channels/999/recording/stop", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestHandleStopRecording_NoIngestManager(t *testing.T) {
+	s := NewHttpApiServer(NewStorageRegistry(), nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postJSON(t, srv, "/channels/1/recording/stop", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", resp.StatusCode)
+	}
+}
+
 func regTestUnit(t *testing.T, reg *StorageRegistry, id string) {
 	t.Helper()
 	if err := reg.Register(id, newTestUnit(t), id+".img"); err != nil {

@@ -194,6 +194,34 @@ func (m *IngestManager) TriggerEvent(channel uint16, now, eventTime uint64) erro
 	return e.ingest.policy.Trigger(now, eventTime)
 }
 
+// StartRecording forwards continuous's "начать запись [with from_time]"
+// (§5.1) to channel's CapturePolicy -- the `POST /channels/{id}/recording/
+// start` route's entry point. Only meaningful under the continuous policy;
+// CapturePolicy.StartRecording itself is the one that rejects it otherwise
+// (ErrWrongPolicyType).
+func (m *IngestManager) StartRecording(channel uint16, now uint64, fromTime *uint64) error {
+	m.mu.Lock()
+	e, ok := m.channels[channel]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("ingest: unknown channel %d", channel)
+	}
+	return e.ingest.policy.StartRecording(now, fromTime)
+}
+
+// StopRecording forwards continuous's "остановить запись" (§5.1) to
+// channel's CapturePolicy -- the `POST /channels/{id}/recording/stop`
+// route's entry point.
+func (m *IngestManager) StopRecording(channel uint16, now uint64) error {
+	m.mu.Lock()
+	e, ok := m.channels[channel]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("ingest: unknown channel %d", channel)
+	}
+	return e.ingest.policy.StopRecording(now)
+}
+
 // Stop cancels every channel's ingest loop and waits for all of them to
 // finish.
 func (m *IngestManager) Stop() {

@@ -4,6 +4,8 @@ import {
   listChannels,
   listStorages,
   removeChannel,
+  startRecording,
+  stopRecording,
   triggerEvent,
   updateChannel,
   type ChannelInfo,
@@ -112,6 +114,28 @@ export default function ChannelsPage() {
     }
   }
 
+  async function onStartRecording(channel: number) {
+    setError(null)
+    setStatus(null)
+    try {
+      await startRecording(channel)
+      setStatus(`recording started for channel ${channel}`)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function onStopRecording(channel: number) {
+    setError(null)
+    setStatus(null)
+    try {
+      await stopRecording(channel)
+      setStatus(`recording stopped for channel ${channel}`)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   const shown = channels.filter((c) => c.storage === storage)
 
   return (
@@ -159,9 +183,28 @@ export default function ChannelsPage() {
                     <button type="button" className="btn btn-outline-danger" onClick={() => onRemove(c.channel)}>
                       remove
                     </button>
-                    <button type="button" className="btn btn-outline-primary" onClick={() => onTrigger(c.channel)}>
-                      trigger event
-                    </button>
+                    {c.capture_policy_type === 'continuous' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-outline-success"
+                          onClick={() => onStartRecording(c.channel)}
+                        >
+                          start recording
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline-warning"
+                          onClick={() => onStopRecording(c.channel)}
+                        >
+                          stop recording
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" className="btn btn-outline-primary" onClick={() => onTrigger(c.channel)}>
+                        trigger event
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>

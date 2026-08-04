@@ -118,6 +118,16 @@ export async function triggerEvent(channel: number): Promise<void> {
   await ok(await fetch(`${BASE}/channels/${channel}/events`, { method: 'POST' }))
 }
 
+// No from_time param, same reasoning as triggerEvent above: farcd defaults
+// it to "now" (no queue replay) when the body is empty.
+export async function startRecording(channel: number): Promise<void> {
+  await ok(await fetch(`${BASE}/channels/${channel}/recording/start`, { method: 'POST' }))
+}
+
+export async function stopRecording(channel: number): Promise<void> {
+  await ok(await fetch(`${BASE}/channels/${channel}/recording/stop`, { method: 'POST' }))
+}
+
 export type CapturePolicyInput = {
   type: 'continuous' | 'event'
   // Durations (seconds-scale), not absolute epoch timestamps -- plain

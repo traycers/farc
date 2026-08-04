@@ -1,7 +1,7 @@
 import Hls from 'hls.js'
 import { useEffect, useRef, useState } from 'react'
 import { candidates, listStorages, setProtected, type StorageInfo } from '../api/farcd'
-import { nsFromLocalInputValue, nsToLocalInputValue, type Candidate } from '../api/ns'
+import { nsFromLocalInputValue, nsToDisplayString, nsToLocalInputValue, type Candidate } from '../api/ns'
 
 const ONE_HOUR_NS = 3_600_000_000_000n
 
@@ -144,8 +144,8 @@ export default function PlayerPage() {
             {rows.map((c) => (
               <tr key={c.uuid}>
                 <td>{c.uuid}</td>
-                <td>{nsToLocalInputValue(c.begin)}</td>
-                <td>{nsToLocalInputValue(c.end)}</td>
+                <td>{nsToDisplayString(c.begin)}</td>
+                <td>{nsToDisplayString(c.end)}</td>
                 <td>
                   <div className="btn-group btn-group-sm">
                     <button type="button" className="btn btn-outline-secondary" onClick={() => onToggleProtected(c, true)}>
