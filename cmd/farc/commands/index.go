@@ -7,9 +7,9 @@ import (
 var configPath string
 
 var cmdRoot = &cobra.Command{
-	Use:   "arch",
-	Short: "arch",
-	Long:  `arch - это видео-архив.`,
+	Use:   "farc",
+	Short: "farc",
+	Long:  `farc - это видео-архив.`,
 	Run:   doByDefault,
 }
 
