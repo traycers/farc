@@ -158,6 +158,23 @@ func (c *Catalog) AllocatedPrefix() int {
 	return k
 }
 
+// Clone returns a deep copy of c, safe for the caller to mutate without
+// affecting the original (e.g. patching a single in-flight entry before
+// embedding the copy into a fblock header being written, or before writing
+// it to the SSD catalog mirror, ADR-007).
+func (c *Catalog) Clone() *Catalog {
+	return &Catalog{
+		MaxChannels:     c.MaxChannels,
+		N:               c.N,
+		ChannelRegistry: append([]uint16(nil), c.ChannelRegistry...),
+		Flags:           append([]uint8(nil), c.Flags...),
+		UUID:            append([][16]byte(nil), c.UUID...),
+		Begin:           append([]uint64(nil), c.Begin...),
+		End:             append([]uint64(nil), c.End...),
+		ChannelBitmap:   append([]byte(nil), c.ChannelBitmap...),
+	}
+}
+
 // EncodeCatalog serializes c into a new CatalogSize(c.MaxChannels, c.N)-byte
 // buffer, per the exact layout in docs/docs/archive/03-storage-format.md §6.
 func EncodeCatalog(c *Catalog) ([]byte, error) {

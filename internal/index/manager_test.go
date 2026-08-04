@@ -185,3 +185,49 @@ func TestIndexOutOfRange(t *testing.T) {
 		t.Errorf("MarkBad(5) = %v, want ErrIndexOutOfRange", err)
 	}
 }
+
+func TestSnapshotIsIndependentDeepCopy(t *testing.T) {
+	cat := newTestCatalog(2)
+	m := New(cat, 1, fblock.WriteModeCyclic, 30)
+
+	idx, err := m.SelectNextIndex(0)
+	if err != nil {
+		t.Fatalf("SelectNextIndex: %v", err)
+	}
+	if err := m.BeginWrite(idx); err != nil {
+		t.Fatalf("BeginWrite: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if snap.State(idx) != fblock.InProgress {
+		t.Fatalf("snapshot state = %v, want InProgress", snap.State(idx))
+	}
+
+	// Mutating the snapshot must not affect the Manager's own catalog, and
+	// vice versa — Recorder patches UUID/Begin/End into its local snapshot
+	// before this write is actually committed via CompleteWrite.
+	var uuid [16]byte
+	uuid[0] = 42
+	snap.UUID[idx] = uuid
+	snap.Begin[idx] = 111
+	snap.SetChannelBit(idx, 0, true)
+
+	if cat.UUID[idx] != ([16]byte{}) {
+		t.Fatalf("mutating the snapshot leaked into the live catalog's UUID")
+	}
+	if cat.ChannelBit(idx, 0) {
+		t.Fatalf("mutating the snapshot leaked into the live catalog's channel_bitmap")
+	}
+
+	if err := m.CompleteWrite(idx, uuid, 111, 222); err != nil {
+		t.Fatalf("CompleteWrite: %v", err)
+	}
+	snap2 := m.Snapshot()
+	if snap2.UUID[idx] != uuid {
+		t.Fatalf("post-CompleteWrite snapshot UUID = %x, want %x", snap2.UUID[idx], uuid)
+	}
+	snap2.UUID[idx] = [16]byte{}
+	if got, ok := m.ResolveUUID(uuid); !ok || got != idx {
+		t.Fatalf("mutating a later snapshot leaked back into the live catalog's uuidIndex")
+	}
+}

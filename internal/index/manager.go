@@ -164,6 +164,41 @@ func (m *Manager) MarkBad(idx uint32) error {
 	return nil
 }
 
+// SetChannelBit sets or clears idx's channel_bitmap bit at compact position
+// pos. Recorder calls this (in addition to patching its own local write
+// snapshot, see internal/storage's package doc) so IndexManager's live
+// in-memory catalog — which Reader.Candidates and any later Snapshot both
+// read from — stays consistent with what actually gets embedded in the
+// fblock's header on disk; CompleteWrite itself only touches state/uuid/
+// begin/end (docs/docs/archive/04-storage-operations.md §7.3 step 2 is
+// silent on channel_bitmap because §7.2 step 3 already sets it earlier, in
+// the very same catalog snapshot object in the reference design — this
+// package models Recorder's write-time snapshot and IndexManager's live
+// catalog as two separate objects, so the bit has to be set on both).
+func (m *Manager) SetChannelBit(idx uint32, pos uint16, set bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if idx >= m.catalog.N {
+		return ErrIndexOutOfRange
+	}
+	m.catalog.SetChannelBit(idx, pos, set)
+	return nil
+}
+
+// Snapshot returns a deep copy of the current catalog, safe for the caller
+// to mutate freely (e.g. Recorder patching in a not-yet-committed entry
+// before encoding it into a fblock header, docs/docs/archive/
+// 04-storage-operations.md §7.2). See internal/storage's package doc for why
+// Recorder needs a mutable copy rather than a read-only view: the entry for
+// the fblock index being written must show the *new* fcontainer's UUID/
+// begin/end even while state stays in_progress, which IndexManager itself
+// only learns at CompleteWrite time (after this write already happened).
+func (m *Manager) Snapshot() *fblock.Catalog {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.catalog.Clone()
+}
+
 // SetProtected sets or clears idx's protected flag. Only valid on a Ready
 // fblock (docs/docs/archive/00-requirements.md §4.6).
 func (m *Manager) SetProtected(idx uint32, protected bool) error {
