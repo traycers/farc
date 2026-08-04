@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -13,8 +14,12 @@ import (
 // config file is internal/config's job (Phase 11), not this package's --
 // IngestManager just needs the resolved values.
 type ChannelConfig struct {
-	Channel      uint16
-	RTSPURL      string
+	Channel uint16
+	RTSPURL string
+	// StorageID is reporting-only (List/GET /channels) -- IngestManager has
+	// no Storage awareness at all (see BackpressureSignal's doc below), it
+	// just carries the id the caller resolved Recorder from.
+	StorageID    string
 	Recorder     Recorder
 	QueueDepth   uint64 // ns
 	PolicyType   PolicyType
@@ -32,9 +37,22 @@ type ChannelConfig struct {
 }
 
 type channelEntry struct {
+	cfg    ChannelConfig
 	ingest *ChannelIngest
 	cancel context.CancelFunc
 	done   chan struct{}
+}
+
+// ChannelInfo is IngestManager's public listing shape for GET /channels --
+// mirrors StorageRegistry.List/StorageInfo's role for storages: the running
+// manager is the source of truth for what's actually active, independent
+// of whatever config file it may or may not have been built from.
+type ChannelInfo struct {
+	Channel      uint16
+	RTSPURL      string
+	StorageID    string
+	PolicyType   PolicyType
+	PolicyParams PolicyParams
 }
 
 // IngestManager creates and owns one ChannelIngest per configured channel
@@ -88,7 +106,64 @@ func (m *IngestManager) startLocked(cfg ChannelConfig) {
 			m.logf("ingest: channel %d stopped: %v", cfg.Channel, err)
 		}
 	}()
-	m.channels[cfg.Channel] = &channelEntry{ingest: ci, cancel: cancel, done: done}
+	m.channels[cfg.Channel] = &channelEntry{cfg: cfg, ingest: ci, cancel: cancel, done: done}
+}
+
+// List returns every running channel's info, sorted by channel id.
+// PolicyType/PolicyParams are read live off each channel's CapturePolicy
+// (not the cfg it was started/last replaced with), since SetPolicy can
+// change them without going through AddChannel/RemoveChannel.
+func (m *IngestManager) List() []ChannelInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ChannelInfo, 0, len(m.channels))
+	for _, e := range m.channels {
+		policyType, params := e.ingest.policy.Policy()
+		out = append(out, ChannelInfo{
+			Channel:      e.cfg.Channel,
+			RTSPURL:      e.cfg.RTSPURL,
+			StorageID:    e.cfg.StorageID,
+			PolicyType:   policyType,
+			PolicyParams: params,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Channel < out[j].Channel })
+	return out
+}
+
+// AddChannel starts a single new channel while others may already be
+// running -- the runtime counterpart to Start, for a channel created after
+// startup (POST /channels). Returns an error if the channel id is already
+// running.
+func (m *IngestManager) AddChannel(cfg ChannelConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.channels[cfg.Channel]; exists {
+		return fmt.Errorf("ingest: channel %d already running", cfg.Channel)
+	}
+	m.startLocked(cfg)
+	return nil
+}
+
+// RemoveChannel cancels channel's ingest loop and waits for it to finish
+// before removing it, returning the ChannelConfig it was running with (so
+// a caller -- e.g. an HTTP handler doing an edit as remove-then-add -- can
+// restore it if a later step fails). Waiting happens outside the lock so
+// other channels' SetPolicy/TriggerEvent calls aren't blocked while this
+// one drains.
+func (m *IngestManager) RemoveChannel(channel uint16) (ChannelConfig, error) {
+	m.mu.Lock()
+	e, ok := m.channels[channel]
+	if !ok {
+		m.mu.Unlock()
+		return ChannelConfig{}, fmt.Errorf("ingest: unknown channel %d", channel)
+	}
+	delete(m.channels, channel)
+	m.mu.Unlock()
+
+	e.cancel()
+	<-e.done
+	return e.cfg, nil
 }
 
 // SetPolicy implements §6 "смена политики" for an already-running channel:

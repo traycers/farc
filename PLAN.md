@@ -11,6 +11,7 @@
 - [x] Phase 7 — `taskfile.yaml` `build/web` task
 - [x] Phase 8 — `Dockerfile.farc`, `Dockerfile.hls_server`, `docker-compose.yaml`, `deploy/` example configs
 - [x] Phase 9 — `farcd` persists storages created via `POST /storages` back into its own config file (closes Gap 3)
+- [x] Phase 10 — full channel CRUD (`GET/POST/PUT/DELETE /channels`), persisted the same way (closes Gap 1); `ChannelsPage` redesigned around it
 
 ## Context
 
@@ -28,6 +29,10 @@ GET    /storages                                  -> [{id,path,geometry}]
 PATCH  /storages/{id}                              {retention_days?,write_mode?} -> 204
 GET    /storages/{id}/candidates?channel=&t1=&t2=  -> [{index,uuid,begin,end}]
 POST   /storages/{id}/fcontainers/{uuid}/protected {value:bool} -> 204
+GET    /channels                                   -> [{channel,rtsp_url,storage,capture_policy_type,prerecord_ns,postrecord_ns}]
+POST   /channels                                   {id,rtsp_url,storage,capture_policy:{type,max_deferred_start_ns,prerecord_ns,postrecord_ns}} -> 201
+PUT    /channels/{id}                               {rtsp_url,storage,capture_policy:{...}} -> 200 (remove+re-add under the hood)
+DELETE /channels/{id}                               -> 204
 POST   /channels/{id}/capture-policy               {type,params:{prerecord_ns,postrecord_ns}} -> 204
 POST   /channels/{id}/events                       {t?} -> 204
 GET    /metrics                                    (Prometheus text; linked out, not parsed)
@@ -48,9 +53,9 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 | Path | Responsibility |
 |---|---|
 | `web/src/api/ns.ts` | `bigint` helpers for Unix-nanosecond timestamps: `nsFromDate`, `nsToDate`, `parseCandidatesJSON` |
-| `web/src/api/farcd.ts` | Typed fetch client: `listStorages`, `createStorage`, `patchStorage`, `candidates`, `setProtected`, `setCapturePolicy`, `triggerEvent` |
+| `web/src/api/farcd.ts` | Typed fetch client: `listStorages`, `createStorage`, `patchStorage`, `candidates`, `setProtected`, `setCapturePolicy`, `triggerEvent`, `listChannels`, `createChannel`, `updateChannel`, `removeChannel` |
 | `web/src/pages/StoragesPage.tsx` | List (`GET /storages`), create form, inline retention/write_mode patch |
-| `web/src/pages/ChannelsPage.tsx` | Channel-id input, capture-policy form, trigger-event form |
+| `web/src/pages/ChannelsPage.tsx` | Storage selector; add/edit/remove channel (one form, add-vs-edit mode toggle) scoped to the selected storage; trigger-event per row |
 | `web/src/pages/PlayerPage.tsx` | Storage+channel+time-range form → candidates list → protected toggle + hls.js playback |
 | `web/src/App.tsx` | `react-router-dom` shell, routes `/storages` `/channels` `/player` |
 | `web/nginx.conf` | `/api/farcd/` → farcd, `/api/hls/` → hls_server, SPA fallback to `index.html` |
@@ -64,25 +69,27 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 1. **Scaffold `web/`.** `package.json` (react, react-dom, react-router-dom, hls.js, typescript, vite, `@vitejs/plugin-react`), `vite.config.ts`, `tsconfig.json`, `index.html`, `src/main.tsx`. Verify: `npm install && npm run build` produces `web/dist`.
 2. **`src/api/ns.ts` + `src/api/farcd.ts`.** All timestamps as `bigint`; `parseCandidatesJSON` regex-quotes the `begin`/`end` integer literals before `JSON.parse` (native JSON parsing silently rounds nanosecond epoch values — they're already past `Number.MAX_SAFE_INTEGER`). Verify: a quick manual check that a known large literal round-trips exactly through `parseCandidatesJSON`.
 3. **`StoragesPage`.** Table from `listStorages`; create form posts full `createStorage` body; inline `retention_days`/`write_mode` edits call `patchStorage` — `GET /storages` never echoes these back (`StorageInfo` only carries `id`/`path`/`geometry`), so the page just reports success/failure rather than reflecting a value it doesn't have.
-4. **`ChannelsPage`.** Channel-id free-text input (Gap 1) feeding two independent forms: set capture-policy, trigger event. No "current policy" display (Gap 2) — UI copy says so explicitly rather than showing stale/fake data.
+4. **`ChannelsPage`.** Originally a channel-id free-text input (Gap 1) feeding set-capture-policy/trigger-event forms; redesigned in Phase 10 around real channel discovery/CRUD once that existed — see Phase 10 below. Trigger-event remains a standalone per-row action (it's a one-shot command, not part of a channel's persisted shape).
 5. **`PlayerPage`.** Storage-id (populated from `listStorages`) + channel-id + `datetime-local` from/to → `candidates()`; render `{uuid, begin, end}` rows with a protected-toggle button and a "Play" button that points an `<video>` (hls.js) at `/api/hls/channels/{channel}/hls/{t1}/{t2}/playlist.m3u8`.
 6. **Shell + nginx.** `App.tsx` routing; `web/nginx.conf` proxy rules; `web/Dockerfile`. Verify: `docker build ./web`.
 7. **`taskfile.yaml`.** New `build/web` task (`dir: web`, `npm ci && npm run build`), wired into the aggregate `build` task.
 8. **Root Dockerfiles + compose.** `Dockerfile.farc`/`Dockerfile.hls_server`, `.dockerignore`, `docker-compose.yaml`, `deploy/*.config.json`. Verify: `docker build -f Dockerfile.farc .`, `-f Dockerfile.hls_server .`; `docker compose config` validates the compose file.
 9. **Persist storages to `farc.config.json`.** `internal/config.Save` (new: `json.MarshalIndent` + `os.WriteFile`, overwriting in place rather than temp-file-plus-rename — a rename would detach from a single-file Docker bind mount instead of updating the host-visible file). `internal/config.Duration` gained `MarshalJSON` (it only had `UnmarshalJSON` before; `Save` needs both directions or every duration field round-trips as a raw nanosecond number `Load` then rejects). `internal/api.HttpApiServer` gained `SetOnStorageCreated(func(id, path, catalogPath string) error)`, called by `handleCreateStorage` right after a successful `Register`, before the response is written; a nil/unset hook is a no-op (existing callers unaffected). `internal/farcd.New` now takes `configPath` alongside `cfg` and wires `Farcd.persistNewStorage` (mutex-guarded append to `cfg.Storages` + `config.Save`) as that hook — `docker-compose.yaml`'s `farc.config.json` mount is no longer `:ro`. Verify: `internal/config`'s `TestSave_RoundTripsThroughLoad`/`TestSave_OverwritesInPlace`; `internal/api`'s `TestHandleCreateStorage_CallsOnStorageCreatedHook`/`..._OnStorageCreatedErrorFailsRequestButKeepsRegistration`; `internal/farcd`'s `TestRun_CreateStorageOverHTTP_PersistsToConfigFile` (real HTTP POST, then `config.Load` the file back and confirm the entry survived).
+10. **Full channel CRUD.** `internal/ingest.IngestManager` gained `List() []ChannelInfo`, `AddChannel(cfg) error`, and `RemoveChannel(channel) (ChannelConfig, error)` — none of these existed before; `Start`/`Stop` only ever handled the whole batch loaded at startup. `channelEntry` now keeps the `ChannelConfig` it was started with (for `RTSPURL`/`StorageID` reporting); `ChannelConfig` gained a reporting-only `StorageID` field. `CapturePolicy` gained a `Policy()` getter so `List()` reports live policy state, not a stale copy from before a `SetPolicy` call. `internal/api` gained `GET/POST/PUT/DELETE /channels(/{id})` (`channels.go`), a shared `parsePolicyType` helper (de-duplicating the type-string switch that `handleSetCapturePolicy` already had), and `ChannelSpec` + three `SetOnChannel{Created,Updated,Removed}` hooks on `HttpApiServer` (mirroring `SetOnStorageCreated`). `PUT` is a remove-then-add under the hood (no cheap in-place path for `rtsp_url`/`storage` — `ChannelIngest.Run` takes the URL as a fixed parameter, and a different storage means a different `Recorder`); every handler restores the pre-mutation `ChannelConfig` on any later failure (persist error, or an `AddChannel` conflict from a request racing in between) so a failed request never leaves a channel silently stopped or double-running. `internal/farcd` wires the three hooks to `persistNewChannel`/`persistUpdatedChannel`/`persistRemovedChannel` (same mutex-guarded append/replace/delete-plus-`config.Save`-with-rollback pattern as `persistNewStorage`) and gained `specToConfigChannel` to translate the wire's ns-based `ChannelSpec` into the config file's Go-duration-string `config.Channel`. `buildChannelConfig` now also sets `StorageID` on the `ingest.ChannelConfig` it returns. Verify: `internal/ingest`'s new `ingestmanager_test.go` (add/remove/list/duplicate-reject/live-policy-not-stale-config); `internal/api`'s new channel-CRUD tests in `channels_test.go` (create/update/remove, unknown-storage/unknown-channel/duplicate-id rejections, persist-hook-failure rollback); `internal/farcd`'s `TestRun_CreateChannelOverHTTP_PersistsToConfigFile` (real HTTP POST, restart via a fresh `New` against the reloaded config, confirm the channel is rebuilt).
 
 ## Gap resolutions
 
-- **Gap 1 — no channel discovery.** Channels exist only in farcd's static config; there is no list/create route. `ChannelsPage` takes a raw channel-id input. Not fixed (no Go changes for this one — out of scope, see Critical files).
-- **Gap 2 — no GET for capture-policy.** Only the setter exists. The UI never claims to show a "current" policy. Not fixed.
+- **Gap 1 — no channel discovery — fixed in Phase 10.** `GET /channels` now lists every running channel (id, `rtsp_url`, storage, capture-policy type/params), backed by `IngestManager.List()`. `ChannelsPage` uses it directly instead of a raw channel-id input.
+- **Gap 2 — no GET for capture-policy — effectively fixed as a side effect of Phase 10.** `GET /channels`' `capture_policy_type`/`prerecord_ns`/`postrecord_ns` fields are read live off each channel's `CapturePolicy` (`IngestManager.List()` → `CapturePolicy.Policy()`), not a stale copy — so the UI can now show the *current* policy, closing this gap without a dedicated route for it.
 - **Gap 3 — `POST /storages` didn't persist into farcd's config — fixed in Phase 9.** `internal/farcd`'s `persistNewStorage` now appends the new entry to the in-memory `*config.Config` and calls `config.Save` before the HTTP response is written; a save failure rolls back the in-memory append and fails the request with 500 (the storage stays registered and usable for this process's lifetime regardless — persistence failing doesn't undo an already-completed `storage.Init`). Re-POSTing the same storage is still not a safe way to "repair" a missed persist: `storage.Init` with `force:false` returns `ErrAlreadyInitialized`, and `force:true` destroys the existing catalog.
 - **Gap 4 — nanosecond timestamps exceed JS safe-integer range.** Handled client-side per the `ns.ts` design above; not a backend defect.
 
 ## Critical files
 
-- `internal/api/{server,storages,channels,query,fcontainers}.go` — exact farcd route/body/response shapes this client mirrors; `server.go` also has `SetOnStorageCreated`.
+- `internal/api/{server,storages,channels,query,fcontainers}.go` — exact farcd route/body/response shapes this client mirrors; `server.go` also has `SetOnStorageCreated`/`SetOnChannelCreated`/`SetOnChannelUpdated`/`SetOnChannelRemoved`.
+- `internal/ingest/ingestmanager.go` — `List`/`AddChannel`/`RemoveChannel`, the runtime primitives Phase 10's HTTP handlers are built on; `policy.go`'s `Policy()` getter.
 - `internal/hlsapi/server.go` — exact hls_server route shapes.
 - `internal/config/config.go`, `internal/hlsconfig/config.go` — exact JSON shapes for `deploy/*.config.json`; `config.go` also has `Save`/`Duration.MarshalJSON`.
-- `internal/farcd/farcd.go` (`persistNewStorage`, `openStorage`) — Gap 3's fix and its remaining edge (a storage that predates this feature, or was created before, must still be added to the config manually).
+- `internal/farcd/farcd.go` (`persistNewStorage`, `persistNewChannel`/`persistUpdatedChannel`/`persistRemovedChannel`, `specToConfigChannel`, `openStorage`, `buildChannelConfig`) — Gaps 1/2/3's fixes.
 - `cmd/farc/commands/index.go`, `cmd/hls_server/commands/index.go` — `-c/--config` flag both Dockerfiles' `CMD` must match.
 - `taskfile.yaml` — existing `build/app`/`build/hls_server` tasks `build/web` mirrors; per `CLAUDE.md`, leave the unrelated stale tasks (`run`, `help`, `db/*`, `env/*`) untouched.

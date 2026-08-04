@@ -296,6 +296,14 @@ func (p *CapturePolicy) SetPolicy(policyType PolicyType, params PolicyParams) {
 	}
 }
 
+// Policy returns the currently active strategy and its params (§6's
+// SetPolicy target) -- read-only, for reporting (GET /channels).
+func (p *CapturePolicy) Policy() (PolicyType, PolicyParams) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.policyType, p.params
+}
+
 // Close forces the current segment closed, if any, regardless of policy
 // type — used when ChannelIngest itself is shutting down.
 func (p *CapturePolicy) Close(now uint64) error {

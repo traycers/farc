@@ -17,6 +17,9 @@ type HttpApiServer struct {
 	mux  *http.ServeMux
 
 	onStorageCreated func(id, path, catalogPath string) error
+	onChannelCreated func(spec ChannelSpec) error
+	onChannelUpdated func(spec ChannelSpec) error
+	onChannelRemoved func(id uint16) error
 }
 
 // NewHttpApiServer builds the full route set. ing and push may be nil (e.g.
@@ -26,6 +29,9 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 	s := &HttpApiServer{
 		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
 		onStorageCreated: func(string, string, string) error { return nil },
+		onChannelCreated: func(ChannelSpec) error { return nil },
+		onChannelUpdated: func(ChannelSpec) error { return nil },
+		onChannelRemoved: func(uint16) error { return nil },
 	}
 	s.routes()
 	return s
@@ -45,6 +51,36 @@ func (s *HttpApiServer) SetOnStorageCreated(fn func(id, path, catalogPath string
 		fn = func(string, string, string) error { return nil }
 	}
 	s.onStorageCreated = fn
+}
+
+// SetOnChannelCreated/SetOnChannelUpdated/SetOnChannelRemoved install hooks
+// run synchronously by POST/PUT/DELETE /channels(/{id}), after the in-memory
+// IngestManager mutation succeeds but before the response is written --
+// internal/farcd uses these to keep its own config file in sync (mirroring
+// SetOnStorageCreated's role for storages). A returned error fails the
+// request with 500 and rolls the IngestManager mutation back (see each
+// handler in channels.go), so a failed persist never leaves a channel
+// silently running/stopped out of step with what's on disk. A nil fn
+// restores the default no-op.
+func (s *HttpApiServer) SetOnChannelCreated(fn func(spec ChannelSpec) error) {
+	if fn == nil {
+		fn = func(ChannelSpec) error { return nil }
+	}
+	s.onChannelCreated = fn
+}
+
+func (s *HttpApiServer) SetOnChannelUpdated(fn func(spec ChannelSpec) error) {
+	if fn == nil {
+		fn = func(ChannelSpec) error { return nil }
+	}
+	s.onChannelUpdated = fn
+}
+
+func (s *HttpApiServer) SetOnChannelRemoved(fn func(id uint16) error) {
+	if fn == nil {
+		fn = func(uint16) error { return nil }
+	}
+	s.onChannelRemoved = fn
 }
 
 // Handler returns the server's http.Handler, e.g. for http.Server.Handler or
@@ -76,6 +112,10 @@ func (s *HttpApiServer) routes() {
 	s.mux.HandleFunc("GET /storages/{id}/candidates", s.handleCandidates)
 	s.mux.HandleFunc("GET /storages/{id}/resolve", s.handleResolve)
 
+	s.mux.HandleFunc("GET /channels", s.handleListChannels)
+	s.mux.HandleFunc("POST /channels", s.handleCreateChannel)
+	s.mux.HandleFunc("PUT /channels/{id}", s.handleUpdateChannel)
+	s.mux.HandleFunc("DELETE /channels/{id}", s.handleRemoveChannel)
 	s.mux.HandleFunc("POST /channels/{id}/capture-policy", s.handleSetCapturePolicy)
 	s.mux.HandleFunc("POST /channels/{id}/events", s.handleTriggerEvent)
 

@@ -1,79 +1,235 @@
-import { useState } from 'react'
-import { setCapturePolicy, triggerEvent } from '../api/farcd'
+import { useEffect, useState } from 'react'
+import {
+  createChannel,
+  listChannels,
+  listStorages,
+  removeChannel,
+  triggerEvent,
+  updateChannel,
+  type ChannelInfo,
+  type StorageInfo,
+} from '../api/farcd'
+
+const POLICY_TYPES = ['continuous', 'event'] as const
 
 export default function ChannelsPage() {
-  const [channel, setChannel] = useState(1)
-  const [policyType, setPolicyType] = useState<'continuous' | 'event'>('continuous')
+  const [storages, setStorages] = useState<StorageInfo[]>([])
+  const [storage, setStorage] = useState('')
+  const [channels, setChannels] = useState<ChannelInfo[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [status, setStatus] = useState<string | null>(null)
+
+  // null = "add" mode; a channel id = editing that channel.
+  const [editingID, setEditingID] = useState<number | null>(null)
+  const [id, setId] = useState(1)
+  const [rtspURL, setRtspURL] = useState('')
+  const [policyType, setPolicyType] = useState<(typeof POLICY_TYPES)[number]>('continuous')
+  const [maxDeferredStartSec, setMaxDeferredStartSec] = useState(30)
   const [prerecordSec, setPrerecordSec] = useState(5)
   const [postrecordSec, setPostrecordSec] = useState(5)
-  const [status, setStatus] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
 
-  async function onSetPolicy(e: React.FormEvent) {
+  const refresh = () => {
+    listStorages()
+      .then((s) => {
+        setStorages(s)
+        setStorage((cur) => cur || (s.length > 0 ? s[0].id : ''))
+      })
+      .catch((e) => setError(String(e)))
+    listChannels()
+      .then(setChannels)
+      .catch((e) => setError(String(e)))
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  function resetForm() {
+    setEditingID(null)
+    setId((channels.reduce((max, c) => Math.max(max, c.channel), 0) || 0) + 1)
+    setRtspURL('')
+    setPolicyType('continuous')
+    setMaxDeferredStartSec(30)
+    setPrerecordSec(5)
+    setPostrecordSec(5)
+  }
+
+  function startEdit(c: ChannelInfo) {
+    setEditingID(c.channel)
+    setId(c.channel)
+    setRtspURL(c.rtsp_url)
+    setPolicyType(c.capture_policy_type)
+    setPrerecordSec(c.prerecord_ns / 1e9)
+    setPostrecordSec(c.postrecord_ns / 1e9)
+  }
+
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     setStatus(null)
+    const capture_policy = {
+      type: policyType,
+      max_deferred_start_ns: Math.round(maxDeferredStartSec * 1e9),
+      prerecord_ns: Math.round(prerecordSec * 1e9),
+      postrecord_ns: Math.round(postrecordSec * 1e9),
+    }
     try {
-      await setCapturePolicy(channel, policyType, prerecordSec * 1e9, postrecordSec * 1e9)
-      setStatus(`capture-policy set for channel ${channel}`)
+      if (editingID === null) {
+        await createChannel({ id, rtsp_url: rtspURL, storage, capture_policy })
+        setStatus(`channel ${id} created`)
+      } else {
+        await updateChannel(editingID, { rtsp_url: rtspURL, storage, capture_policy })
+        setStatus(`channel ${editingID} updated`)
+      }
+      resetForm()
+      refresh()
     } catch (e) {
       setError(String(e))
     }
   }
 
-  async function onTrigger() {
+  async function onRemove(channel: number) {
+    setError(null)
+    setStatus(null)
+    try {
+      await removeChannel(channel)
+      setStatus(`channel ${channel} removed`)
+      if (editingID === channel) resetForm()
+      refresh()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function onTrigger(channel: number) {
     setError(null)
     setStatus(null)
     try {
       await triggerEvent(channel)
-      setStatus(`event triggered for channel ${channel} (server timestamp)`)
+      setStatus(`event triggered for channel ${channel}`)
     } catch (e) {
       setError(String(e))
     }
   }
 
+  const shown = channels.filter((c) => c.storage === storage)
+
   return (
     <section>
       <h1>Channels</h1>
-      <p>
-        farcd has no channel-listing API — channels only exist in its static config file. Enter a channel id you
-        already know is configured; there is nothing to display for its <em>current</em> capture-policy either
-        (only a setter exists), so this page is write-only by design.
-      </p>
+      {error && <p className="error">{error}</p>}
+      {status && <p>{status}</p>}
 
       <label>
-        channel id
-        <input type="number" value={channel} onChange={(e) => setChannel(Number(e.target.value))} />
+        storage
+        <select value={storage} onChange={(e) => setStorage(e.target.value)}>
+          {storages.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.id}
+            </option>
+          ))}
+        </select>
       </label>
 
-      <h2>Set capture policy</h2>
-      <form onSubmit={onSetPolicy}>
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>rtsp_url</th>
+            <th>policy</th>
+            <th>prerecord</th>
+            <th>postrecord</th>
+            <th>actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((c) => (
+            <tr key={c.channel}>
+              <td>{c.channel}</td>
+              <td>{c.rtsp_url}</td>
+              <td>{c.capture_policy_type}</td>
+              <td>{c.prerecord_ns / 1e9}s</td>
+              <td>{c.postrecord_ns / 1e9}s</td>
+              <td>
+                <button type="button" onClick={() => startEdit(c)}>
+                  edit
+                </button>
+                <button type="button" onClick={() => onRemove(c.channel)}>
+                  remove
+                </button>
+                <button type="button" onClick={() => onTrigger(c.channel)}>
+                  trigger event
+                </button>
+              </td>
+            </tr>
+          ))}
+          {shown.length === 0 && (
+            <tr>
+              <td colSpan={6}>no channels on this storage</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <h2>{editingID === null ? 'Add channel' : `Edit channel ${editingID}`}</h2>
+      <form onSubmit={onSubmit}>
         <label>
-          type
-          <select value={policyType} onChange={(e) => setPolicyType(e.target.value as 'continuous' | 'event')}>
-            <option value="continuous">continuous</option>
-            <option value="event">event</option>
+          id
+          <input
+            type="number"
+            value={id}
+            disabled={editingID !== null}
+            onChange={(e) => setId(Number(e.target.value))}
+          />
+        </label>
+        <label>
+          rtsp_url
+          <input
+            value={rtspURL}
+            onChange={(e) => setRtspURL(e.target.value)}
+            placeholder="rtsp://camera1/stream"
+            required
+            style={{ width: '20rem' }}
+          />
+        </label>
+        <label>
+          capture policy
+          <select value={policyType} onChange={(e) => setPolicyType(e.target.value as (typeof POLICY_TYPES)[number])}>
+            {POLICY_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
           </select>
         </label>
-        <label>
-          prerecord (seconds)
-          <input type="number" value={prerecordSec} onChange={(e) => setPrerecordSec(Number(e.target.value))} />
-        </label>
-        <label>
-          postrecord (seconds)
-          <input type="number" value={postrecordSec} onChange={(e) => setPostrecordSec(Number(e.target.value))} />
-        </label>
-        <button type="submit">Set policy</button>
+        {policyType === 'continuous' ? (
+          <label>
+            max deferred start (seconds)
+            <input
+              type="number"
+              value={maxDeferredStartSec}
+              onChange={(e) => setMaxDeferredStartSec(Number(e.target.value))}
+            />
+          </label>
+        ) : (
+          <>
+            <label>
+              prerecord (seconds)
+              <input type="number" value={prerecordSec} onChange={(e) => setPrerecordSec(Number(e.target.value))} />
+            </label>
+            <label>
+              postrecord (seconds)
+              <input type="number" value={postrecordSec} onChange={(e) => setPostrecordSec(Number(e.target.value))} />
+            </label>
+          </>
+        )}
+        <button type="submit">{editingID === null ? 'Add channel' : 'Save changes'}</button>
+        {editingID !== null && (
+          <button type="button" onClick={resetForm}>
+            Cancel
+          </button>
+        )}
       </form>
-
-      <h2>Trigger event</h2>
-      <p>Fires with the server's current wall-clock time — this admin UI does not backdate events.</p>
-      <button type="button" onClick={onTrigger}>
-        Trigger now
-      </button>
-
-      {status && <p>{status}</p>}
-      {error && <p className="error">{error}</p>}
     </section>
   )
 }

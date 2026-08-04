@@ -260,6 +260,82 @@ func TestRun_CreateStorageOverHTTP_PersistsToConfigFile(t *testing.T) {
 	}
 }
 
+func TestRun_CreateChannelOverHTTP_PersistsToConfigFile(t *testing.T) {
+	cfg, path := testConfig(t, nil) // disk0 already registered
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+
+	body := map[string]any{
+		"id":       7,
+		"rtsp_url": "rtsp://127.0.0.1:1/cam",
+		"storage":  "disk0",
+		"capture_policy": map[string]any{
+			"type": "event", "prerecord_ns": 5_000_000_000, "postrecord_ns": 10_000_000_000,
+		},
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	resp, err := http.Post("http://"+cfg.HTTP.String()+"/channels", "application/json", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("POST /channels: %v", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after context cancellation")
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load after restart: %v", err)
+	}
+	var found bool
+	for _, c := range reloaded.Channels {
+		if c.ID == 7 {
+			found = true
+			if c.RTSPURL != "rtsp://127.0.0.1:1/cam" || c.Storage != "disk0" ||
+				c.CapturePolicy.Type != config.CapturePolicyEvent ||
+				c.CapturePolicy.Prerecord.Duration() != 5*time.Second ||
+				c.CapturePolicy.Postrecord.Duration() != 10*time.Second {
+				t.Fatalf("channel 7 = %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("channel 7 not present after restart: %+v", reloaded.Channels)
+	}
+
+	// And a fresh New() against the reloaded config should actually build
+	// and register the channel -- the real point of persisting it at all.
+	f2, err := New(reloaded, path)
+	if err != nil {
+		t.Fatalf("New after restart: %v", err)
+	}
+	defer f2.closeUnits()
+	if len(f2.channels) != 1 || f2.channels[0].Channel != 7 {
+		t.Fatalf("channels after restart = %+v", f2.channels)
+	}
+}
+
 func waitForServer(t *testing.T, addr string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

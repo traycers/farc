@@ -8,7 +8,15 @@ import (
 	"time"
 
 	"traycers/farc/internal/ingest"
+	"traycers/farc/internal/storageengine"
 )
+
+// channelTimeout is ChannelIngest's RTSP read/write timeout for a channel
+// created/edited at runtime via this package's routes -- matches
+// internal/farcd's own rtspTimeout constant for channels loaded from the
+// config file at startup. Not part of the documented config schema, same
+// reasoning as farcd's copy: a fixed v1 default, not an undocumented knob.
+const channelTimeout = 10 * time.Second
 
 func parseChannelID(r *http.Request) (uint16, error) {
 	ch, err := strconv.ParseUint(r.PathValue("id"), 10, 16)
@@ -18,11 +26,24 @@ func parseChannelID(r *http.Request) (uint16, error) {
 	return uint16(ch), nil
 }
 
-// setCapturePolicyRequest is POST /channels/{id}/capture-policy's body.
-// Params fields are ns to match ingest.PolicyParams directly; type
-// "schedule" is accepted syntactically but rejected with 501 (see below) —
-// PolicySchedule doesn't exist as a value at all (internal/ingest's own
-// documented v1 scope), so it can't just be passed through.
+// parsePolicyType is shared by every handler that accepts a capture_policy
+// type string (set-policy, create channel, update channel) -- writes the
+// response itself on failure (400/501) so callers just check ok.
+func parsePolicyType(w http.ResponseWriter, s string) (ingest.PolicyType, bool) {
+	switch s {
+	case "continuous":
+		return ingest.PolicyContinuous, true
+	case "event":
+		return ingest.PolicyEvent, true
+	case "schedule":
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("ingest: schedule CapturePolicy is not implemented in v1"))
+		return 0, false
+	default:
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: unknown capture-policy type %q", s))
+		return 0, false
+	}
+}
+
 type setCapturePolicyRequest struct {
 	Type   string `json:"type"`
 	Params struct {
@@ -47,17 +68,8 @@ func (s *HttpApiServer) handleSetCapturePolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var policyType ingest.PolicyType
-	switch req.Type {
-	case "continuous":
-		policyType = ingest.PolicyContinuous
-	case "event":
-		policyType = ingest.PolicyEvent
-	case "schedule":
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("ingest: schedule CapturePolicy is not implemented in v1"))
-		return
-	default:
-		writeError(w, http.StatusBadRequest, fmt.Errorf("api: unknown capture-policy type %q", req.Type))
+	policyType, ok := parsePolicyType(w, req.Type)
+	if !ok {
 		return
 	}
 
@@ -71,11 +83,6 @@ func (s *HttpApiServer) handleSetCapturePolicy(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// triggerEventRequest is POST /channels/{id}/events' body — a plain
-// one-shot POST (the sketch's own reasoning: sidesteps the long-idle
-// long-poll shape docs/docs/archive/10-capture-policy.md §8 raises as an
-// open question, since v1 just fires-and-forgets). T defaults to the
-// server's own wall-clock time if omitted.
 type triggerEventRequest struct {
 	T *uint64 `json:"t,omitempty"`
 }
@@ -108,6 +115,252 @@ func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Reques
 			status = http.StatusConflict
 		}
 		writeError(w, status, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// channelInfo is GET /channels' listing shape -- a plain projection of
+// ingest.ChannelInfo with the wire's usual snake_case/string conventions
+// (PolicyType as its String() form, not the bare int ingest.PolicyType is
+// internally; PolicyParams flattened rather than nested, matching
+// setCapturePolicyRequest's own params shape).
+type channelInfo struct {
+	Channel      uint16 `json:"channel"`
+	RTSPURL      string `json:"rtsp_url"`
+	Storage      string `json:"storage"`
+	PolicyType   string `json:"capture_policy_type"`
+	PrerecordNS  uint64 `json:"prerecord_ns"`
+	PostrecordNS uint64 `json:"postrecord_ns"`
+}
+
+func (s *HttpApiServer) handleListChannels(w http.ResponseWriter, r *http.Request) {
+	if s.ing == nil {
+		writeJSON(w, http.StatusOK, []channelInfo{})
+		return
+	}
+	list := s.ing.List()
+	out := make([]channelInfo, len(list))
+	for i, c := range list {
+		out[i] = channelInfo{
+			Channel: c.Channel, RTSPURL: c.RTSPURL, Storage: c.StorageID,
+			PolicyType: c.PolicyType.String(), PrerecordNS: c.PolicyParams.Prerecord, PostrecordNS: c.PolicyParams.Postrecord,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// channelCapturePolicyRequest is create/update channel's nested
+// capture_policy object. MaxDeferredStartNS sizes the frame queue for a
+// continuous channel (ingest.ChannelConfig.QueueDepth); PrerecordNS does
+// the same job for an event channel -- see internal/farcd.buildChannelConfig,
+// which queueDepthFor below mirrors exactly (duplicated rather than
+// imported: internal/api deliberately doesn't depend on internal/farcd or
+// internal/config, matching this file's other handlers' own wire structs).
+type channelCapturePolicyRequest struct {
+	Type               string `json:"type"`
+	MaxDeferredStartNS uint64 `json:"max_deferred_start_ns,omitempty"`
+	PrerecordNS        uint64 `json:"prerecord_ns,omitempty"`
+	PostrecordNS       uint64 `json:"postrecord_ns,omitempty"`
+}
+
+func queueDepthFor(policyType ingest.PolicyType, req channelCapturePolicyRequest) uint64 {
+	if policyType == ingest.PolicyEvent {
+		return req.PrerecordNS
+	}
+	return req.MaxDeferredStartNS
+}
+
+// ChannelSpec is the config-file-relevant subset of a channel's fields,
+// passed to the OnChannel* hooks below -- internal/farcd persists it into
+// its own config file (mirroring SetOnStorageCreated's role for storages,
+// PLAN.md's Gap 3). PolicyType is the config file's own string ("continuous"/
+// "event"), not ingest.PolicyType, so farcd never needs to round-trip
+// through the enum to write it back out.
+type ChannelSpec struct {
+	ID                 uint16
+	RTSPURL            string
+	Storage            string
+	PolicyType         string
+	MaxDeferredStartNS uint64
+	PrerecordNS        uint64
+	PostrecordNS       uint64
+}
+
+func specFromRequest(id uint16, rtspURL, storage string, cp channelCapturePolicyRequest) ChannelSpec {
+	return ChannelSpec{
+		ID: id, RTSPURL: rtspURL, Storage: storage, PolicyType: cp.Type,
+		MaxDeferredStartNS: cp.MaxDeferredStartNS, PrerecordNS: cp.PrerecordNS, PostrecordNS: cp.PostrecordNS,
+	}
+}
+
+type createChannelRequest struct {
+	ID            uint16                      `json:"id"`
+	RTSPURL       string                      `json:"rtsp_url"`
+	Storage       string                      `json:"storage"`
+	CapturePolicy channelCapturePolicyRequest `json:"capture_policy"`
+}
+
+func (s *HttpApiServer) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
+	if s.ing == nil {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		return
+	}
+	var req createChannelRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.ID == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: channel id 0 is reserved (ADR-014), channel ids start at 1"))
+		return
+	}
+	if req.RTSPURL == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: rtsp_url is required"))
+		return
+	}
+	unit, ok := s.reg.Get(req.Storage)
+	if !ok {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: unknown storage %q", req.Storage))
+		return
+	}
+	policyType, ok := parsePolicyType(w, req.CapturePolicy.Type)
+	if !ok {
+		return
+	}
+
+	cfg := ingest.ChannelConfig{
+		Channel:    req.ID,
+		RTSPURL:    req.RTSPURL,
+		StorageID:  req.Storage,
+		Recorder:   unit,
+		QueueDepth: queueDepthFor(policyType, req.CapturePolicy),
+		PolicyType: policyType,
+		PolicyParams: ingest.PolicyParams{
+			Prerecord: req.CapturePolicy.PrerecordNS, Postrecord: req.CapturePolicy.PostrecordNS,
+		},
+		ReadTimeout:        channelTimeout,
+		WriteTimeout:       channelTimeout,
+		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
+	}
+	if err := s.ing.AddChannel(cfg); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+
+	spec := specFromRequest(req.ID, req.RTSPURL, req.Storage, req.CapturePolicy)
+	if err := s.onChannelCreated(spec); err != nil {
+		_, _ = s.ing.RemoveChannel(req.ID)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist channel %d: %w", req.ID, err))
+		return
+	}
+	writeJSON(w, http.StatusCreated, channelInfo{
+		Channel: req.ID, RTSPURL: req.RTSPURL, Storage: req.Storage,
+		PolicyType: policyType.String(), PrerecordNS: req.CapturePolicy.PrerecordNS, PostrecordNS: req.CapturePolicy.PostrecordNS,
+	})
+}
+
+type updateChannelRequest struct {
+	RTSPURL       string                      `json:"rtsp_url"`
+	Storage       string                      `json:"storage"`
+	CapturePolicy channelCapturePolicyRequest `json:"capture_policy"`
+}
+
+// handleUpdateChannel replaces an already-running channel's rtsp_url/
+// storage/capture-policy wholesale. There's no cheap in-place path for
+// rtsp_url/storage (ChannelIngest.Run takes rtspURL as a fixed parameter,
+// and switching storages means a different Recorder) -- this is genuinely
+// remove-then-add under the hood, with the removed config restored if any
+// later step fails, so a request that ends in an error never leaves the
+// channel stopped.
+func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
+	if s.ing == nil {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		return
+	}
+	channel, err := parseChannelID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req updateChannelRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.RTSPURL == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: rtsp_url is required"))
+		return
+	}
+	unit, ok := s.reg.Get(req.Storage)
+	if !ok {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: unknown storage %q", req.Storage))
+		return
+	}
+	policyType, ok := parsePolicyType(w, req.CapturePolicy.Type)
+	if !ok {
+		return
+	}
+
+	old, err := s.ing.RemoveChannel(channel)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	cfg := ingest.ChannelConfig{
+		Channel:    channel,
+		RTSPURL:    req.RTSPURL,
+		StorageID:  req.Storage,
+		Recorder:   unit,
+		QueueDepth: queueDepthFor(policyType, req.CapturePolicy),
+		PolicyType: policyType,
+		PolicyParams: ingest.PolicyParams{
+			Prerecord: req.CapturePolicy.PrerecordNS, Postrecord: req.CapturePolicy.PostrecordNS,
+		},
+		ReadTimeout:        channelTimeout,
+		WriteTimeout:       channelTimeout,
+		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
+	}
+	if err := s.ing.AddChannel(cfg); err != nil {
+		// Only plausible if another request raced to (re-)create the same
+		// id between our Remove and Add above -- restore what we had.
+		_ = s.ing.AddChannel(old)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	spec := specFromRequest(channel, req.RTSPURL, req.Storage, req.CapturePolicy)
+	if err := s.onChannelUpdated(spec); err != nil {
+		_, _ = s.ing.RemoveChannel(channel)
+		_ = s.ing.AddChannel(old)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist channel %d: %w", channel, err))
+		return
+	}
+	writeJSON(w, http.StatusOK, channelInfo{
+		Channel: channel, RTSPURL: req.RTSPURL, Storage: req.Storage,
+		PolicyType: policyType.String(), PrerecordNS: req.CapturePolicy.PrerecordNS, PostrecordNS: req.CapturePolicy.PostrecordNS,
+	})
+}
+
+func (s *HttpApiServer) handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
+	if s.ing == nil {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		return
+	}
+	channel, err := parseChannelID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	old, err := s.ing.RemoveChannel(channel)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if err := s.onChannelRemoved(channel); err != nil {
+		_ = s.ing.AddChannel(old)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist removal of channel %d: %w", channel, err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

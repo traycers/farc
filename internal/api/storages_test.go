@@ -24,6 +24,27 @@ func postJSON(t *testing.T, srv *httptest.Server, path string, body any) *http.R
 	return resp
 }
 
+func putJSON(t *testing.T, srv *httptest.Server, path string, body any) *http.Response {
+	t.Helper()
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+path, bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", path, err)
+	}
+	return resp
+}
+
+func decodeBody(resp *http.Response, v any) error {
+	return json.NewDecoder(resp.Body).Decode(v)
+}
+
 func TestHandleCreateStorage_InitsOpensAndRegisters(t *testing.T) {
 	reg := NewStorageRegistry()
 	s := NewHttpApiServer(reg, nil, nil)

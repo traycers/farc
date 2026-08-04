@@ -117,6 +117,9 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	// that combined routing still supports for tests/simple deployments).
 	apiServer := api.NewHttpApiServer(f.registry, f.ing, nil)
 	apiServer.SetOnStorageCreated(f.persistNewStorage)
+	apiServer.SetOnChannelCreated(f.persistNewChannel)
+	apiServer.SetOnChannelUpdated(f.persistUpdatedChannel)
+	apiServer.SetOnChannelRemoved(f.persistRemovedChannel)
 
 	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler()}
 	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: push}
@@ -183,6 +186,7 @@ func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, err
 	return ingest.ChannelConfig{
 		Channel:    cc.ID,
 		RTSPURL:    cc.RTSPURL,
+		StorageID:  cc.Storage,
 		Recorder:   unit,
 		QueueDepth: queueDepth,
 		PolicyType: policyType,
@@ -220,6 +224,101 @@ func (f *Farcd) persistNewStorage(id, path, catalogPath string) error {
 	if err := config.Save(f.configPath, f.cfg); err != nil {
 		f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
 		return fmt.Errorf("farcd: persist storage %q to %s: %w", id, f.configPath, err)
+	}
+	return nil
+}
+
+// specToConfigChannel translates api.ChannelSpec (the HTTP wire's ns-based
+// shape) into config.Channel/CapturePolicy (the config file's Go-duration-
+// string shape) -- the inverse of buildChannelConfig's job.
+func specToConfigChannel(spec api.ChannelSpec) config.Channel {
+	return config.Channel{
+		ID:      spec.ID,
+		RTSPURL: spec.RTSPURL,
+		Storage: spec.Storage,
+		CapturePolicy: config.CapturePolicy{
+			Type:             spec.PolicyType,
+			MaxDeferredStart: config.Duration(spec.MaxDeferredStartNS),
+			Prerecord:        config.Duration(spec.PrerecordNS),
+			Postrecord:       config.Duration(spec.PostrecordNS),
+		},
+	}
+}
+
+// persistNewChannel appends a channel created via POST /channels to farcd's
+// own config file, wired into HttpApiServer via SetOnChannelCreated --
+// otherwise it would only ever exist in IngestManager's in-memory map and
+// be gone on the next restart, same gap POST /storages had before
+// persistNewStorage (PLAN.md's Gap 3, now also closed for channels). If
+// Save fails, the in-memory append is rolled back so cfg still matches
+// what's on disk.
+func (f *Farcd) persistNewChannel(spec api.ChannelSpec) error {
+	f.cfgMu.Lock()
+	defer f.cfgMu.Unlock()
+
+	for _, c := range f.cfg.Channels {
+		if c.ID == spec.ID {
+			return nil
+		}
+	}
+	f.cfg.Channels = append(f.cfg.Channels, specToConfigChannel(spec))
+	if err := config.Save(f.configPath, f.cfg); err != nil {
+		f.cfg.Channels = f.cfg.Channels[:len(f.cfg.Channels)-1]
+		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
+	}
+	return nil
+}
+
+// persistUpdatedChannel replaces an existing channel's config entry
+// (PUT /channels/{id}), rolling back to the previous entry if Save fails.
+func (f *Farcd) persistUpdatedChannel(spec api.ChannelSpec) error {
+	f.cfgMu.Lock()
+	defer f.cfgMu.Unlock()
+
+	idx := -1
+	for i, c := range f.cfg.Channels {
+		if c.ID == spec.ID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("farcd: persist channel %d: not present in config", spec.ID)
+	}
+	old := f.cfg.Channels[idx]
+	f.cfg.Channels[idx] = specToConfigChannel(spec)
+	if err := config.Save(f.configPath, f.cfg); err != nil {
+		f.cfg.Channels[idx] = old
+		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
+	}
+	return nil
+}
+
+// persistRemovedChannel removes a channel's config entry (DELETE
+// /channels/{id}), restoring it at the same index if Save fails.
+func (f *Farcd) persistRemovedChannel(id uint16) error {
+	f.cfgMu.Lock()
+	defer f.cfgMu.Unlock()
+
+	idx := -1
+	for i, c := range f.cfg.Channels {
+		if c.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil
+	}
+	removed := f.cfg.Channels[idx]
+	f.cfg.Channels = append(f.cfg.Channels[:idx], f.cfg.Channels[idx+1:]...)
+	if err := config.Save(f.configPath, f.cfg); err != nil {
+		restored := make([]config.Channel, 0, len(f.cfg.Channels)+1)
+		restored = append(restored, f.cfg.Channels[:idx]...)
+		restored = append(restored, removed)
+		restored = append(restored, f.cfg.Channels[idx:]...)
+		f.cfg.Channels = restored
+		return fmt.Errorf("farcd: persist removal of channel %d from %s: %w", id, f.configPath, err)
 	}
 	return nil
 }

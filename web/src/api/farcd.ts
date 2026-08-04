@@ -117,3 +117,61 @@ export async function setCapturePolicy(
 export async function triggerEvent(channel: number): Promise<void> {
   await ok(await fetch(`${BASE}/channels/${channel}/events`, { method: 'POST' }))
 }
+
+export type CapturePolicyInput = {
+  type: 'continuous' | 'event'
+  // Durations (seconds-scale), not absolute epoch timestamps -- plain
+  // numbers are safe here, same reasoning as setCapturePolicy above.
+  max_deferred_start_ns?: number
+  prerecord_ns?: number
+  postrecord_ns?: number
+}
+
+export type ChannelInfo = {
+  channel: number
+  rtsp_url: string
+  storage: string
+  capture_policy_type: 'continuous' | 'event'
+  prerecord_ns: number
+  postrecord_ns: number
+}
+
+export async function listChannels(): Promise<ChannelInfo[]> {
+  return (await ok(await fetch(`${BASE}/channels`))).json()
+}
+
+export async function createChannel(input: {
+  id: number
+  rtsp_url: string
+  storage: string
+  capture_policy: CapturePolicyInput
+}): Promise<ChannelInfo> {
+  return (
+    await ok(
+      await fetch(`${BASE}/channels`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    )
+  ).json()
+}
+
+export async function updateChannel(
+  id: number,
+  input: { rtsp_url: string; storage: string; capture_policy: CapturePolicyInput },
+): Promise<ChannelInfo> {
+  return (
+    await ok(
+      await fetch(`${BASE}/channels/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    )
+  ).json()
+}
+
+export async function removeChannel(id: number): Promise<void> {
+  await ok(await fetch(`${BASE}/channels/${id}`, { method: 'DELETE' }))
+}
