@@ -1,0 +1,34 @@
+services:
+  farc:
+    build:
+      context: .
+      dockerfile: Dockerfile.farc
+    volumes:
+      - ./deploy/farc.config.json:/etc/farc/farc.config.json:ro
+      - farc_data:/data
+    restart: unless-stopped
+
+  hls_server:
+    build:
+      context: .
+      dockerfile: Dockerfile.hls_server
+    volumes:
+      - ./deploy/hls_server.config.json:/etc/hls_server/hls_server.config.json:ro
+      - hls_cache:/var/cache/hls_server
+    depends_on:
+      - farc
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+    ports:
+      - "80:80"
+    depends_on:
+      - farc
+      - hls_server
+    restart: unless-stopped
+
+volumes:
+  farc_data:
+  hls_cache:

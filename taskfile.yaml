@@ -94,11 +94,26 @@ tasks:
     generates:
       - "./{{.z_hls_file_name}}"
 
+  build/web:
+    desc: "собирает веб-клиент (web/) через Vite"
+    dir: "{{.USER_WORKING_DIR}}/web"
+    cmds:
+      - npm ci
+      - npm run build
+    sources:
+      - ./package.json
+      - ./package-lock.json
+      - ./src/**/*.ts
+      - ./src/**/*.tsx
+    generates:
+      - ./dist/**
+
   build:
     desc: "собирает все проекты"
     cmds:
       - task: build/app
       - task: build/hls_server
+      - task: build/web
 
   run:
     desc: "запускает проект {{.z_name}}"
