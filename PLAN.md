@@ -2,14 +2,14 @@
 
 ## Progress
 
-- [ ] Phase 1 — `internal/hlsclient` (typed HTTP+WS client for farcd's read API)
-- [ ] Phase 2 — `internal/tocindex` (ChannelIndex + EventSubscriber, ADR-018)
-- [ ] Phase 3 — `internal/playlist` (PlaylistBuilder, ADR-019 segment grid)
-- [ ] Phase 4 — `internal/segment` (SegmentBuilder, CMAF mux via mediacommon/v2)
-- [ ] Phase 5 — `internal/segmentcache` (disk cache, LRU eviction)
-- [ ] Phase 6 — `internal/hlsapi` (player-facing HTTP routes)
-- [ ] Phase 7 — `internal/hlsconfig` + `internal/hlsd` + `cmd/hls_server` (wiring, CLI)
-- [ ] Phase 8 — `taskfile.yaml` build task for the new binary
+- [x] Phase 1 — `internal/hlsclient` (typed HTTP+WS client for farcd's read API)
+- [x] Phase 2 — `internal/tocindex` (ChannelIndex + EventSubscriber, ADR-018)
+- [x] Phase 3 — `internal/playlist` (PlaylistBuilder, ADR-019 segment grid)
+- [x] Phase 4 — `internal/segment` (SegmentBuilder, CMAF mux via mediacommon/v2)
+- [x] Phase 5 — `internal/segmentcache` (disk cache, LRU eviction)
+- [x] Phase 6 — `internal/hlsapi` (player-facing HTTP routes)
+- [x] Phase 7 — `internal/hlsconfig` + `internal/hlsd` + `cmd/hls_server` (wiring, CLI)
+- [x] Phase 8 — `taskfile.yaml` build task for the new binary
 
 ## Context
 

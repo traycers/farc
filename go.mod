@@ -13,6 +13,7 @@ require (
 )
 
 require (
+	github.com/abema/go-mp4 v1.7.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pion/logging v0.2.4 // indirect

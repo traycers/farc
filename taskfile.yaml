@@ -11,6 +11,8 @@ env:
 vars:
   z_name: farc
   z_file_name: "{{.z_name}}{{exeExt}}"
+  z_hls_name: hls_server
+  z_hls_file_name: "{{.z_hls_name}}{{exeExt}}"
 
 
 
@@ -77,10 +79,26 @@ tasks:
     generates:
       - "./{{.z_file_name}}"
 
+  build/hls_server:
+    desc: "собирает проект {{.z_hls_name}}"
+    cmds:
+      - >
+        go build
+        -o {{.z_hls_file_name}}
+        ./cmd/{{.z_hls_name}}
+    sources:
+      - ./cmd/{{.z_hls_name}}/**/*.go
+      - ./internal/**/*.go
+      - ./pkg/**/*.go
+      - ./cmd/**/*.go
+    generates:
+      - "./{{.z_hls_file_name}}"
+
   build:
     desc: "собирает все проекты"
     cmds:
       - task: build/app
+      - task: build/hls_server
 
   run:
     desc: "запускает проект {{.z_name}}"
