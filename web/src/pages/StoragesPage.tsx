@@ -2,6 +2,11 @@ import { useEffect, useState } from 'react'
 import { createStorage, listStorages, patchStorage, type StorageInfo } from '../api/farcd'
 
 const WRITE_MODES = ['cyclic', 'fill_until_full'] as const
+const GiB = 1024 ** 3
+
+function formatGB(bytes: number): string {
+  return (bytes / 1e9).toFixed(2)
+}
 
 export default function StoragesPage() {
   const [storages, setStorages] = useState<StorageInfo[]>([])
@@ -10,8 +15,15 @@ export default function StoragesPage() {
 
   const [id, setId] = useState('')
   const [path, setPath] = useState('')
-  const [fblockSize, setFblockSize] = useState(1024 * 1024 * 1024)
-  const [n, setN] = useState(16)
+  // farcd's POST /storages has no separate "total size" field -- it creates
+  // the file itself, sized to exactly FblockSize*N (handleCreateStorage).
+  // desiredSizeGB is purely a UI convenience: N is derived from it so the
+  // operator thinks in "how big is this disk" rather than fblock count.
+  const [fblockSizeMB, setFblockSizeMB] = useState(1024)
+  const [desiredSizeGB, setDesiredSizeGB] = useState(100)
+  const fblockSize = fblockSizeMB * 1024 * 1024
+  const n = Math.max(1, Math.floor((desiredSizeGB * GiB) / fblockSize))
+  const actualSizeBytes = n * fblockSize
   const [maxChannels, setMaxChannels] = useState(8)
   const [fchunkSize, setFchunkSize] = useState(4 * 1024 * 1024)
   const [writeMode, setWriteMode] = useState<(typeof WRITE_MODES)[number]>('cyclic')
@@ -76,8 +88,8 @@ export default function StoragesPage() {
           <tr>
             <th>id</th>
             <th>path</th>
-            <th>fblock size</th>
-            <th>N</th>
+            <th>size</th>
+            <th>fblock size × N</th>
             <th>max channels</th>
             <th>set retention (days)</th>
             <th>set write mode</th>
@@ -88,8 +100,10 @@ export default function StoragesPage() {
             <tr key={s.id}>
               <td>{s.id}</td>
               <td>{s.path}</td>
-              <td>{s.geometry.FblockSize}</td>
-              <td>{s.geometry.N}</td>
+              <td>{formatGB(s.geometry.FblockSize * s.geometry.N)} GB</td>
+              <td>
+                {s.geometry.FblockSize} × {s.geometry.N}
+              </td>
               <td>{s.geometry.MaxChannels}</td>
               <td>
                 <RetentionEditor onSave={(days) => onPatch(s.id, { retention_days: days })} />
@@ -113,9 +127,10 @@ export default function StoragesPage() {
 
       <h2>Create storage</h2>
       <p>
-        farcd persists this into its own config file on creation, so it survives a restart. You only need to
-        provide a path to an already-sized partition/file — farcd initializes it (fblock 0 only, per ADR-006's
-        lazy init).
+        For a plain file path, farcd creates and sizes the file itself (to <code>desired size</code> below, rounded
+        down to a whole number of fblocks) — nothing to pre-create. For a raw block device/partition path, the
+        partition must already be at least that size. Either way, farcd persists the new entry into its own config
+        file on creation, so it survives a restart.
       </p>
       <form onSubmit={onCreate}>
         <label>
@@ -127,13 +142,16 @@ export default function StoragesPage() {
           <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/data/disk0.img" required />
         </label>
         <label>
-          fblock size (bytes)
-          <input type="number" value={fblockSize} onChange={(e) => setFblockSize(Number(e.target.value))} />
+          desired size (GB)
+          <input type="number" value={desiredSizeGB} onChange={(e) => setDesiredSizeGB(Number(e.target.value))} />
         </label>
         <label>
-          N (fblock count)
-          <input type="number" value={n} onChange={(e) => setN(Number(e.target.value))} />
+          fblock size (MB)
+          <input type="number" value={fblockSizeMB} onChange={(e) => setFblockSizeMB(Number(e.target.value))} />
         </label>
+        <span>
+          → N = {n} fblocks, actual size = {formatGB(actualSizeBytes)} GB
+        </span>
         <label>
           max channels
           <input type="number" value={maxChannels} onChange={(e) => setMaxChannels(Number(e.target.value))} />
