@@ -90,6 +90,13 @@ func (u *Unit) Health() *HealthMonitor { return u.health }
 // (ResolveUUID/Candidates) or operator mutations (SetWriteMode etc.).
 func (u *Unit) Index() *index.Manager { return u.mgr }
 
+// EngineLevel and EngineQueueDepth expose StorageEngine's write-queue fill
+// state (ADR-011) for MetricsEndpoint (farc_write_queue_depth/status,
+// docs/docs/archive/02-storage.md §8) — the only Phase 10 consumer of
+// engine-internal state, so no accessor for this existed before.
+func (u *Unit) EngineLevel() storageengine.Level { return u.engine.Level() }
+func (u *Unit) EngineQueueDepth() int            { return u.engine.QueueDepth() }
+
 func (u *Unit) currentParams() fblock.Params {
 	u.paramsMu.RLock()
 	defer u.paramsMu.RUnlock()

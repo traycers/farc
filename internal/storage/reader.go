@@ -92,6 +92,27 @@ func (u *Unit) ReadTOC(uuid [16]byte) (*toc.Columns, error) {
 	return toc.Decode(buf)
 }
 
+// ContentSize returns the total size of uuid's Content section — for a
+// whole-fcontainer export (no ranges given), the caller needs this to know
+// how much to read, since (unlike a single ranged read) there's no
+// caller-supplied size to use directly.
+func (u *Unit) ContentSize(uuid [16]byte) (int64, error) {
+	idx, ok := u.ResolveUUID(uuid)
+	if !ok {
+		return 0, fmt.Errorf("storage: reader: fcontainer %x not found (not Ready)", uuid)
+	}
+	base, err := u.contentBaseOffset(idx)
+	if err != nil {
+		return 0, fmt.Errorf("storage: reader: fblock %d content offset: %w", idx, err)
+	}
+	epilog, err := u.readEpilogAt(idx)
+	if err != nil {
+		return 0, fmt.Errorf("storage: reader: read epilog for fblock %d: %w", idx, err)
+	}
+	tocStart := int64(fblockOffset(u.geo, idx)) + int64(u.geo.FblockSize) - int64(fblock.TOCOffsetFromEnd(epilog.TOCSize))
+	return tocStart - base, nil
+}
+
 // ReadRange reads size bytes at offset within uuid's Content section
 // (docs/docs/archive/04-storage-operations.md §8.4, single-range case).
 func (u *Unit) ReadRange(uuid [16]byte, offset, size uint64) ([]byte, error) {

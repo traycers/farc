@@ -162,6 +162,14 @@ func (e *Engine) Level() Level {
 	return e.levelLocked()
 }
 
+// QueueDepth reports the number of write jobs not yet fully written
+// (farc_write_queue_depth, docs/docs/archive/02-storage.md §8).
+func (e *Engine) QueueDepth() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.writeQueue)
+}
+
 func (e *Engine) levelLocked() Level {
 	n := len(e.writeQueue)
 	switch {

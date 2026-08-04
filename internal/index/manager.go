@@ -213,3 +213,23 @@ func (m *Manager) SetProtected(idx uint32, protected bool) error {
 	m.catalog.SetProtected(idx, protected)
 	return nil
 }
+
+// RetentionDays returns the current retention period, for callers (e.g.
+// MetricsEndpoint's farc_fblocks_writable_total/retained_total) that need to
+// reproduce SelectNextIndex's own past-retention check outside this package.
+func (m *Manager) RetentionDays() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.retentionDays
+}
+
+// ChannelPos resolves a registered channel number to its compact registry
+// position (ADR-014), for callers that need to test a specific channel's
+// channel_bitmap bit on a catalog snapshot (e.g. EventPushServer filtering
+// fblock.write.completed events to subscribers of that channel).
+func (m *Manager) ChannelPos(channel uint16) (uint16, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	pos, ok := m.channelToPos[channel]
+	return pos, ok
+}

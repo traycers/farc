@@ -96,6 +96,20 @@ func (m *IngestManager) SetPolicy(channel uint16, policyType PolicyType, params 
 	return nil
 }
 
+// TriggerEvent forwards a one-shot event trigger (§5.2's `event_time`) to
+// channel's CapturePolicy — the `POST /channels/{id}/events` route's entry
+// point. Only meaningful under the event policy; CapturePolicy.Trigger
+// itself is the one that rejects it otherwise (ErrWrongPolicyType).
+func (m *IngestManager) TriggerEvent(channel uint16, now, eventTime uint64) error {
+	m.mu.Lock()
+	e, ok := m.channels[channel]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("ingest: unknown channel %d", channel)
+	}
+	return e.ingest.policy.Trigger(now, eventTime)
+}
+
 // Stop cancels every channel's ingest loop and waits for all of them to
 // finish.
 func (m *IngestManager) Stop() {
