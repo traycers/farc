@@ -116,6 +116,9 @@ func (ci *ChannelIngest) setupH264(c rtspSource, medi *description.Media, f *for
 			})
 		}
 
+		if ci.skipFrames() {
+			return
+		}
 		frame := fcontainer.Frame{Data: muxAnnexB(au), Time: ci.nowNS(), Kind: kind}
 		if err := ci.policy.HandleFrame(streamNum, fcontainer.KindVideo, frame); err != nil {
 			ci.logf("ingest: channel %d: %v", ci.channel, err)
@@ -164,6 +167,9 @@ func (ci *ChannelIngest) setupH265(c rtspSource, medi *description.Media, f *for
 			})
 		}
 
+		if ci.skipFrames() {
+			return
+		}
 		frame := fcontainer.Frame{Data: muxAnnexB(au), Time: ci.nowNS(), Kind: kind}
 		if err := ci.policy.HandleFrame(streamNum, fcontainer.KindVideo, frame); err != nil {
 			ci.logf("ingest: channel %d: %v", ci.channel, err)
@@ -181,6 +187,9 @@ func (ci *ChannelIngest) setupG711(c rtspSource, medi *description.Media, f *for
 	})
 
 	c.OnPacketRTP(medi, f, func(pkt *rtp.Packet) {
+		if ci.skipFrames() {
+			return
+		}
 		frame := fcontainer.Frame{Data: append([]byte(nil), pkt.Payload...), Time: ci.nowNS()}
 		if err := ci.policy.HandleFrame(streamNum, fcontainer.KindAudio, frame); err != nil {
 			ci.logf("ingest: channel %d: %v", ci.channel, err)
@@ -207,6 +216,9 @@ func (ci *ChannelIngest) setupAAC(c rtspSource, medi *description.Media, f *form
 	c.OnPacketRTP(medi, f, func(pkt *rtp.Packet) {
 		aus, err := dec.Decode(pkt)
 		if err != nil {
+			return
+		}
+		if ci.skipFrames() {
 			return
 		}
 		for _, au := range aus {

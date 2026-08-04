@@ -4,6 +4,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var configPath string
+
 var cmdRoot = &cobra.Command{
 	Use:   "arch",
 	Short: "arch",
@@ -12,7 +14,7 @@ var cmdRoot = &cobra.Command{
 }
 
 func init() {
-	// cmdRoot.AddCommand(cmd_readme.CmdReadme)
+	cmdRoot.Flags().StringVarP(&configPath, "config", "c", "farc.config.json", "path to farcd's JSON config file (docs/docs/archive/04-storage-operations.md §2.1)")
 }
 
 func Execute() {

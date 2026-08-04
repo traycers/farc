@@ -30,6 +30,19 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 // httptest.NewServer.
 func (s *HttpApiServer) Handler() http.Handler { return s.mux }
 
+// MetricsHandler returns a handler serving just GET /metrics, for mounting
+// on MetricsEndpoint's own address -- docs/docs/archive/
+// 04-storage-operations.md §2.1's config keeps http/ws/metrics as three
+// separate server addresses ("это разные серверы"), which internal/farcd
+// honors by running three separate http.Server instances rather than one
+// shared mux for everything. /metrics still also being reachable on the
+// main API's own mux (see routes()) is harmless, not a conflict.
+func (s *HttpApiServer) MetricsHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	return mux
+}
+
 func (s *HttpApiServer) routes() {
 	s.mux.HandleFunc("POST /storages", s.handleCreateStorage)
 	s.mux.HandleFunc("GET /storages", s.handleListStorages)

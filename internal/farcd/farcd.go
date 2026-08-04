@@ -1,0 +1,237 @@
+// Package farcd is Phase 11's process wiring: load config -> open every
+// configured Storage -> build IngestManager (one ChannelIngest per
+// configured channel) -> wire the StorageUnit -> CapturePolicy backpressure
+// signal -> start HttpApiServer/EventPushServer/MetricsEndpoint as three
+// separate listeners (docs/docs/archive/04-storage-operations.md §2.1: "это
+// разные серверы") -> graceful shutdown on context cancellation.
+//
+// farcd never runs Initializer. internal/config's own doc comment explains
+// why: the config file's storages list carries only id/path/catalog_path,
+// no geometry or write_mode/retention.days -- those are set once at init
+// time (Phase 10's `POST /storages`, which registers into a *running*
+// process's StorageRegistry) and thereafter live in the Storage's own
+// on-disk header (§2.2). A Storage only belongs in this file *after* it has
+// already been initialized once; farcd's job at startup is exclusively to
+// Open (docs/docs/archive/04-storage-operations.md §4-5's Startup
+// algorithm, already implemented as storage.Open) every Storage the config
+// names.
+//
+// No JobRunner exists here (or anywhere in this codebase) -- v1 scope
+// deliberately excludes GeometryManager/Importer (and therefore any
+// orchestrator over them), matching the same decision already reflected in
+// Phase 8's storage.Init/Open and Phase 10's HttpApiServer.
+package farcd
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"traycers/farc/internal/api"
+	"traycers/farc/internal/config"
+	"traycers/farc/internal/ingest"
+	"traycers/farc/internal/ioengine"
+	"traycers/farc/internal/storage"
+	"traycers/farc/internal/storageengine"
+)
+
+// rtspTimeout is ChannelIngest's RTSP read/write timeout. Not part of the
+// documented config schema (04-storage-operations.md §2.1's channel entry
+// has no timeout fields) -- a fixed v1 default rather than an undocumented
+// config addition.
+const rtspTimeout = 10 * time.Second
+
+// shutdownTimeout bounds how long graceful HTTP shutdown waits for
+// in-flight requests before Run returns anyway.
+const shutdownTimeout = 10 * time.Second
+
+// Farcd is one running farcd process: every open Storage, the
+// IngestManager driving all configured channels, and the three servers
+// (docs/docs/archive/11-service-composition.md §5.1.2-5.1.4).
+type Farcd struct {
+	units    []*storage.Unit
+	registry *api.StorageRegistry
+	ing      *ingest.IngestManager
+	channels []ingest.ChannelConfig
+
+	httpSrv    *http.Server
+	wsSrv      *http.Server
+	metricsSrv *http.Server
+
+	logf func(format string, args ...any)
+}
+
+// New opens every Storage cfg names and builds the channel configuration
+// for IngestManager, but starts nothing yet -- call Run to actually start
+// serving. On error, every Storage opened so far is closed before
+// returning, so a caller never has to clean up a partial Farcd itself.
+func New(cfg *config.Config) (*Farcd, error) {
+	f := &Farcd{
+		registry: api.NewStorageRegistry(),
+		ing:      ingest.NewIngestManager(),
+		logf:     func(string, ...any) {},
+	}
+
+	for _, sc := range cfg.Storages {
+		unit, err := openStorage(sc)
+		if err != nil {
+			f.closeUnits()
+			return nil, fmt.Errorf("farcd: open storage %q: %w", sc.ID, err)
+		}
+		f.units = append(f.units, unit)
+		if err := f.registry.Register(sc.ID, unit, sc.Path); err != nil {
+			f.closeUnits()
+			return nil, fmt.Errorf("farcd: register storage %q: %w", sc.ID, err)
+		}
+	}
+
+	for _, cc := range cfg.Channels {
+		chCfg, err := f.buildChannelConfig(cc)
+		if err != nil {
+			f.closeUnits()
+			return nil, err
+		}
+		f.channels = append(f.channels, chCfg)
+	}
+
+	push := api.NewEventPushServer(f.registry)
+	// push is deliberately not passed into NewHttpApiServer here: WS gets
+	// its own listener on cfg.WS below, matching §2.1's "разные серверы"
+	// (see api.go's own package doc for the alternative, single-port mode
+	// that combined routing still supports for tests/simple deployments).
+	apiServer := api.NewHttpApiServer(f.registry, f.ing, nil)
+
+	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler()}
+	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: push}
+	f.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: apiServer.MetricsHandler()}
+
+	return f, nil
+}
+
+// SetLogger sets a callback for non-fatal diagnostics, forwarded to
+// IngestManager and used for this package's own startup/shutdown logging.
+func (f *Farcd) SetLogger(logf func(format string, args ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	f.logf = logf
+	f.ing.SetLogger(logf)
+}
+
+func openStorage(sc config.Storage) (*storage.Unit, error) {
+	backend, err := ioengine.Open(sc.Path, ioengine.Options{})
+	if err != nil {
+		return nil, err
+	}
+	unit, err := storage.Open(storage.OpenConfig{
+		Backend:     backend,
+		CatalogPath: sc.CatalogPath,
+		Tuning:      storage.DefaultEngineTuning(),
+	})
+	if err != nil {
+		_ = backend.Close()
+		return nil, err
+	}
+	return unit, nil
+}
+
+// buildChannelConfig resolves cc.Storage to its already-open Unit and
+// translates the config-file capture_policy shape into internal/ingest's
+// runtime one. cc.Storage is guaranteed to name a Storage in cfg.Storages
+// (internal/config.Load already validated this at parse time), and
+// cc.Storage must therefore already be registered by the time this runs
+// (New opens all storages before building any channel config).
+func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, error) {
+	unit, ok := f.registry.Get(cc.Storage)
+	if !ok {
+		return ingest.ChannelConfig{}, fmt.Errorf("farcd: channel %d: storage %q not open", cc.ID, cc.Storage)
+	}
+
+	var policyType ingest.PolicyType
+	var queueDepth uint64
+	switch cc.CapturePolicy.Type {
+	case config.CapturePolicyContinuous:
+		policyType = ingest.PolicyContinuous
+		queueDepth = uint64(cc.CapturePolicy.MaxDeferredStart.Duration().Nanoseconds())
+	case config.CapturePolicyEvent:
+		policyType = ingest.PolicyEvent
+		queueDepth = uint64(cc.CapturePolicy.Prerecord.Duration().Nanoseconds())
+	default:
+		// internal/config.Load already rejects anything else (including
+		// "schedule") at parse time -- reaching here would be this
+		// package's own bug, not a bad config file.
+		return ingest.ChannelConfig{}, fmt.Errorf("farcd: channel %d: unhandled capture_policy.type %q", cc.ID, cc.CapturePolicy.Type)
+	}
+
+	return ingest.ChannelConfig{
+		Channel:    cc.ID,
+		RTSPURL:    cc.RTSPURL,
+		Recorder:   unit,
+		QueueDepth: queueDepth,
+		PolicyType: policyType,
+		PolicyParams: ingest.PolicyParams{
+			Prerecord:  uint64(cc.CapturePolicy.Prerecord.Duration().Nanoseconds()),
+			Postrecord: uint64(cc.CapturePolicy.Postrecord.Duration().Nanoseconds()),
+		},
+		ReadTimeout:  rtspTimeout,
+		WriteTimeout: rtspTimeout,
+		// StorageUnit -> CapturePolicy backpressure signal (10-capture-
+		// policy.md §8, resolved in PLAN.md's gap-resolutions section):
+		// polled live off unit.EngineLevel() rather than tracked via a
+		// separate atomic flag updated on transitions -- Level() is
+		// already a cheap, mutex-guarded read, so there's nothing to cache.
+		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
+	}, nil
+}
+
+func (f *Farcd) closeUnits() {
+	for _, u := range f.units {
+		_ = u.Close()
+	}
+	f.units = nil
+}
+
+// Run starts IngestManager and all three servers, then blocks until ctx is
+// cancelled, at which point it shuts everything down gracefully and
+// returns. A listener failing to start (e.g. port already in use) also
+// triggers shutdown and is returned as this call's error.
+func (f *Farcd) Run(ctx context.Context) error {
+	f.ing.Start(f.channels)
+
+	errCh := make(chan error, 3)
+	serve := func(name string, srv *http.Server) {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("farcd: %s server: %w", name, err)
+			return
+		}
+		errCh <- nil
+	}
+	go serve("http", f.httpSrv)
+	go serve("ws", f.wsSrv)
+	go serve("metrics", f.metricsSrv)
+
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case runErr = <-errCh:
+	}
+
+	f.shutdown()
+	return runErr
+}
+
+func (f *Farcd) shutdown() {
+	f.ing.Stop()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	for _, srv := range []*http.Server{f.httpSrv, f.wsSrv, f.metricsSrv} {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			f.logf("farcd: server shutdown: %v", err)
+		}
+	}
+
+	f.closeUnits()
+}

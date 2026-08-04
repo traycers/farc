@@ -21,6 +21,14 @@ type ChannelConfig struct {
 	PolicyParams PolicyParams
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+
+	// BackpressureSignal, if non-nil, is wired onto the ChannelIngest as
+	// its skip-frames check (docs/docs/archive/10-capture-policy.md §8) --
+	// see ChannelIngest.SetBackpressureSignal. internal/farcd supplies a
+	// closure over the channel's target Storage's StorageEngine.Level();
+	// IngestManager itself has no Storage awareness at all, so it just
+	// forwards whatever it's given.
+	BackpressureSignal func() bool
 }
 
 type channelEntry struct {
@@ -70,6 +78,7 @@ func (m *IngestManager) startLocked(cfg ChannelConfig) {
 	policy := NewCapturePolicy(cfg.Channel, cfg.Recorder, cfg.QueueDepth, cfg.PolicyType, cfg.PolicyParams)
 	ci := NewChannelIngest(cfg.Channel, policy)
 	ci.SetLogger(m.logf)
+	ci.SetBackpressureSignal(cfg.BackpressureSignal)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

@@ -26,6 +26,15 @@ type ChannelIngest struct {
 	// event-window purposes, injectable here for deterministic tests.
 	now func() time.Time
 
+	// skipFrames is the read-only half of the StorageUnit -> CapturePolicy
+	// backpressure signal (docs/docs/archive/10-capture-policy.md §8's own
+	// open question, resolved in PLAN.md's gap-resolutions section):
+	// ChannelIngest doesn't decide what to shed, it just executes an
+	// already-imposed limit by not calling HandleFrame at all while this
+	// returns true. Defaults to "never skip" so a ChannelIngest with no
+	// wired signal (e.g. every existing test) behaves exactly as before.
+	skipFrames func() bool
+
 	logf func(format string, args ...any)
 }
 
@@ -33,11 +42,25 @@ type ChannelIngest struct {
 // policy (already configured with its CapturePolicy strategy).
 func NewChannelIngest(channel uint16, policy *CapturePolicy) *ChannelIngest {
 	return &ChannelIngest{
-		channel: channel,
-		policy:  policy,
-		now:     time.Now,
-		logf:    func(string, ...any) {},
+		channel:    channel,
+		policy:     policy,
+		now:        time.Now,
+		skipFrames: func() bool { return false },
+		logf:       func(string, ...any) {},
 	}
+}
+
+// SetBackpressureSignal wires fn as the channel's "skip frames" check
+// (see the skipFrames field doc). internal/farcd supplies a closure polling
+// the channel's target Storage's current StorageEngine.Level() — no
+// separate atomic flag or transition-tracking is needed, since Level()
+// itself is already a cheap, live, mutex-guarded read. A nil argument
+// restores the default no-op (never skip).
+func (ci *ChannelIngest) SetBackpressureSignal(fn func() bool) {
+	if fn == nil {
+		fn = func() bool { return false }
+	}
+	ci.skipFrames = fn
 }
 
 // SetLogger sets a callback for non-fatal diagnostics (unsupported
