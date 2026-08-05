@@ -34,7 +34,7 @@ export default function PlayerPage() {
     try {
       const t1 = nsFromLocalInputValue(from)
       const t2 = nsFromLocalInputValue(to)
-      setRows(await candidates(storage, channel, t1, t2))
+      setRows(await candidates(storage, channel, t1, t2, true))
     } catch (e) {
       setError(String(e))
     }
@@ -54,13 +54,21 @@ export default function PlayerPage() {
     const video = videoRef.current
     if (!video) return
     hlsRef.current?.destroy()
+    setError(null)
     if (Hls.isSupported()) {
       const hls = new Hls()
       hlsRef.current = hls
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          setError(`Playback failed (${data.details}): this candidate's fblock matched channel ${channel} by mask but has no confirmed video for it, or the server rejected the request.`)
+          hls.destroy()
+        }
+      })
       hls.loadSource(url)
       hls.attachMedia(video)
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = url
+      video.onerror = () => setError(`Playback failed: ${video.error?.message ?? 'unknown error'}`)
     } else {
       setError('This browser supports neither MSE (hls.js) nor native HLS playback.')
     }

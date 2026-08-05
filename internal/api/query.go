@@ -41,8 +41,12 @@ type candidateInfo struct {
 	End   uint64 `json:"end"`
 }
 
-// handleCandidates implements GET .../candidates?channel=&t1=&t2=
-// (ADR-014): fblock-level candidates only, no TOC read.
+// handleCandidates implements GET .../candidates?channel=&t1=&t2=[&confirm=true]
+// (ADR-014): by default, fblock-level candidates only, no TOC read — the
+// mask can produce false positives, which callers are expected to confirm
+// themselves (candidateInfo's doc comment). Passing confirm=true opts into
+// having this endpoint do that confirmation itself, at the cost of reading
+// and parsing each candidate's TOC before it's returned.
 func (s *HttpApiServer) handleCandidates(w http.ResponseWriter, r *http.Request) {
 	unit, ok := s.reg.Get(r.PathValue("id"))
 	if !ok {
@@ -54,17 +58,29 @@ func (s *HttpApiServer) handleCandidates(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	confirm := r.URL.Query().Get("confirm") == "true"
 
 	indices := unit.Candidates(channel, t1, t2)
 	snap := unit.Index().Snapshot()
-	out := make([]candidateInfo, len(indices))
-	for i, idx := range indices {
-		out[i] = candidateInfo{
+	out := make([]candidateInfo, 0, len(indices))
+	for _, idx := range indices {
+		uuid := snap.UUID[idx]
+		if confirm {
+			columns, err := unit.ReadTOC(uuid)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("api: candidates: read toc for candidate %x: %w", uuid, err))
+				return
+			}
+			if len(channelFrameTimesInRange(columns, channel, t1, t2)) == 0 {
+				continue
+			}
+		}
+		out = append(out, candidateInfo{
 			Index: idx,
-			UUID:  hex.EncodeToString(snap.UUID[idx][:]),
+			UUID:  hex.EncodeToString(uuid[:]),
 			Begin: snap.Begin[idx],
 			End:   snap.End[idx],
-		}
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -123,15 +139,7 @@ func (s *HttpApiServer) handleResolve(w http.ResponseWriter, r *http.Request) {
 // find the channel's node, take its subtree range, scan frame_time nodes
 // within it, filter by [t1,t2], then read each matched frame's data.
 func resolveChannelFrames(unit *storage.Unit, uuid [16]byte, c *toc.Columns, channel uint16, t1, t2 uint64) ([]resolvedFrame, error) {
-	channelNodeID, ok := findChannelNode(c, channel)
-	if !ok {
-		return nil, nil // mask false positive (ADR-014) or channel not present in this fcontainer
-	}
-	start, end := toc.SubtreeRange(c, channelNodeID)
-
-	timeIDs := toc.ScanByRole(c, mediatree.RoleFrameTimeVideo, mediatree.RoleFrameTimeAudio)
-	timeIDs = toc.InRange(timeIDs, start, end)
-	timeIDs = toc.TimeRange(c, timeIDs, t1, t2)
+	timeIDs := channelFrameTimesInRange(c, channel, t1, t2)
 
 	out := make([]resolvedFrame, 0, len(timeIDs))
 	for _, timeID := range timeIDs {
@@ -173,6 +181,22 @@ func resolveChannelFrames(unit *storage.Unit, uuid [16]byte, c *toc.Columns, cha
 		out = append(out, frame)
 	}
 	return out, nil
+}
+
+// channelFrameTimesInRange returns, in increasing-time order, channel's
+// frame_time node ids within [t1,t2] in this fcontainer's TOC — nil if the
+// channel isn't present at all (mask false positive, ADR-014) or has no
+// frames in range.
+func channelFrameTimesInRange(c *toc.Columns, channel uint16, t1, t2 uint64) []uint32 {
+	channelNodeID, ok := findChannelNode(c, channel)
+	if !ok {
+		return nil
+	}
+	start, end := toc.SubtreeRange(c, channelNodeID)
+
+	timeIDs := toc.ScanByRole(c, mediatree.RoleFrameTimeVideo, mediatree.RoleFrameTimeAudio)
+	timeIDs = toc.InRange(timeIDs, start, end)
+	return toc.TimeRange(c, timeIDs, t1, t2)
 }
 
 // findChannelNode finds the RoleChannel node whose inline uint32 value is

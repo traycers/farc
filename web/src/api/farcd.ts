@@ -73,8 +73,14 @@ export async function patchStorage(
   )
 }
 
-export async function candidates(storage: string, channel: number, t1: bigint, t2: bigint): Promise<Candidate[]> {
-  const url = `${BASE}/storages/${encodeURIComponent(storage)}/candidates?channel=${channel}&t1=${t1}&t2=${t2}`
+export async function candidates(
+  storage: string,
+  channel: number,
+  t1: bigint,
+  t2: bigint,
+  confirm?: boolean,
+): Promise<Candidate[]> {
+  const url = `${BASE}/storages/${encodeURIComponent(storage)}/candidates?channel=${channel}&t1=${t1}&t2=${t2}${confirm ? '&confirm=true' : ''}`
   const text = await (await ok(await fetch(url))).text()
   return parseCandidatesJSON(text)
 }
