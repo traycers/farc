@@ -46,7 +46,15 @@ services:
       HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
       HLS_SERVER_CACHE_QUOTA_BYTES: "10737418240"
     volumes:
-      - ./deploy/hls_server.config.json:/etc/hls_server/hls_server.config.json:ro
+      # hls_config holds hls_server.config.json itself -- no repo file
+      # bind-mount (nothing site-specific belongs in git). The volume starts
+      # out empty; hlsconfig.EnsureExists seeds it with an empty-but-valid
+      # config on first start. Unlike farc_config, hls_server never rewrites
+      # this file at runtime -- it's still the operator's job to add
+      # channels to it (no CRUD API here, ADR-020's open question in
+      # 12-hls-server.md §8 about a farcd/hls_server sync mechanism still
+      # isn't resolved).
+      - hls_config:/etc/hls_server
       - hls_cache:/var/cache/hls_server
     depends_on:
       - farc
@@ -65,4 +73,5 @@ services:
 volumes:
   farc_config:
   farc_data:
+  hls_config:
   hls_cache:

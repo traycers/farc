@@ -203,3 +203,37 @@ func TestLoad_MissingFile(t *testing.T) {
 		t.Fatalf("Load: want error for missing file, got nil")
 	}
 }
+
+func TestEnsureExists_CreatesEmptyConfigWhenMissing(t *testing.T) {
+	setRequiredEnv(t)
+	path := filepath.Join(t.TempDir(), "hls_server.config.json")
+
+	if err := EnsureExists(path); err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after EnsureExists: %v", err)
+	}
+	if len(cfg.Channels) != 0 {
+		t.Fatalf("EnsureExists-created config = %+v, want no channels", cfg.Channels)
+	}
+}
+
+func TestEnsureExists_LeavesExistingFileUntouched(t *testing.T) {
+	setRequiredEnv(t)
+	path := writeConfig(t, docExample)
+
+	if err := EnsureExists(path); err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Channels) != 1 || cfg.Channels[0].ID != 42 {
+		t.Fatalf("EnsureExists overwrote an existing config: %+v", cfg.Channels)
+	}
+}

@@ -8,7 +8,10 @@
 // data: the channel -> farcd-side storage id mapping. The one farcd
 // hls_server talks to (ADR-020 — v1 supports exactly one, not a list) is
 // itself an env-sourced address, not JSON, like HTTP/WS/Metrics are for
-// farcd's own config.
+// farcd's own config. The JSON file itself lives on a Docker volume rather
+// than a repo file bind mount (docker-compose.yaml's hls_config volume) —
+// EnsureExists seeds it with an empty-but-valid config the first time the
+// volume is empty, mirroring internal/config.EnsureExists.
 //
 // Depends on stdlib only, per PLAN.md's package layout table.
 package hlsconfig
@@ -106,6 +109,28 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("hlsconfig: %s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// EnsureExists writes an empty config (no channels) to path if no file
+// exists there yet; it is a no-op otherwise. Lets a fresh Docker volume —
+// which starts out empty, since deploy/hls_server.config.json no longer
+// ships in the repo or gets bind-mounted (docker-compose.yaml's
+// hls_config volume) — bootstrap itself into a valid, loadable config on
+// first container start, mirroring internal/config.EnsureExists.
+func EnsureExists(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("hlsconfig: stat %s: %w", path, err)
+	}
+	buf, err := json.MarshalIndent(&Config{Channels: []Channel{}}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("hlsconfig: marshal: %w", err)
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		return fmt.Errorf("hlsconfig: write %s: %w", path, err)
+	}
+	return nil
 }
 
 // loadEnv populates cfg's env-sourced fields. An unset HLS_SERVER_HTTP_PORT

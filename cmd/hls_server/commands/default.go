@@ -17,6 +17,9 @@ import (
 func doByDefault(cmd *cobra.Command, args []string) {
 	_ = godotenv.Load()
 
+	if err := hlsconfig.EnsureExists(configPath); err != nil {
+		log.Fatalf("hls_server: %v", err)
+	}
 	cfg, err := hlsconfig.Load(configPath)
 	if err != nil {
 		log.Fatalf("hls_server: %v", err)
