@@ -1,6 +1,10 @@
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import StoragesPage from './pages/StoragesPage'
-import ChannelsPage from './pages/ChannelsPage'
+import StoragesIndexPage from './pages/storages/StoragesIndexPage'
+import StorageNewPage from './pages/storages/StorageNewPage'
+import StorageEditPage from './pages/storages/StorageEditPage'
+import ChannelsIndexPage from './pages/channels/ChannelsIndexPage'
+import ChannelNewPage from './pages/channels/ChannelNewPage'
+import ChannelEditPage from './pages/channels/ChannelEditPage'
 import PlayerPage from './pages/PlayerPage'
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
@@ -29,8 +33,16 @@ export default function App() {
       <main>
         <Routes>
           <Route path="/" element={<Navigate to="/storages" replace />} />
-          <Route path="/storages" element={<StoragesPage />} />
-          <Route path="/channels" element={<ChannelsPage />} />
+          <Route path="/storages">
+            <Route index element={<StoragesIndexPage />} />
+            <Route path="new" element={<StorageNewPage />} />
+            <Route path=":id/edit" element={<StorageEditPage />} />
+          </Route>
+          <Route path="/channels">
+            <Route index element={<ChannelsIndexPage />} />
+            <Route path="new" element={<ChannelNewPage />} />
+            <Route path=":id/edit" element={<ChannelEditPage />} />
+          </Route>
           <Route path="/player" element={<PlayerPage />} />
         </Routes>
       </main>

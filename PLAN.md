@@ -15,6 +15,7 @@
 - [x] Phase 11 — restrict `hls_server` config to exactly one `farcd` (ADR-020, `docs/docs/archive/adr/020-hls-server-single-farcd.md`)
 - [x] Phase 12 — `hls_server` reconciles its served-channel set against farcd's live `GET /channels` + a new global `channel.created`/`channel.removed` WS subscription, no restart needed (ADR-021, `docs/docs/archive/adr/021-hls-server-channel-reconciliation.md`)
 - [x] Phase 13 — `hls_server` persists its reconciled channel list back into its own config file after every tracked-state change (`hlsconfig.Save`, `internal/hlsd`'s `persist`), the same way `farcd` already does for its own config (Phase 9/10) — updates ADR-021's "never rewritten" note and `12-hls-server.md` §7
+- [x] Phase 14 — `web/` UI overhaul: default dark theme (`data-bs-theme="dark"`), storage creation drops the manual fchunk-size field (auto-defaulted, same treatment as the already-derived fblock count `N`) and gains a "Generate ID" button, and `StoragesPage`/`ChannelsPage` are split into Rails-style `index`/`new`/`edit` pages/routes (`web/src/pages/storages/`, `web/src/pages/channels/`)
 
 ## Context
 
@@ -57,10 +58,10 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 |---|---|
 | `web/src/api/ns.ts` | `bigint` helpers for Unix-nanosecond timestamps: `nsFromDate`, `nsToDate`, `parseCandidatesJSON` |
 | `web/src/api/farcd.ts` | Typed fetch client: `listStorages`, `createStorage`, `patchStorage`, `candidates`, `setProtected`, `setCapturePolicy`, `triggerEvent`, `listChannels`, `createChannel`, `updateChannel`, `removeChannel` |
-| `web/src/pages/StoragesPage.tsx` | List (`GET /storages`), create form, inline retention/write_mode patch |
-| `web/src/pages/ChannelsPage.tsx` | Storage selector; add/edit/remove channel (one form, add-vs-edit mode toggle) scoped to the selected storage; trigger-event per row |
+| `web/src/pages/storages/{StoragesIndexPage,StorageNewPage,StorageEditPage}.tsx` | Phase 14 split (Rails-style): list-only index + per-row "Edit" link; create form (no fchunk-size field, "Generate ID" button); edit page (read-only geometry + retention/write_mode patch) |
+| `web/src/pages/channels/{ChannelsIndexPage,ChannelNewPage,ChannelEditPage}.tsx` | Phase 14 split: storage-filtered list + remove/trigger/start-stop-recording actions; create form (own storage `<select>`); edit form (own storage `<select>`, defaults to the channel's current storage) |
 | `web/src/pages/PlayerPage.tsx` | Storage+channel+time-range form → candidates list → protected toggle + hls.js playback |
-| `web/src/App.tsx` | `react-router-dom` shell, routes `/storages` `/channels` `/player` |
+| `web/src/App.tsx` | `react-router-dom` shell, nested routes: `/storages` (`index`/`new`/`:id/edit`), `/channels` (`index`/`new`/`:id/edit`), `/player` |
 | `web/nginx.conf` | `/api/farcd/` → farcd, `/api/hls/` → hls_server, SPA fallback to `index.html` |
 | `web/Dockerfile` | multi-stage: `node:22-alpine` build → `nginx:1.27-alpine` serve |
 | `Dockerfile.farc`, `Dockerfile.hls_server` | multi-stage: `golang:1.25.3-bookworm` build (`CGO_ENABLED=0`) → `debian:12-slim` runtime |

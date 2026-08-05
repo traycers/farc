@@ -1,9 +1,17 @@
-import { useEffect, useState } from 'react'
-import { createStorage, listStorages, patchStorage, type StorageInfo } from '../api/farcd'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { createStorage } from '../../api/farcd'
 
 const WRITE_MODES = ['cyclic', 'fill_until_full'] as const
 const MiB = 1024 ** 2
 const GiB = 1024 ** 3
+
+// fchunk_size is a required POST /storages field (fblock.Params), but a
+// low-level implementation detail (unit of physical write-with-verification,
+// must be a multiple of the disk's cluster size) an operator has no reason
+// to hand-tune -- treated the same way the total fblock count N already is
+// below: computed/defaulted, never a raw form field.
+const FCHUNK_SIZE = 4 * MiB
 
 // GiB (1024-based), not GB (1e9-based), and consistently so everywhere size
 // is computed or shown -- fblock sizes are themselves power-of-two byte
@@ -14,10 +22,18 @@ function formatGiB(bytes: number): string {
   return (bytes / GiB).toFixed(2)
 }
 
-export default function StoragesPage() {
-  const [storages, setStorages] = useState<StorageInfo[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+// crypto.randomUUID() would be simpler, but it requires a secure context
+// (HTTPS or localhost) -- the docker-compose nginx deployment isn't
+// guaranteed to have TLS, so this uses the unrestricted getRandomValues
+// directly instead.
+function generateStorageId(): string {
+  const bytes = new Uint8Array(8)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+export default function StorageNewPage() {
+  const navigate = useNavigate()
 
   const [id, setId] = useState('')
   const [path, setPath] = useState('')
@@ -31,17 +47,13 @@ export default function StoragesPage() {
   const n = Math.max(1, Math.floor((desiredSizeGiB * GiB) / fblockSize))
   const actualSizeBytes = n * fblockSize
   const [maxChannels, setMaxChannels] = useState(8)
-  const [fchunkSize, setFchunkSize] = useState(4 * 1024 * 1024)
   const [writeMode, setWriteMode] = useState<(typeof WRITE_MODES)[number]>('cyclic')
   const [retentionDays, setRetentionDays] = useState(30)
   const [minContainerShare, setMinContainerShare] = useState(0.1)
   const [force, setForce] = useState(false)
 
-  const refresh = () => listStorages().then(setStorages).catch((e) => setError(String(e)))
-
-  useEffect(() => {
-    refresh()
-  }, [])
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault()
@@ -53,7 +65,7 @@ export default function StoragesPage() {
         path,
         geometry: { FblockSize: fblockSize, N: n, MaxChannels: maxChannels },
         params: {
-          fchunk_size: fchunkSize,
+          fchunk_size: FCHUNK_SIZE,
           write_mode: writeMode,
           retention: { days: retentionDays },
           min_container_share: minContainerShare,
@@ -62,9 +74,7 @@ export default function StoragesPage() {
         catalog_path: '',
         backend: '',
       })
-      setId('')
-      setPath('')
-      await refresh()
+      navigate('/storages')
     } catch (e) {
       setError(String(e))
     } finally {
@@ -72,74 +82,18 @@ export default function StoragesPage() {
     }
   }
 
-  // PATCH returns 204 and GET /storages never echoes retention_days/
-  // write_mode back (StorageInfo only carries id/path/geometry) -- there is
-  // nothing to reflect in the table afterwards, so this just reports errors.
-  async function onPatch(id: string, patch: { retention_days?: number; write_mode?: string }) {
-    setError(null)
-    try {
-      await patchStorage(id, patch)
-    } catch (e) {
-      setError(String(e))
-    }
-  }
-
   return (
     <section>
-      <h1 className="mb-3">Storages</h1>
-      {error && <div className="alert alert-danger">{error}</div>}
-
-      <div className="table-responsive">
-        <table className="table table-striped table-hover align-middle">
-          <thead>
-            <tr>
-              <th>id</th>
-              <th>path</th>
-              <th>size</th>
-              <th>fblock size × N</th>
-              <th>max channels</th>
-              <th>set retention (days)</th>
-              <th>set write mode</th>
-            </tr>
-          </thead>
-          <tbody>
-            {storages.map((s) => (
-              <tr key={s.id}>
-                <td>{s.id}</td>
-                <td>{s.path}</td>
-                <td>{formatGiB(s.geometry.FblockSize * s.geometry.N)} GiB</td>
-                <td>
-                  {s.geometry.FblockSize} × {s.geometry.N}
-                </td>
-                <td>{s.geometry.MaxChannels}</td>
-                <td>
-                  <RetentionEditor onSave={(days) => onPatch(s.id, { retention_days: days })} />
-                </td>
-                <td>
-                  <select
-                    className="form-select form-select-sm"
-                    onChange={(e) => onPatch(s.id, { write_mode: e.target.value })}
-                    defaultValue=""
-                  >
-                    <option value="" disabled>
-                      choose…
-                    </option>
-                    {WRITE_MODES.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h1 className="mb-0">New storage</h1>
+        <Link to="/storages" className="btn btn-outline-secondary">
+          ← Back to storages
+        </Link>
       </div>
+      {error && <div className="alert alert-danger">{error}</div>}
 
       <div className="card">
         <div className="card-body">
-          <h2 className="card-title h4">Create storage</h2>
           <p className="card-text text-body-secondary">
             For a plain file path, farcd creates and sizes the file itself (to <code>desired size</code> below,
             rounded down to a whole number of fblocks) — nothing to pre-create. For a raw block device/partition
@@ -150,7 +104,16 @@ export default function StoragesPage() {
             <div className="col-sm-6 col-md-4">
               <label className="form-label">
                 id
-                <input className="form-control" value={id} onChange={(e) => setId(e.target.value)} required />
+                <div className="input-group">
+                  <input className="form-control" value={id} onChange={(e) => setId(e.target.value)} required />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    onClick={() => setId(generateStorageId())}
+                  >
+                    Generate
+                  </button>
+                </div>
               </label>
             </div>
             <div className="col-sm-6 col-md-4">
@@ -202,17 +165,6 @@ export default function StoragesPage() {
                   className="form-control"
                   value={maxChannels}
                   onChange={(e) => setMaxChannels(Number(e.target.value))}
-                />
-              </label>
-            </div>
-            <div className="col-sm-6 col-md-4">
-              <label className="form-label">
-                fchunk size (bytes)
-                <input
-                  type="number"
-                  className="form-control"
-                  value={fchunkSize}
-                  onChange={(e) => setFchunkSize(Number(e.target.value))}
                 />
               </label>
             </div>
@@ -278,22 +230,5 @@ export default function StoragesPage() {
         </div>
       </div>
     </section>
-  )
-}
-
-function RetentionEditor({ onSave }: { onSave: (days: number) => void }) {
-  const [days, setDays] = useState(30)
-  return (
-    <div className="input-group input-group-sm" style={{ width: '8rem' }}>
-      <input
-        type="number"
-        className="form-control"
-        value={days}
-        onChange={(e) => setDays(Number(e.target.value))}
-      />
-      <button type="button" className="btn btn-outline-secondary" onClick={() => onSave(days)}>
-        Set
-      </button>
-    </div>
   )
 }
