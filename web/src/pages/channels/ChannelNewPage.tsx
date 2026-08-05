@@ -104,7 +104,7 @@ export default function ChannelNewPage() {
                 <select className="form-select" value={storage} onChange={(e) => setStorage(e.target.value)}>
                   {storages.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.id}
+                      {s.name || s.id}
                     </option>
                   ))}
                 </select>
