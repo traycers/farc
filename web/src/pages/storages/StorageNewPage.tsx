@@ -32,6 +32,13 @@ function generateStorageId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+// Reuses the storage id (falling back to a fresh random one if it's still
+// empty) so the file name on disk stays recognizable as belonging to that
+// storage, rather than being an unrelated random path.
+function generateStoragePath(id: string): string {
+  return `/data/${id || generateStorageId()}.img`
+}
+
 export default function StorageNewPage() {
   const navigate = useNavigate()
 
@@ -119,13 +126,22 @@ export default function StorageNewPage() {
             <div>
               <label className="form-label">
                 path
-                <input
-                  className="form-control"
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
-                  placeholder="/data/disk0.img"
-                  required
-                />
+                <div className="input-group">
+                  <input
+                    className="form-control"
+                    value={path}
+                    onChange={(e) => setPath(e.target.value)}
+                    placeholder="/data/disk0.img"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    onClick={() => setPath(generateStoragePath(id))}
+                  >
+                    Generate
+                  </button>
+                </div>
               </label>
             </div>
             <div>
