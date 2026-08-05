@@ -109,8 +109,8 @@ export default function StorageEditPage() {
               <p className="card-text text-body-secondary">
                 Everything above is fixed at creation time. Only retention and write mode can still change.
               </p>
-              <div className="row g-3 align-items-end">
-                <div className="col-sm-6 col-md-4">
+              <div className="d-flex flex-column gap-3">
+                <div>
                   <label className="form-label">
                     retention (days)
                     <div className="input-group">
@@ -126,7 +126,7 @@ export default function StorageEditPage() {
                     </div>
                   </label>
                 </div>
-                <div className="col-sm-6 col-md-4">
+                <div>
                   <label className="form-label">
                     write mode
                     <select

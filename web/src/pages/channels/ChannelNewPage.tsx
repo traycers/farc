@@ -62,8 +62,8 @@ export default function ChannelNewPage() {
 
       <div className="card">
         <div className="card-body">
-          <form onSubmit={onSubmit} className="row g-3 align-items-end">
-            <div className="col-sm-6 col-md-3">
+          <form onSubmit={onSubmit} className="d-flex flex-column gap-3">
+            <div>
               <label className="form-label">
                 id
                 <input
@@ -74,7 +74,7 @@ export default function ChannelNewPage() {
                 />
               </label>
             </div>
-            <div className="col-sm-6 col-md-3">
+            <div>
               <label className="form-label">
                 storage
                 <select className="form-select" value={storage} onChange={(e) => setStorage(e.target.value)}>
@@ -86,7 +86,7 @@ export default function ChannelNewPage() {
                 </select>
               </label>
             </div>
-            <div className="col-sm-6 col-md-6">
+            <div>
               <label className="form-label">
                 rtsp_url
                 <input
@@ -98,7 +98,7 @@ export default function ChannelNewPage() {
                 />
               </label>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 capture policy
                 <select
@@ -115,7 +115,7 @@ export default function ChannelNewPage() {
               </label>
             </div>
             {policyType === 'continuous' ? (
-              <div className="col-sm-6 col-md-4">
+              <div>
                 <label className="form-label">
                   max deferred start (seconds)
                   <input
@@ -128,7 +128,7 @@ export default function ChannelNewPage() {
               </div>
             ) : (
               <>
-                <div className="col-sm-6 col-md-4">
+                <div>
                   <label className="form-label">
                     prerecord (seconds)
                     <input
@@ -139,7 +139,7 @@ export default function ChannelNewPage() {
                     />
                   </label>
                 </div>
-                <div className="col-sm-6 col-md-4">
+                <div>
                   <label className="form-label">
                     postrecord (seconds)
                     <input
@@ -152,7 +152,7 @@ export default function ChannelNewPage() {
                 </div>
               </>
             )}
-            <div className="col-12">
+            <div>
               <button type="submit" className="btn btn-primary">
                 Add channel
               </button>

@@ -100,8 +100,8 @@ export default function StorageNewPage() {
             path, the partition must already be at least that size. Either way, farcd persists the new entry into
             its own config file on creation, so it survives a restart.
           </p>
-          <form onSubmit={onCreate} className="row g-3 align-items-end">
-            <div className="col-sm-6 col-md-4">
+          <form onSubmit={onCreate} className="d-flex flex-column gap-3">
+            <div>
               <label className="form-label">
                 id
                 <div className="input-group">
@@ -116,7 +116,7 @@ export default function StorageNewPage() {
                 </div>
               </label>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 path
                 <input
@@ -128,7 +128,7 @@ export default function StorageNewPage() {
                 />
               </label>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 desired size (GiB)
                 <input
@@ -139,7 +139,7 @@ export default function StorageNewPage() {
                 />
               </label>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 fblock size (MiB)
                 <input
@@ -149,15 +149,13 @@ export default function StorageNewPage() {
                   onChange={(e) => setFblockSizeMiB(Number(e.target.value))}
                 />
               </label>
-            </div>
-            <div className="col-md-8">
               <div className="form-text">
                 → N = {n} fblocks, actual size = {formatGiB(actualSizeBytes)} GiB
                 {actualSizeBytes !== desiredSizeGiB * GiB &&
                   ' (not an exact multiple of the fblock size — rounded down)'}
               </div>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 max channels
                 <input
@@ -168,7 +166,7 @@ export default function StorageNewPage() {
                 />
               </label>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 write mode
                 <select
@@ -184,7 +182,7 @@ export default function StorageNewPage() {
                 </select>
               </label>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 retention (days)
                 <input
@@ -195,7 +193,7 @@ export default function StorageNewPage() {
                 />
               </label>
             </div>
-            <div className="col-sm-6 col-md-4">
+            <div>
               <label className="form-label">
                 min container share
                 <input
@@ -207,7 +205,7 @@ export default function StorageNewPage() {
                 />
               </label>
             </div>
-            <div className="col-md-4">
+            <div>
               <div className="form-check">
                 <input
                   type="checkbox"
@@ -221,7 +219,7 @@ export default function StorageNewPage() {
                 </label>
               </div>
             </div>
-            <div className="col-12">
+            <div>
               <button type="submit" className="btn btn-primary" disabled={busy}>
                 Create
               </button>
