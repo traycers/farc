@@ -172,7 +172,7 @@ func TestEventPushServer_ServesGlobalSubscription(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: 7, Storage: "disk0"})
+	push.Publish(JournalEvent{Name: EventChannelCreated, Channel: 7, Storage: "disk0"})
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
@@ -199,8 +199,8 @@ func TestEventPushServer_GlobalFiltersByWant(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: 1, Storage: "disk0"}) // filtered out
-	push.PublishChannelEvent(ChannelEvent{Name: EventChannelRemoved, Channel: 2, Storage: "disk0"})
+	push.Publish(JournalEvent{Name: EventChannelCreated, Channel: 1, Storage: "disk0"}) // filtered out
+	push.Publish(JournalEvent{Name: EventChannelRemoved, Channel: 2, Storage: "disk0"})
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
@@ -240,7 +240,7 @@ func TestEventPushServer_GlobalDropsWhenSubscriberBufferFull(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 500; i++ {
-			push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: uint16(i % 65536), Storage: "disk0"})
+			push.Publish(JournalEvent{Name: EventChannelCreated, Channel: uint16(i % 65536), Storage: "disk0"})
 		}
 	}()
 	select {
@@ -257,7 +257,7 @@ func TestEventPushServer_GlobalDropsWhenSubscriberBufferFull(t *testing.T) {
 		t.Fatalf("write subscribe (second conn): %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
-	push.PublishChannelEvent(ChannelEvent{Name: EventChannelRemoved, Channel: 999, Storage: "disk0"})
+	push.Publish(JournalEvent{Name: EventChannelRemoved, Channel: 999, Storage: "disk0"})
 	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
 	if err := conn2.ReadJSON(&msg); err != nil {
@@ -291,7 +291,7 @@ func TestEventPushServer_ConcurrentPublishAndConnect(t *testing.T) {
 					return
 				default:
 				}
-				push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: 1, Storage: "disk0"})
+				push.Publish(JournalEvent{Name: EventChannelCreated, Channel: 1, Storage: "disk0"})
 			}
 		}()
 	}

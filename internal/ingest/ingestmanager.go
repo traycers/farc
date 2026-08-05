@@ -63,16 +63,18 @@ type ChannelInfo struct {
 // IngestManager creates and owns one ChannelIngest per configured channel
 // (docs/docs/archive/11-service-composition.md §5.1.1).
 type IngestManager struct {
-	mu       sync.Mutex
-	channels map[uint16]*channelEntry
-	logf     func(format string, args ...any)
+	mu                sync.Mutex
+	channels          map[uint16]*channelEntry
+	logf              func(format string, args ...any)
+	onRecordingChange func(channel uint16, recording bool)
 }
 
 // NewIngestManager creates an empty IngestManager.
 func NewIngestManager() *IngestManager {
 	return &IngestManager{
-		channels: make(map[uint16]*channelEntry),
-		logf:     func(string, ...any) {},
+		channels:          make(map[uint16]*channelEntry),
+		logf:              func(string, ...any) {},
+		onRecordingChange: func(uint16, bool) {},
 	}
 }
 
@@ -83,6 +85,20 @@ func (m *IngestManager) SetLogger(logf func(format string, args ...any)) {
 		logf = func(string, ...any) {}
 	}
 	m.logf = logf
+}
+
+// SetOnRecordingChange installs a hook applied to every channel's
+// CapturePolicy from then on (existing channels are unaffected -- call this
+// before Start/AddChannel, as internal/farcd does). See
+// CapturePolicy.SetOnRecordingChange for when it fires. A nil fn resets to
+// a no-op.
+func (m *IngestManager) SetOnRecordingChange(fn func(channel uint16, recording bool)) {
+	if fn == nil {
+		fn = func(uint16, bool) {}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRecordingChange = fn
 }
 
 // Start creates and runs a ChannelIngest for each cfg in the background.
@@ -99,6 +115,7 @@ func (m *IngestManager) Start(cfgs []ChannelConfig) {
 
 func (m *IngestManager) startLocked(cfg ChannelConfig) {
 	policy := NewCapturePolicy(cfg.Channel, cfg.Recorder, cfg.QueueDepth, cfg.PolicyType, cfg.PolicyParams)
+	policy.SetOnRecordingChange(m.onRecordingChange)
 	ci := NewChannelIngest(cfg.Channel, policy)
 	ci.SetLogger(m.logf)
 	ci.SetBackpressureSignal(cfg.BackpressureSignal)

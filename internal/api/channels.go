@@ -117,6 +117,9 @@ func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Reques
 		writeError(w, status, err)
 		return
 	}
+	if s.push != nil {
+		s.push.Publish(JournalEvent{Name: EventTriggerFired, Channel: channel})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -150,6 +153,9 @@ func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Requ
 		writeError(w, status, err)
 		return
 	}
+	if s.push != nil {
+		s.push.Publish(JournalEvent{Name: EventRecordingCommandStart, Channel: channel})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -171,6 +177,9 @@ func (s *HttpApiServer) handleStopRecording(w http.ResponseWriter, r *http.Reque
 		}
 		writeError(w, status, err)
 		return
+	}
+	if s.push != nil {
+		s.push.Publish(JournalEvent{Name: EventRecordingCommandStop, Channel: channel})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -23,7 +23,7 @@ type subscribeMessage struct {
 
 // pushMessage is one WS frame pushed to a subscribed client — a compact,
 // JSON-friendly mirror of storage.Event, or (Channel/Storage set instead of
-// Index/UUID) a ChannelEvent from a global subscription.
+// Index/UUID) a JournalEvent from a global subscription.
 type pushMessage struct {
 	Type     string `json:"type"` // always "event" in v1 (see api.go's package doc: no toc push type yet)
 	Name     string `json:"name"`
@@ -35,24 +35,53 @@ type pushMessage struct {
 	Storage  string `json:"storage,omitempty"`
 }
 
-// EventChannelCreated/EventChannelRemoved are ChannelEvent's Name values —
-// the "global" (storage-less) counterpart to storage.Event's fblock-scoped
-// names, published by internal/farcd whenever POST/PUT/DELETE
-// /channels(/{id}) successfully commits (see PublishChannelEvent).
+// EventChannelCreated/EventChannelRemoved are JournalEvent's Name values for
+// channel lifecycle — the "global" (storage-less) counterpart to
+// storage.Event's fblock-scoped names, published by internal/farcd whenever
+// POST/PUT/DELETE /channels(/{id}) successfully commits (see Publish).
+//
+// EventFblockCreated/EventFblockDeleted mirror storage.EventFblockWriteStarted
+// /storage.EventFblockDeleted, bridged into the global feed by internal/farcd
+// (fblock lifecycle is otherwise only visible via a per-storage subscription).
+// "Created" is write-start, including a cyclic reuse of an already-ready
+// block — there is no separate "first-ever init" signal in v1.
+//
+// EventRecordingStarted/EventRecordingStopped fire on CapturePolicy's actual
+// recording-state transition (internal/ingest/policy.go's
+// openSegmentLocked/closeSegmentLocked), which can happen without a matching
+// command (event policy's Trigger/Tick) — hence these are distinct from
+// EventRecordingCommandStart/EventRecordingCommandStop, which fire when
+// POST /channels/{id}/recording/start|stop is received, regardless of
+// whether it actually changes recording state.
+//
+// EventTriggerFired fires when POST /channels/{id}/events is received.
 const (
-	EventChannelCreated = "channel.created"
-	EventChannelRemoved = "channel.removed"
+	EventChannelCreated        = "channel.created"
+	EventChannelRemoved        = "channel.removed"
+	EventFblockCreated         = "fblock.created"
+	EventFblockDeleted         = "fblock.deleted"
+	EventRecordingStarted      = "channel.recording.started"
+	EventRecordingStopped      = "channel.recording.stopped"
+	EventRecordingCommandStart = "channel.recording.command.start"
+	EventRecordingCommandStop  = "channel.recording.command.stop"
+	EventTriggerFired          = "channel.trigger.fired"
 )
 
-// ChannelEvent is one channel-lifecycle event, delivered to every "global"
-// subscriber (subscribeMessage.Storage == "") regardless of which Storage
-// the channel is on — channel lifecycle isn't a per-storage concept the way
-// fblock.* events are, so it doesn't go through any single Storage's
-// NotificationBus.
-type ChannelEvent struct {
-	Name    string
-	Channel uint16
-	Storage string
+// JournalEvent is one journal-worthy event, delivered to every "global"
+// subscriber (subscribeMessage.Storage == "") regardless of which Storage or
+// Channel it concerns — the global feed isn't scoped to any one Storage's
+// NotificationBus the way per-storage fblock.* subscriptions are. Not every
+// field is set for every Name: Index/UUID/Severity/Reason are only
+// meaningful for fblock.* events, Channel only for channel/recording/trigger
+// events.
+type JournalEvent struct {
+	Name     string
+	Channel  uint16
+	Storage  string
+	Index    uint32
+	UUID     string
+	Severity string
+	Reason   string
 }
 
 // EventPushServer is the WS half of Phase 10's minimal API: one endpoint,
@@ -68,7 +97,7 @@ type EventPushServer struct {
 	upgrader websocket.Upgrader
 
 	mu         sync.Mutex
-	globalSubs map[chan ChannelEvent]struct{}
+	globalSubs map[chan JournalEvent]struct{}
 }
 
 // NewEventPushServer creates a WS push server over reg. CheckOrigin always
@@ -78,7 +107,7 @@ func NewEventPushServer(reg *StorageRegistry) *EventPushServer {
 	return &EventPushServer{
 		reg:        reg,
 		upgrader:   websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
-		globalSubs: make(map[chan ChannelEvent]struct{}),
+		globalSubs: make(map[chan JournalEvent]struct{}),
 	}
 }
 
@@ -169,7 +198,7 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 		want[n] = true
 	}
 
-	events := make(chan ChannelEvent, 64)
+	events := make(chan JournalEvent, 64)
 	p.mu.Lock()
 	p.globalSubs[events] = struct{}{}
 	p.mu.Unlock()
@@ -189,7 +218,10 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 			if len(want) > 0 && !want[ev.Name] {
 				continue
 			}
-			msg := pushMessage{Type: "event", Name: ev.Name, Channel: ev.Channel, Storage: ev.Storage}
+			msg := pushMessage{
+				Type: "event", Name: ev.Name, Channel: ev.Channel, Storage: ev.Storage,
+				Index: ev.Index, UUID: ev.UUID, Severity: ev.Severity, Reason: ev.Reason,
+			}
 			if err := conn.WriteJSON(msg); err != nil {
 				return
 			}
@@ -197,13 +229,14 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 	}
 }
 
-// PublishChannelEvent fans evt out to every current global subscriber,
-// non-blocking — a slow subscriber whose buffer is full drops the event
-// rather than stalling the caller (internal/farcd's persist hooks), mirroring
-// storage.NotificationBus.Publish's own drop-if-slow policy. A dropped event
-// is not retried by this package; internal/hlsd's periodic re-list against
-// GET /channels bounds how stale that can leave a subscriber.
-func (p *EventPushServer) PublishChannelEvent(evt ChannelEvent) {
+// Publish fans evt out to every current global subscriber, non-blocking — a
+// slow subscriber whose buffer is full drops the event rather than stalling
+// the caller (internal/farcd's persist hooks, internal/api's command
+// handlers), mirroring storage.NotificationBus.Publish's own drop-if-slow
+// policy. A dropped event is not retried by this package; internal/hlsd's
+// periodic re-list against GET /channels bounds how stale that can leave a
+// subscriber for channel.* events specifically.
+func (p *EventPushServer) Publish(evt JournalEvent) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for ch := range p.globalSubs {

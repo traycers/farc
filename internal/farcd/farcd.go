@@ -24,6 +24,7 @@ package farcd
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -66,11 +67,20 @@ type Farcd struct {
 	configPath string
 	cfgMu      sync.Mutex
 
-	// push publishes channel.created/channel.removed (api.ChannelEvent) to
-	// any "global" /events/ws subscriber -- internal/hlsd's reconciliation
-	// loop is the intended consumer, kept in sync with farcd's live channel
-	// list without polling GET /channels on every change.
+	// push publishes journal events (api.JournalEvent) to any "global"
+	// /events/ws subscriber -- internal/hlsd's reconciliation loop is the
+	// intended consumer of channel.created/channel.removed specifically,
+	// kept in sync with farcd's live channel list without polling
+	// GET /channels on every change; the /journal UI page consumes the
+	// full event vocabulary.
 	push *api.EventPushServer
+
+	// bridgeStops cancels each bridgeFblockEvents goroutine (one per open
+	// Storage, forwarding its NotificationBus into push as fblock.created/
+	// fblock.deleted). bridgeMu guards appends from persistNewStorage,
+	// which can run concurrently with other requests.
+	bridgeStops []func()
+	bridgeMu    sync.Mutex
 
 	httpSrv    *http.Server
 	wsSrv      *http.Server
@@ -94,6 +104,9 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 		logf:       func(string, ...any) {},
 	}
 
+	push := api.NewEventPushServer(f.registry)
+	f.push = push
+
 	for _, sc := range cfg.Storages {
 		unit, err := openStorage(sc)
 		if err != nil {
@@ -105,6 +118,7 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 			f.closeUnits()
 			return nil, fmt.Errorf("farcd: register storage %q: %w", sc.ID, err)
 		}
+		f.bridgeFblockEvents(sc.ID, unit)
 	}
 
 	for _, cc := range cfg.Channels {
@@ -116,16 +130,21 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 		f.channels = append(f.channels, chCfg)
 	}
 
-	push := api.NewEventPushServer(f.registry)
-	f.push = push
-	// push is deliberately not passed into NewHttpApiServer here: WS gets
-	// its own listener on cfg.WS below, matching §2.1's "разные серверы"
-	// (see api.go's own package doc for the alternative, single-port mode
-	// that combined routing still supports for tests/simple deployments).
-	// f.push above is still how persistNewChannel/Updated/Removed reach it
-	// to call PublishChannelEvent, entirely independent of which listener
-	// serves its ServeHTTP.
-	apiServer := api.NewHttpApiServer(f.registry, f.ing, nil)
+	f.ing.SetOnRecordingChange(func(channel uint16, recording bool) {
+		name := api.EventRecordingStopped
+		if recording {
+			name = api.EventRecordingStarted
+		}
+		f.push.Publish(api.JournalEvent{Name: name, Channel: channel})
+	})
+
+	// push IS passed into NewHttpApiServer (unlike WS's own listener on
+	// cfg.WS below, matching §2.1's "разные серверы" for actually *serving*
+	// /events/ws) so channels.go's command handlers (trigger/start/stop
+	// recording) can publish directly, without a farcd-side hook -- unlike
+	// channel create/update/remove, those commands persist nothing to
+	// config, so there's no need to route their publish through farcd.
+	apiServer := api.NewHttpApiServer(f.registry, f.ing, push)
 	apiServer.SetOnStorageCreated(f.persistNewStorage)
 	apiServer.SetOnStorageUpdated(f.persistUpdatedStorage)
 	apiServer.SetOnChannelCreated(f.persistNewChannel)
@@ -237,6 +256,9 @@ func (f *Farcd) persistNewStorage(id, path, catalogPath, name string) error {
 		f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
 		return fmt.Errorf("farcd: persist storage %q to %s: %w", id, f.configPath, err)
 	}
+	if unit, ok := f.registry.Get(id); ok {
+		f.bridgeFblockEvents(id, unit)
+	}
 	return nil
 }
 
@@ -308,7 +330,7 @@ func (f *Farcd) persistNewChannel(spec api.ChannelSpec) error {
 		f.cfg.Channels = f.cfg.Channels[:len(f.cfg.Channels)-1]
 		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
 	}
-	f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: spec.ID, Storage: spec.Storage})
+	f.push.Publish(api.JournalEvent{Name: api.EventChannelCreated, Channel: spec.ID, Storage: spec.Storage})
 	return nil
 }
 
@@ -341,8 +363,8 @@ func (f *Farcd) persistUpdatedChannel(spec api.ChannelSpec) error {
 		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
 	}
 	if old.Storage != spec.Storage {
-		f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelRemoved, Channel: spec.ID, Storage: old.Storage})
-		f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: spec.ID, Storage: spec.Storage})
+		f.push.Publish(api.JournalEvent{Name: api.EventChannelRemoved, Channel: spec.ID, Storage: old.Storage})
+		f.push.Publish(api.JournalEvent{Name: api.EventChannelCreated, Channel: spec.ID, Storage: spec.Storage})
 	}
 	return nil
 }
@@ -374,11 +396,67 @@ func (f *Farcd) persistRemovedChannel(id uint16) error {
 		f.cfg.Channels = restored
 		return fmt.Errorf("farcd: persist removal of channel %d from %s: %w", id, f.configPath, err)
 	}
-	f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelRemoved, Channel: id, Storage: removed.Storage})
+	f.push.Publish(api.JournalEvent{Name: api.EventChannelRemoved, Channel: id, Storage: removed.Storage})
 	return nil
 }
 
+// bridgeFblockEvents subscribes to unit's NotificationBus and forwards
+// fblock.write.started/fblock.deleted into f.push as
+// api.EventFblockCreated/api.EventFblockDeleted, so a /journal subscriber
+// (a "global" /events/ws client) sees fblock lifecycle without also needing
+// a per-storage subscription. Runs until closeUnits calls the returned stop
+// func (stored in f.bridgeStops).
+func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
+	events := unit.Notify().Subscribe(64)
+	stop := make(chan struct{})
+
+	f.bridgeMu.Lock()
+	f.bridgeStops = append(f.bridgeStops, func() {
+		close(stop)
+		unit.Notify().Unsubscribe(events)
+	})
+	f.bridgeMu.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				var name string
+				switch ev.Name {
+				case storage.EventFblockWriteStarted:
+					name = api.EventFblockCreated
+				case storage.EventFblockDeleted:
+					name = api.EventFblockDeleted
+				default:
+					continue
+				}
+				uuid := ""
+				if ev.UUID != ([16]byte{}) {
+					uuid = hex.EncodeToString(ev.UUID[:])
+				}
+				f.push.Publish(api.JournalEvent{
+					Name: name, Storage: id, Index: ev.Index, UUID: uuid,
+					Severity: ev.Severity, Reason: ev.Reason,
+				})
+			}
+		}
+	}()
+}
+
 func (f *Farcd) closeUnits() {
+	f.bridgeMu.Lock()
+	stops := f.bridgeStops
+	f.bridgeStops = nil
+	f.bridgeMu.Unlock()
+	for _, stop := range stops {
+		stop()
+	}
+
 	for _, u := range f.units {
 		_ = u.Close()
 	}

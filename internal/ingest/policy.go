@@ -73,6 +73,14 @@ type CapturePolicy struct {
 	configVers map[StreamID]*fcontainer.StreamParams // which params version configIDs[id] was built from
 	haveFrame  bool
 	begin, end uint64
+
+	// onRecordingChange fires on every actual p.recording flip, from
+	// whichever admin command or internal state machine (Tick's stop_at
+	// expiry, Trigger's auto-start) caused it -- distinct from the admin
+	// command itself, which internal/api publishes separately. Defaults to
+	// a no-op so existing callers/tests that never call
+	// SetOnRecordingChange are unaffected.
+	onRecordingChange func(channel uint16, recording bool)
 }
 
 // NewCapturePolicy creates a CapturePolicy for channel, initially idle.
@@ -81,15 +89,28 @@ type CapturePolicy struct {
 // 10-capture-policy.md §6: "очередь... передаётся как есть").
 func NewCapturePolicy(channel uint16, recorder Recorder, queueDepth uint64, policyType PolicyType, params PolicyParams) *CapturePolicy {
 	return &CapturePolicy{
-		channel:      channel,
-		recorder:     recorder,
-		policyType:   policyType,
-		params:       params,
-		queue:        NewFrameQueue(queueDepth),
-		cachedParams: make(map[StreamID]*fcontainer.StreamParams),
-		configIDs:    make(map[StreamID]uint32),
-		configVers:   make(map[StreamID]*fcontainer.StreamParams),
+		channel:           channel,
+		recorder:          recorder,
+		policyType:        policyType,
+		params:            params,
+		queue:             NewFrameQueue(queueDepth),
+		cachedParams:      make(map[StreamID]*fcontainer.StreamParams),
+		configIDs:         make(map[StreamID]uint32),
+		configVers:        make(map[StreamID]*fcontainer.StreamParams),
+		onRecordingChange: func(uint16, bool) {},
 	}
+}
+
+// SetOnRecordingChange installs a hook fired every time p.recording actually
+// flips, called with p's own mutex held (so the hook must not call back into
+// p). A nil fn resets to a no-op.
+func (p *CapturePolicy) SetOnRecordingChange(fn func(channel uint16, recording bool)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if fn == nil {
+		fn = func(uint16, bool) {}
+	}
+	p.onRecordingChange = fn
 }
 
 // SetStreamParams records sp as the current codec parameters for
@@ -176,6 +197,7 @@ func (p *CapturePolicy) openSegmentLocked(replayFrom uint64) error {
 	p.configVers = make(map[StreamID]*fcontainer.StreamParams)
 	p.haveFrame = false
 	p.recording = true
+	p.onRecordingChange(p.channel, true)
 
 	for _, qf := range p.queue.Since(replayFrom) {
 		id := StreamID{qf.Stream, qf.Kind}
@@ -200,6 +222,7 @@ func (p *CapturePolicy) closeSegmentLocked(now uint64) error {
 		return nil
 	}
 	p.recording = false
+	p.onRecordingChange(p.channel, false)
 	p.stopAtSet = false
 	filler := p.filler
 	begin, end, wrote := p.begin, p.end, p.haveFrame

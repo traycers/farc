@@ -6,6 +6,7 @@ import ChannelsIndexPage from './pages/channels/ChannelsIndexPage'
 import ChannelNewPage from './pages/channels/ChannelNewPage'
 import ChannelEditPage from './pages/channels/ChannelEditPage'
 import PlayerPage from './pages/PlayerPage'
+import JournalPage from './pages/JournalPage'
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
   return `nav-link${isActive ? ' active' : ''}`
@@ -27,6 +28,9 @@ export default function App() {
             <NavLink to="/player" className={navLinkClass}>
               Player
             </NavLink>
+            <NavLink to="/journal" className={navLinkClass}>
+              Журнал
+            </NavLink>
           </div>
         </div>
       </nav>
@@ -44,6 +48,7 @@ export default function App() {
             <Route path=":id/edit" element={<ChannelEditPage />} />
           </Route>
           <Route path="/player" element={<PlayerPage />} />
+          <Route path="/journal" element={<JournalPage />} />
         </Routes>
       </main>
     </>

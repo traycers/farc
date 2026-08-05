@@ -185,7 +185,7 @@ func addChannel(t *testing.T, farcd *farcdTestServer, id uint16, storageID strin
 		t.Fatalf("AddChannel(%d): %v", id, err)
 	}
 	t.Cleanup(func() { _, _ = farcd.ing.RemoveChannel(id) })
-	farcd.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: id, Storage: storageID})
+	farcd.push.Publish(api.JournalEvent{Name: api.EventChannelCreated, Channel: id, Storage: storageID})
 }
 
 // removeChannel removes a channel from farcd's IngestManager and publishes
@@ -197,7 +197,7 @@ func removeChannel(t *testing.T, farcd *farcdTestServer, id uint16, storageID st
 	if _, err := farcd.ing.RemoveChannel(id); err != nil {
 		t.Fatalf("RemoveChannel(%d): %v", id, err)
 	}
-	farcd.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelRemoved, Channel: id, Storage: storageID})
+	farcd.push.Publish(api.JournalEvent{Name: api.EventChannelRemoved, Channel: id, Storage: storageID})
 }
 
 func freePort(t *testing.T) int {

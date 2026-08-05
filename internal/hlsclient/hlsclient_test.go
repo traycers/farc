@@ -116,7 +116,7 @@ func TestClient_Subscribe_GlobalChannelEvents(t *testing.T) {
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	ts.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: 7, Storage: "disk0"})
+	ts.push.Publish(api.JournalEvent{Name: api.EventChannelCreated, Channel: 7, Storage: "disk0"})
 
 	select {
 	case ev, ok := <-events:
