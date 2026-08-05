@@ -3,11 +3,28 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.farc
+    environment:
+      # HTTP/WS/Metrics server addresses -- deliberately not in
+      # farc.config.json (internal/config's package doc): env vars are safe
+      # to commit alongside compose, unlike the JSON file's storages/
+      # channels lists, which stay file-based because farcd rewrites them
+      # at runtime via POST/PUT/DELETE /storages and /channels.
+      FARC_HTTP_IP: "0.0.0.0"
+      FARC_HTTP_PORT: "8080"
+      FARC_WS_IP: "0.0.0.0"
+      FARC_WS_PORT: "8081"
+      FARC_WS_MAX_CONNECTIONS: "100"
+      FARC_METRICS_IP: "0.0.0.0"
+      FARC_METRICS_PORT: "9090"
     volumes:
-      # Writable, not :ro -- farcd persists storages created via POST
-      # /storages (e.g. through the web client) back into this file, so a
-      # container restart doesn't lose them (internal/farcd.persistNewStorage).
-      - ./deploy/farc.config.json:/etc/farc/farc.config.json
+      # farc_config holds farc.config.json itself -- no repo file bind-mount
+      # (nothing site-specific belongs in git). The volume starts out empty;
+      # config.EnsureExists seeds it with an empty-but-valid config on first
+      # start, and farcd persists storages/channels created via POST
+      # /storages, /channels (e.g. through the web client) back into it, so
+      # a container restart doesn't lose them
+      # (internal/farcd.persistNewStorage/persistNewChannel).
+      - farc_config:/etc/farc
       - farc_data:/data
     restart: unless-stopped
 
@@ -33,5 +50,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  farc_config:
   farc_data:
   hls_cache:

@@ -185,24 +185,40 @@ func buildBinary(t *testing.T, pkgDir, out string) {
 	}
 }
 
-func writeFarcConfig(t *testing.T, imgPath string, httpPort, wsPort, metricsPort int) string {
+// writeFarcConfig writes only the JSON-backed part of farcd's config
+// (storages/channels) -- HTTP/WS/Metrics are env-sourced now
+// (internal/config's package doc), so the caller passes those via
+// farcEnv/startProcess instead.
+func writeFarcConfig(t *testing.T, imgPath string) string {
 	t.Helper()
 	imgJSON, err := json.Marshal(imgPath)
 	if err != nil {
 		t.Fatalf("marshal image path: %v", err)
 	}
 	doc := fmt.Sprintf(`{
-  "http": {"ip":"127.0.0.1","port":%d},
-  "ws": {"ip":"127.0.0.1","port":%d,"max_connections":100},
-  "metrics": {"ip":"127.0.0.1","port":%d},
   "storages": [{"id":"disk0","path":%s}],
   "channels": []
-}`, httpPort, wsPort, metricsPort, imgJSON)
+}`, imgJSON)
 	path := filepath.Join(t.TempDir(), "farc.config.json")
 	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		t.Fatalf("write farc config: %v", err)
 	}
 	return path
+}
+
+// farcEnv builds the FARC_* environment variables the farc process reads
+// its HTTP/WS/Metrics addresses from (internal/config's loadEnv),
+// appended to os.Environ() so the subprocess still inherits PATH etc.
+func farcEnv(httpPort, wsPort, metricsPort int) []string {
+	return append(os.Environ(),
+		"FARC_HTTP_IP=127.0.0.1",
+		fmt.Sprintf("FARC_HTTP_PORT=%d", httpPort),
+		"FARC_WS_IP=127.0.0.1",
+		fmt.Sprintf("FARC_WS_PORT=%d", wsPort),
+		"FARC_WS_MAX_CONNECTIONS=100",
+		"FARC_METRICS_IP=127.0.0.1",
+		fmt.Sprintf("FARC_METRICS_PORT=%d", metricsPort),
+	)
 }
 
 func writeHlsConfig(t *testing.T, httpPort, farcdHTTPPort, farcdWSPort int, cacheDir string) string {
@@ -245,9 +261,10 @@ func (w *logWriter) Write(p []byte) (int, error) {
 // startProcess launches a real OS process for one of the two binaries.
 // Registers a cleanup that force-kills it if the test ends without an
 // explicit stopProcessGracefully call (e.g. on an earlier failure).
-func startProcess(t *testing.T, name, binPath, configPath string) *exec.Cmd {
+func startProcess(t *testing.T, name, binPath, configPath string, env []string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command(binPath, "-c", configPath)
+	cmd.Env = env
 	cmd.Stdout = &logWriter{t: t, name: name}
 	cmd.Stderr = &logWriter{t: t, name: name}
 	if err := cmd.Start(); err != nil {
@@ -367,16 +384,16 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	farcHTTPPort := freePort(t)
 	farcWSPort := freePort(t)
 	farcMetricsPort := freePort(t)
-	farcConfigPath := writeFarcConfig(t, imgPath, farcHTTPPort, farcWSPort, farcMetricsPort)
+	farcConfigPath := writeFarcConfig(t, imgPath)
 
 	hlsHTTPPort := freePort(t)
 	hlsConfigPath := writeHlsConfig(t, hlsHTTPPort, farcHTTPPort, farcWSPort, t.TempDir())
 
-	farcCmd := startProcess(t, "farc", farcBin, farcConfigPath)
+	farcCmd := startProcess(t, "farc", farcBin, farcConfigPath, farcEnv(farcHTTPPort, farcWSPort, farcMetricsPort))
 	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
 	waitForServer(t, farcAddr)
 
-	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath)
+	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, os.Environ())
 	hlsAddr := fmt.Sprintf("127.0.0.1:%d", hlsHTTPPort)
 	waitForServer(t, hlsAddr)
 

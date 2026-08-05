@@ -17,6 +17,9 @@ import (
 func doByDefault(cmd *cobra.Command, args []string) {
 	_ = godotenv.Load()
 
+	if err := config.EnsureExists(configPath); err != nil {
+		log.Fatalf("farcd: %v", err)
+	}
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalf("farcd: %v", err)

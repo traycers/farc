@@ -45,7 +45,7 @@ Both binaries take a `-c`/`--config` flag pointing at a JSON config file (`inter
 ./hls_server -c hls_server.config.json
 ```
 
-`farc.config.json`'s `storages` list must reference already-initialized storage image files — `farcd` never creates them itself (the operator only needs to size a partition/file up front; `farcd` initializes it via `POST /storages`, e.g. through the web client's Storages page). `farcd` persists a newly created storage back into `farc.config.json` itself, so it's picked up again on the next restart — the config file must be writable by the process (see `docker-compose.yaml`'s `farc` service, which mounts it read-write for exactly this reason).
+`farc`'s HTTP/WS/Metrics server addresses come from the environment instead of the JSON file — `FARC_HTTP_IP`/`FARC_HTTP_PORT`, `FARC_WS_IP`/`FARC_WS_PORT`/`FARC_WS_MAX_CONNECTIONS`, `FARC_METRICS_IP`/`FARC_METRICS_PORT` (`*_IP` defaults to `0.0.0.0`, `*_PORT` is required) — so a working deployment's env (or a `.env` file next to the binary, loaded via `godotenv`) can be committed alongside `docker-compose.yaml` without exposing per-site topology in `farc.config.json`. `farc.config.json` itself no longer ships as a repo file at all: if `-c` points at a path that doesn't exist yet, `farc` creates an empty one (`internal/config.EnsureExists`) rather than failing, so a fresh, empty config file/volume just works. Its `storages` list must reference already-initialized storage image files — `farcd` never creates them itself (the operator only needs to size a partition/file up front; `farcd` initializes it via `POST /storages`, e.g. through the web client's Storages page). `farcd` persists a newly created storage back into `farc.config.json` itself, so it's picked up again on the next restart — the config file must be writable by the process (see `docker-compose.yaml`'s `farc` service, which keeps it on a dedicated `farc_config` volume for exactly this reason).
 
 ## Docker / full stack
 
@@ -53,7 +53,7 @@ Both binaries take a `-c`/`--config` flag pointing at a JSON config file (`inter
 docker compose up --build
 ```
 
-Brings up `farc`, `hls_server`, and `web` (nginx serving the SPA and reverse-proxying `/api/farcd/` and `/api/hls/` to the two backends) on `http://localhost/`. Example configs live under `deploy/`; storage/channel data lives in the `farc_data`/`hls_cache` named volumes.
+Brings up `farc`, `hls_server`, and `web` (nginx serving the SPA and reverse-proxying `/api/farcd/` and `/api/hls/` to the two backends) on `http://localhost/`. `farc.config.json` lives on the `farc_config` volume (bootstrapped empty on first start, then grown via the web client's Storages/Channels pages); `deploy/hls_server.config.json` is still a bind-mounted example config; archive/cache data lives in the `farc_data`/`hls_cache` named volumes.
 
 ## Docs
 

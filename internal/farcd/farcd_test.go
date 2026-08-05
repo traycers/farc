@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -80,6 +81,16 @@ func testConfig(t *testing.T, channels []config.Channel) (*config.Config, string
 		},
 		Channels: channels,
 	}
+	// HTTP/WS/Metrics are env-sourced now (internal/config's package doc) --
+	// set them via t.Setenv so a config.Load(path) later in the same test
+	// (e.g. reloading after a simulated restart) sees the same addresses
+	// cfg above was built with, not the env-unset default of port 0.
+	t.Setenv("FARC_HTTP_IP", cfg.HTTP.IP)
+	t.Setenv("FARC_HTTP_PORT", strconv.Itoa(cfg.HTTP.Port))
+	t.Setenv("FARC_WS_IP", cfg.WS.IP)
+	t.Setenv("FARC_WS_PORT", strconv.Itoa(cfg.WS.Port))
+	t.Setenv("FARC_METRICS_IP", cfg.Metrics.IP)
+	t.Setenv("FARC_METRICS_PORT", strconv.Itoa(cfg.Metrics.Port))
 	path := filepath.Join(t.TempDir(), "farc.config.json")
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatalf("Save: %v", err)
