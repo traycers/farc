@@ -1,0 +1,106 @@
+# e2e stack (PLAN.md Phase 17): a real RTSP source (mediamtx + ffmpeg loop of
+# a user-supplied e2e/media/sample.mp4) feeding two channels concurrently
+# into farcd/hls_server, so a real Playwright/Chromium session can drive
+# hls.js against genuine, decodable media instead of the synthetic byte
+# fixtures every other test in this repo uses. Reuses the root Dockerfiles
+# unchanged -- only the compose wiring and RTSP source are new.
+#
+# Run via `task test/e2e` (taskfile.yaml) or directly:
+#   docker compose -f e2e/docker-compose.e2e.yaml up -d --build
+#   cd e2e && npx playwright test
+#   docker compose -f e2e/docker-compose.e2e.yaml down -v
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+    restart: unless-stopped
+
+  # Publishes e2e/media/sample.mp4 into mediamtx on loop, as two independent
+  # RTSP paths -- separate containers (not mediamtx's own runOnInit hooks)
+  # since the official mediamtx image isn't guaranteed to bundle ffmpeg.
+  ffmpeg-ch1:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    entrypoint: []
+    command: >
+      ffmpeg -re -stream_loop -1 -i /media/sample.mp4
+      -c copy -f rtsp rtsp://mediamtx:8554/ch1
+    volumes:
+      - ./media:/media:ro
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+
+  ffmpeg-ch2:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    entrypoint: []
+    command: >
+      ffmpeg -re -stream_loop -1 -i /media/sample.mp4
+      -c copy -f rtsp rtsp://mediamtx:8554/ch2
+    volumes:
+      - ./media:/media:ro
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+
+  farc:
+    build:
+      context: ..
+      dockerfile: Dockerfile.farc
+    environment:
+      FARC_HTTP_IP: "0.0.0.0"
+      FARC_HTTP_PORT: "8080"
+      FARC_WS_IP: "0.0.0.0"
+      FARC_WS_PORT: "8081"
+      FARC_WS_MAX_CONNECTIONS: "100"
+      FARC_METRICS_IP: "0.0.0.0"
+      FARC_METRICS_PORT: "9090"
+    ports:
+      # exposed so tests/setup.ts (running on the host, outside this
+      # compose network) can call farcd's HTTP API directly to create the
+      # test storage/channels and poll candidates.
+      - "18081:8080"
+    volumes:
+      - farc_config:/etc/farc
+      - farc_data:/data
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+
+  hls_server:
+    build:
+      context: ..
+      dockerfile: Dockerfile.hls_server
+    environment:
+      HLS_SERVER_HTTP_IP: "0.0.0.0"
+      HLS_SERVER_HTTP_PORT: "8090"
+      HLS_SERVER_FARC_HTTP: "http://farc:8080"
+      HLS_SERVER_FARC_WS: "ws://farc:8081"
+      HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
+      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
+      HLS_SERVER_CACHE_QUOTA_BYTES: "1073741824"
+    volumes:
+      - hls_config:/etc/hls_server
+      - hls_cache:/var/cache/hls_server
+    depends_on:
+      - farc
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../web
+    ports:
+      - "18080:80"
+    depends_on:
+      - farc
+      - hls_server
+    restart: unless-stopped
+
+volumes:
+  farc_config:
+  farc_data:
+  hls_config:
+  hls_cache:

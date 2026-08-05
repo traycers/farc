@@ -1,0 +1,11 @@
+# Real RTSP source for the e2e stack (PLAN.md Phase 17 / plan file under
+# .claude/plans). mediamtx itself just accepts RTSP publish + serves it back
+# out -- the actual "loop the user's mp4 file" job is done by the separate
+# ffmpeg-ch1/ffmpeg-ch2 services in docker-compose.e2e.yaml (kept as their
+# own containers rather than mediamtx's runOnInit hooks, since the official
+# mediamtx image isn't guaranteed to bundle ffmpeg).
+rtspAddress: :8554
+
+paths:
+  ch1:
+  ch2:
