@@ -60,7 +60,7 @@ export default function PlayerPage() {
       hlsRef.current = hls
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
-          setError(`Playback failed (${data.details}): this candidate's fblock matched channel ${channel} by mask but has no confirmed video for it, or the server rejected the request.`)
+          setError(`Playback failed (${data.type}/${data.details})`)
           hls.destroy()
         }
       })

@@ -13,7 +13,7 @@ func TestCache_PutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	key := segmentcache.InitKey("s1", [16]byte{1})
+	key := segmentcache.InitKey(1, "s1", [16]byte{1})
 	if err := c.Put(key, []byte("hello")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestCache_GetMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, ok := c.Get(segmentcache.MediaKey("s1", [16]byte{9}, 0)); ok {
+	if _, ok := c.Get(segmentcache.MediaKey(1, "s1", [16]byte{9}, 0)); ok {
 		t.Fatalf("Get() on an empty cache = found, want miss")
 	}
 }
@@ -40,9 +40,9 @@ func TestCache_EvictsLeastRecentlyUsedUnderQuota(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	a := segmentcache.MediaKey("s1", [16]byte{1}, 0)
-	b := segmentcache.MediaKey("s1", [16]byte{2}, 0)
-	d := segmentcache.MediaKey("s1", [16]byte{3}, 0)
+	a := segmentcache.MediaKey(1, "s1", [16]byte{1}, 0)
+	b := segmentcache.MediaKey(1, "s1", [16]byte{2}, 0)
+	d := segmentcache.MediaKey(1, "s1", [16]byte{3}, 0)
 
 	mustPut(t, c, a, 10)
 	mustPut(t, c, b, 10)
@@ -79,8 +79,8 @@ func TestCache_SameKeyFromDifferentWindowsHitsSameEntry(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	uuid := [16]byte{7}
-	keyFromWindowA := segmentcache.MediaKey("s1", uuid, 2)
-	keyFromWindowB := segmentcache.MediaKey("s1", uuid, 2)
+	keyFromWindowA := segmentcache.MediaKey(5, "s1", uuid, 2)
+	keyFromWindowB := segmentcache.MediaKey(5, "s1", uuid, 2)
 	if keyFromWindowA != keyFromWindowB {
 		t.Fatalf("keys from two windows over the same fcontainer differ: %+v != %+v", keyFromWindowA, keyFromWindowB)
 	}
@@ -94,13 +94,45 @@ func TestCache_SameKeyFromDifferentWindowsHitsSameEntry(t *testing.T) {
 	}
 }
 
+func TestCache_DifferentChannelsSameUUIDDoNotCollide(t *testing.T) {
+	// One fcontainer routinely holds several channels' interleaved data at
+	// once (ADR-014) — Channel must be part of the key, or one channel's
+	// player would be served another channel's init/media segment.
+	c, err := segmentcache.New(t.TempDir(), 0)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	uuid := [16]byte{9}
+	channelA := segmentcache.InitKey(1, "s1", uuid)
+	channelB := segmentcache.InitKey(2, "s1", uuid)
+
+	if err := c.Put(channelA, []byte("channel-1-init")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, ok := c.Get(channelB); ok {
+		t.Fatalf("Get(channelB) = hit, want miss (channel 1's cached init segment must not be served for channel 2)")
+	}
+
+	if err := c.Put(channelB, []byte("channel-2-init")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	gotA, ok := c.Get(channelA)
+	if !ok || string(gotA) != "channel-1-init" {
+		t.Fatalf("Get(channelA) = (%q, %v), want (\"channel-1-init\", true)", gotA, ok)
+	}
+	gotB, ok := c.Get(channelB)
+	if !ok || string(gotB) != "channel-2-init" {
+		t.Fatalf("Get(channelB) = (%q, %v), want (\"channel-2-init\", true)", gotB, ok)
+	}
+}
+
 func TestCache_ReloadsExistingFilesFromDisk(t *testing.T) {
 	dir := t.TempDir()
 	c1, err := segmentcache.New(dir, 0)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	key := segmentcache.InitKey("s1", [16]byte{4})
+	key := segmentcache.InitKey(1, "s1", [16]byte{4})
 	if err := c1.Put(key, []byte("persisted")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -124,8 +156,8 @@ func TestCache_ReopenEvictsDownToLoweredQuota(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	older := segmentcache.MediaKey("s1", [16]byte{1}, 0)
-	newer := segmentcache.MediaKey("s1", [16]byte{2}, 0)
+	older := segmentcache.MediaKey(1, "s1", [16]byte{1}, 0)
+	newer := segmentcache.MediaKey(1, "s1", [16]byte{2}, 0)
 	mustPut(t, c1, older, 10)
 	time.Sleep(5 * time.Millisecond) // ensure a distinct, later mtime
 	mustPut(t, c1, newer, 10)

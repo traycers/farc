@@ -149,9 +149,9 @@ func (c *Cache) evictToQuotaLocked() {
 	}
 }
 
-// pathFor maps a Key to its on-disk path: dir/storageID/uuidHex/name.
+// pathFor maps a Key to its on-disk path: dir/channel/storageID/uuidHex/name.
 func (c *Cache) pathFor(k Key) string {
-	return filepath.Join(c.dir, k.StorageID, hex.EncodeToString(k.UUID[:]), fileName(k))
+	return filepath.Join(c.dir, strconv.Itoa(int(k.Channel)), k.StorageID, hex.EncodeToString(k.UUID[:]), fileName(k))
 }
 
 func fileName(k Key) string {
@@ -164,24 +164,28 @@ func fileName(k Key) string {
 // parseKeyFromRelPath is pathFor's inverse, given a path relative to dir.
 func parseKeyFromRelPath(rel string) (Key, bool) {
 	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return Key{}, false
 	}
-	uuidBytes, err := hex.DecodeString(parts[1])
+	channel, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil {
+		return Key{}, false
+	}
+	uuidBytes, err := hex.DecodeString(parts[2])
 	if err != nil || len(uuidBytes) != 16 {
 		return Key{}, false
 	}
 	var uuid [16]byte
 	copy(uuid[:], uuidBytes)
 
-	if parts[2] == "init.mp4" {
-		return InitKey(parts[0], uuid), true
+	if parts[3] == "init.mp4" {
+		return InitKey(uint16(channel), parts[1], uuid), true
 	}
-	n, err := strconv.Atoi(strings.TrimSuffix(parts[2], ".m4s"))
+	n, err := strconv.Atoi(strings.TrimSuffix(parts[3], ".m4s"))
 	if err != nil {
 		return Key{}, false
 	}
-	return MediaKey(parts[0], uuid, n), true
+	return MediaKey(uint16(channel), parts[1], uuid, n), true
 }
 
 // loadExisting rebuilds the in-memory index from whatever's already on disk

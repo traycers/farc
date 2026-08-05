@@ -73,7 +73,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := segmentcache.InitKey(storageID, uuid)
+	key := segmentcache.InitKey(channel, storageID, uuid)
 	if data, hit := s.cache.Get(key); hit {
 		writeMP4(w, data)
 		return
@@ -113,7 +113,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := segmentcache.MediaKey(storageID, uuid, segIndex)
+	key := segmentcache.MediaKey(channel, storageID, uuid, segIndex)
 	if data, hit := s.cache.Get(key); hit {
 		writeSegment(w, data)
 		return
