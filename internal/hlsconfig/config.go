@@ -1,8 +1,12 @@
-// Package hlsconfig implements hls_server's process-wide JSON configuration
-// file, mirroring internal/config's style (strict JSON, stdlib only):
-// hls_server's own player-facing listen address, the farcd endpoints it
-// talks to, the channel -> (farcd endpoint, farcd-side storage id) mapping,
-// and the segment/cache tuning (docs/docs/archive/12-hls-server.md §7).
+// Package hlsconfig implements hls_server's process configuration, split the
+// same way internal/config splits farcd's (see that package's doc comment):
+// server/tuning parameters come from environment variables (HLS_SERVER_
+// HTTP_IP/PORT, HLS_SERVER_TARGET_SEGMENT_DURATION, HLS_SERVER_CACHE_DIR,
+// HLS_SERVER_CACHE_QUOTA_BYTES) so a working deployment's env can be
+// committed to git, while the JSON file (docs/docs/archive/12-hls-server.md
+// §7) keeps only the site-specific data: the farcd endpoints hls_server
+// talks to and the channel -> (farcd endpoint, farcd-side storage id)
+// mapping.
 //
 // Depends on stdlib only, per PLAN.md's package layout table.
 package hlsconfig
@@ -12,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -34,10 +39,11 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Addr is a bare ip:port server address.
+// Addr is a bare ip:port server address. Sourced from env, not the JSON
+// file — see this package's doc comment — hence no json tags.
 type Addr struct {
-	IP   string `json:"ip"`
-	Port int    `json:"port"`
+	IP   string
+	Port int
 }
 
 func (a Addr) String() string { return fmt.Sprintf("%s:%d", a.IP, a.Port) }
@@ -60,27 +66,35 @@ type Channel struct {
 	Storage string `json:"storage"` // farcd's own storage id (its config's storages[].id)
 }
 
-// Config is hls_server's whole process configuration file.
+// Config is hls_server's whole process configuration: HTTP/
+// TargetSegmentDuration/CacheDir/CacheQuotaBytes come from env (loadEnv),
+// Farcds/Channels from the JSON file at path.
 type Config struct {
-	HTTP Addr `json:"http"` // hls_server's own player-facing listen address
+	HTTP Addr `json:"-"` // hls_server's own player-facing listen address
 
 	Farcds   []Farcd   `json:"farcds"`
 	Channels []Channel `json:"channels"`
 
-	TargetSegmentDuration Duration `json:"target_segment_duration"`
-	CacheDir              string   `json:"cache_dir"`
+	TargetSegmentDuration Duration `json:"-"`
+	CacheDir              string   `json:"-"`
 	// CacheQuotaBytes <= 0 means unbounded (internal/segmentcache's own
 	// convention).
-	CacheQuotaBytes int64 `json:"cache_quota_bytes"`
+	CacheQuotaBytes int64 `json:"-"`
 }
 
-// Load reads and validates the config file at path.
+// Load reads HTTP/TargetSegmentDuration/CacheDir/CacheQuotaBytes from the
+// environment and Farcds/Channels from the JSON file at path, then
+// validates the combined result.
 func Load(path string) (*Config, error) {
+	var cfg Config
+	if err := loadEnv(&cfg); err != nil {
+		return nil, err
+	}
+
 	buf, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("hlsconfig: read %s: %w", path, err)
 	}
-	var cfg Config
 	dec := json.NewDecoder(bytes.NewReader(buf))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -90,6 +104,69 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("hlsconfig: %s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// loadEnv populates cfg's env-sourced fields. An unset HLS_SERVER_HTTP_PORT
+// is left as 0 rather than rejected here, so validate's own "port is
+// required" error stays the single place port-missing is reported;
+// HLS_SERVER_TARGET_SEGMENT_DURATION/CACHE_DIR are likewise left zero when
+// unset and caught by validate's existing checks.
+func loadEnv(cfg *Config) error {
+	cfg.HTTP.IP = envOr("HLS_SERVER_HTTP_IP", "0.0.0.0")
+	port, err := envInt("HLS_SERVER_HTTP_PORT")
+	if err != nil {
+		return err
+	}
+	cfg.HTTP.Port = port
+
+	if v := os.Getenv("HLS_SERVER_TARGET_SEGMENT_DURATION"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("hlsconfig: env HLS_SERVER_TARGET_SEGMENT_DURATION=%q: %w", v, err)
+		}
+		cfg.TargetSegmentDuration = Duration(d)
+	}
+
+	cfg.CacheDir = os.Getenv("HLS_SERVER_CACHE_DIR")
+
+	quota, err := envInt64("HLS_SERVER_CACHE_QUOTA_BYTES")
+	if err != nil {
+		return err
+	}
+	cfg.CacheQuotaBytes = quota
+
+	return nil
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envInt(key string) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("hlsconfig: env %s=%q: not an integer: %w", key, v, err)
+	}
+	return n, nil
+}
+
+func envInt64(key string) (int64, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("hlsconfig: env %s=%q: not an integer: %w", key, v, err)
+	}
+	return n, nil
 }
 
 func (cfg *Config) validate() error {

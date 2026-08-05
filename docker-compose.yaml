@@ -32,6 +32,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.hls_server
+    environment:
+      # HTTP address + segment/cache tuning -- deliberately not in
+      # hls_server.config.json (internal/hlsconfig's package doc): env vars
+      # are safe to commit alongside compose, unlike the JSON file's
+      # farcds/channels lists, which stay the site-specific topology data.
+      HLS_SERVER_HTTP_IP: "0.0.0.0"
+      HLS_SERVER_HTTP_PORT: "8090"
+      HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
+      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
+      HLS_SERVER_CACHE_QUOTA_BYTES: "10737418240"
     volumes:
       - ./deploy/hls_server.config.json:/etc/hls_server/hls_server.config.json:ro
       - hls_cache:/var/cache/hls_server

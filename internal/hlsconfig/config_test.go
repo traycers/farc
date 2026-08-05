@@ -7,17 +7,27 @@ import (
 	"time"
 )
 
+// setRequiredEnv sets the env vars loadEnv treats as required (HTTP port,
+// target segment duration, cache dir) to docExample's own values, via
+// t.Setenv so each test gets its own, automatically-restored environment.
+func setRequiredEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("HLS_SERVER_HTTP_PORT", "8090")
+	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "6s")
+	t.Setenv("HLS_SERVER_CACHE_DIR", "/var/cache/hls_server")
+	t.Setenv("HLS_SERVER_CACHE_QUOTA_BYTES", "10737418240")
+}
+
+// docExample is the JSON-backed part of hls_server's config -- http/
+// target_segment_duration/cache_dir/cache_quota_bytes now come from env
+// (setRequiredEnv), not the JSON file.
 const docExample = `{
-  "http": {"ip":"0.0.0.0","port":8090},
   "farcds": [
     {"id":"farcd0","http":"http://10.0.0.1:8080","ws":"ws://10.0.0.1:8081"}
   ],
   "channels": [
     {"id":42,"farcd":"farcd0","storage":"disk0"}
-  ],
-  "target_segment_duration": "6s",
-  "cache_dir": "/var/cache/hls_server",
-  "cache_quota_bytes": 10737418240
+  ]
 }`
 
 func writeConfig(t *testing.T, contents string) string {
@@ -30,6 +40,7 @@ func writeConfig(t *testing.T, contents string) string {
 }
 
 func TestLoad_DocExample(t *testing.T) {
+	setRequiredEnv(t)
 	cfg, err := Load(writeConfig(t, docExample))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -55,12 +66,60 @@ func TestLoad_DocExample(t *testing.T) {
 	}
 }
 
-func TestLoad_ChannelZeroRejected(t *testing.T) {
+func TestLoad_CustomEnvAddr(t *testing.T) {
+	t.Setenv("HLS_SERVER_HTTP_IP", "127.0.0.1")
+	t.Setenv("HLS_SERVER_HTTP_PORT", "18090")
+	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "2s")
+	t.Setenv("HLS_SERVER_CACHE_DIR", "/tmp/cache")
+
+	const doc = `{"farcds": [], "channels": []}`
+	cfg, err := Load(writeConfig(t, doc))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.String() != "127.0.0.1:18090" {
+		t.Fatalf("HTTP = %s", cfg.HTTP)
+	}
+}
+
+func TestLoad_MissingHTTPPortEnvRejected(t *testing.T) {
+	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "6s")
+	t.Setenv("HLS_SERVER_CACHE_DIR", "/tmp/cache")
+
+	const doc = `{"farcds": [], "channels": []}`
+	if _, err := Load(writeConfig(t, doc)); err == nil {
+		t.Fatalf("Load: want error for missing HLS_SERVER_HTTP_PORT, got nil")
+	}
+}
+
+func TestLoad_InvalidPortEnvRejected(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("HLS_SERVER_HTTP_PORT", "not-a-number")
+
+	const doc = `{"farcds": [], "channels": []}`
+	if _, err := Load(writeConfig(t, doc)); err == nil {
+		t.Fatalf("Load: want error for non-integer HLS_SERVER_HTTP_PORT, got nil")
+	}
+}
+
+func TestLoad_HTTPSectionInJSONRejected(t *testing.T) {
+	setRequiredEnv(t)
+	// http moved to env -- its JSON key must now be rejected by
+	// DisallowUnknownFields, not silently ignored.
 	const doc = `{
   "http": {"ip":"0.0.0.0","port":8090},
+  "farcds": [], "channels": []
+}`
+	if _, err := Load(writeConfig(t, doc)); err == nil {
+		t.Fatalf("Load: want error for stale http section in JSON, got nil")
+	}
+}
+
+func TestLoad_ChannelZeroRejected(t *testing.T) {
+	setRequiredEnv(t)
+	const doc = `{
   "farcds": [{"id":"farcd0","http":"http://h","ws":"ws://h"}],
-  "channels": [{"id":0,"farcd":"farcd0","storage":"disk0"}],
-  "target_segment_duration": "6s", "cache_dir": "/tmp/cache"
+  "channels": [{"id":0,"farcd":"farcd0","storage":"disk0"}]
 }`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
 		t.Fatalf("Load: want error for channel id 0, got nil")
@@ -68,11 +127,10 @@ func TestLoad_ChannelZeroRejected(t *testing.T) {
 }
 
 func TestLoad_UnknownFarcdReferenceRejected(t *testing.T) {
+	setRequiredEnv(t)
 	const doc = `{
-  "http": {"ip":"0.0.0.0","port":8090},
   "farcds": [{"id":"farcd0","http":"http://h","ws":"ws://h"}],
-  "channels": [{"id":1,"farcd":"nope","storage":"disk0"}],
-  "target_segment_duration": "6s", "cache_dir": "/tmp/cache"
+  "channels": [{"id":1,"farcd":"nope","storage":"disk0"}]
 }`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
 		t.Fatalf("Load: want error for unknown farcd reference, got nil")
@@ -80,11 +138,10 @@ func TestLoad_UnknownFarcdReferenceRejected(t *testing.T) {
 }
 
 func TestLoad_DuplicateFarcdIDRejected(t *testing.T) {
+	setRequiredEnv(t)
 	const doc = `{
-  "http": {"ip":"0.0.0.0","port":8090},
   "farcds": [{"id":"farcd0","http":"http://h1","ws":"ws://h1"}, {"id":"farcd0","http":"http://h2","ws":"ws://h2"}],
-  "channels": [],
-  "target_segment_duration": "6s", "cache_dir": "/tmp/cache"
+  "channels": []
 }`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
 		t.Fatalf("Load: want error for duplicate farcd id, got nil")
@@ -92,66 +149,57 @@ func TestLoad_DuplicateFarcdIDRejected(t *testing.T) {
 }
 
 func TestLoad_DuplicateChannelIDRejected(t *testing.T) {
+	setRequiredEnv(t)
 	const doc = `{
-  "http": {"ip":"0.0.0.0","port":8090},
   "farcds": [{"id":"farcd0","http":"http://h","ws":"ws://h"}],
-  "channels": [{"id":1,"farcd":"farcd0","storage":"disk0"}, {"id":1,"farcd":"farcd0","storage":"disk1"}],
-  "target_segment_duration": "6s", "cache_dir": "/tmp/cache"
+  "channels": [{"id":1,"farcd":"farcd0","storage":"disk0"}, {"id":1,"farcd":"farcd0","storage":"disk1"}]
 }`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
 		t.Fatalf("Load: want error for duplicate channel id, got nil")
 	}
 }
 
-func TestLoad_MissingTargetSegmentDurationRejected(t *testing.T) {
+func TestLoad_MissingTargetSegmentDurationEnvRejected(t *testing.T) {
+	t.Setenv("HLS_SERVER_HTTP_PORT", "8090")
+	t.Setenv("HLS_SERVER_CACHE_DIR", "/tmp/cache")
+
 	const doc = `{
-  "http": {"ip":"0.0.0.0","port":8090},
   "farcds": [{"id":"farcd0","http":"http://h","ws":"ws://h"}],
-  "channels": [{"id":1,"farcd":"farcd0","storage":"disk0"}],
-  "cache_dir": "/tmp/cache"
+  "channels": [{"id":1,"farcd":"farcd0","storage":"disk0"}]
 }`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
-		t.Fatalf("Load: want error for missing target_segment_duration, got nil")
+		t.Fatalf("Load: want error for missing HLS_SERVER_TARGET_SEGMENT_DURATION, got nil")
 	}
 }
 
-func TestLoad_MissingCacheDirRejected(t *testing.T) {
+func TestLoad_MissingCacheDirEnvRejected(t *testing.T) {
+	t.Setenv("HLS_SERVER_HTTP_PORT", "8090")
+	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "6s")
+
 	const doc = `{
-  "http": {"ip":"0.0.0.0","port":8090},
   "farcds": [{"id":"farcd0","http":"http://h","ws":"ws://h"}],
-  "channels": [{"id":1,"farcd":"farcd0","storage":"disk0"}],
-  "target_segment_duration": "6s"
+  "channels": [{"id":1,"farcd":"farcd0","storage":"disk0"}]
 }`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
-		t.Fatalf("Load: want error for missing cache_dir, got nil")
+		t.Fatalf("Load: want error for missing HLS_SERVER_CACHE_DIR, got nil")
 	}
 }
 
-func TestLoad_InvalidDuration(t *testing.T) {
-	const doc = `{
-  "http": {"ip":"0.0.0.0","port":8090},
-  "farcds": [{"id":"farcd0","http":"http://h","ws":"ws://h"}],
-  "channels": [],
-  "target_segment_duration": "6 seconds", "cache_dir": "/tmp/cache"
-}`
+func TestLoad_InvalidDurationEnvRejected(t *testing.T) {
+	t.Setenv("HLS_SERVER_HTTP_PORT", "8090")
+	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "6 seconds")
+	t.Setenv("HLS_SERVER_CACHE_DIR", "/tmp/cache")
+
+	const doc = `{"farcds": [], "channels": []}`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
 		t.Fatalf("Load: want error for invalid duration string, got nil")
 	}
 }
 
-func TestLoad_MissingHTTPPortRejected(t *testing.T) {
-	const doc = `{
-  "farcds": [{"id":"farcd0","http":"http://h","ws":"ws://h"}],
-  "channels": [],
-  "target_segment_duration": "6s", "cache_dir": "/tmp/cache"
-}`
-	if _, err := Load(writeConfig(t, doc)); err == nil {
-		t.Fatalf("Load: want error for missing http.port, got nil")
-	}
-}
-
 func TestLoad_MissingFile(t *testing.T) {
+	setRequiredEnv(t)
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.json")); err == nil {
 		t.Fatalf("Load: want error for missing file, got nil")
 	}
 }
+
