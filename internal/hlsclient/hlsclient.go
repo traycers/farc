@@ -203,6 +203,38 @@ func (c *Client) GetTOC(ctx context.Context, storageID string, uuid [16]byte) (*
 	return columns, nil
 }
 
+// wireChannelInfo mirrors internal/api's channelInfo -- only the fields
+// this package's own ChannelInfo actually needs (hls_server's
+// reconciliation cares which channel is on which storage, nothing else
+// GET /channels reports).
+type wireChannelInfo struct {
+	Channel uint16 `json:"channel"`
+	Storage string `json:"storage"`
+}
+
+// ChannelInfo is one GET /channels result entry: a channel number and the
+// farcd-side storage id it's currently assigned to.
+type ChannelInfo struct {
+	Channel uint16
+	Storage string
+}
+
+// ListChannels implements GET /channels -- every channel currently running
+// on farcd, across all its storages. internal/hlsd uses this to reconcile
+// its own served-channel set against farcd's live one, at startup and on
+// every reconnect to the channel-lifecycle event stream (ADR-021).
+func (c *Client) ListChannels(ctx context.Context) ([]ChannelInfo, error) {
+	var wire []wireChannelInfo
+	if err := c.getJSON(ctx, "/channels", &wire); err != nil {
+		return nil, err
+	}
+	out := make([]ChannelInfo, len(wire))
+	for i, w := range wire {
+		out[i] = ChannelInfo{Channel: w.Channel, Storage: w.Storage}
+	}
+	return out, nil
+}
+
 // ReadRanges implements GET .../fcontainers/{uuid}?ranges=off:len,... and
 // splits the concatenated response back into per-range byte slices, relying
 // on internal/api's handleReadContent writing bufs in the caller's original

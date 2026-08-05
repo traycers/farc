@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"traycers/farc/fblock"
 	"traycers/farc/internal/api"
 	"traycers/farc/internal/fcontainer"
+	"traycers/farc/internal/ingest"
 	"traycers/farc/internal/ioengine"
 	"traycers/farc/internal/storage"
 	"traycers/farc/mediatree"
@@ -123,22 +125,79 @@ func writeVideoFcontainer(t *testing.T, unit *storage.Unit, channel uint32, fram
 	return uuid
 }
 
+// farcdTestServer is a real HttpApiServer/EventPushServer pair (the same
+// types the real farcd process wires), plus the StorageRegistry/
+// IngestManager backing it, so a test can register/remove a channel after
+// the fixture has already started (addChannel/removeChannel below) --
+// internal/hlsd now reconciles its served-channel set against this
+// fixture's real GET /channels and /events/ws (ADR-021), so a channel needs
+// to actually exist here to be servable, not just in hls_server's own seed
+// config.
 type farcdTestServer struct {
 	*httptest.Server
 	wsURL string
+	reg   *api.StorageRegistry
+	ing   *ingest.IngestManager
+	push  *api.EventPushServer
 }
 
-func newFarcdTestServer(t *testing.T, unit *storage.Unit) *farcdTestServer {
+// newFarcdTestServer registers "s1" (backed by unit) and, for each of
+// channels, an already-running channel on it (via addChannel below) before
+// starting the HTTP/WS listener.
+func newFarcdTestServer(t *testing.T, unit *storage.Unit, channels ...uint16) *farcdTestServer {
 	t.Helper()
 	reg := api.NewStorageRegistry()
 	if err := reg.Register("s1", unit, "/dev/null"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	ing := ingest.NewIngestManager()
 	push := api.NewEventPushServer(reg)
-	srv := api.NewHttpApiServer(reg, nil, push)
+	srv := api.NewHttpApiServer(reg, ing, push)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return &farcdTestServer{Server: ts, wsURL: "ws" + strings.TrimPrefix(ts.URL, "http")}
+	fts := &farcdTestServer{Server: ts, wsURL: "ws" + strings.TrimPrefix(ts.URL, "http"), reg: reg, ing: ing, push: push}
+	for _, ch := range channels {
+		addChannel(t, fts, ch, "s1", unit)
+	}
+	return fts
+}
+
+// addChannel registers a new channel directly on farcd's IngestManager and
+// publishes api.EventChannelCreated, mirroring internal/farcd.go's
+// persistNewChannel (minus the HTTP layer and config persistence, which
+// this fixture models neither of). AddChannel starts the ingest loop
+// asynchronously and returns immediately regardless of whether its
+// (deliberately unreachable) RTSP URL ever connects (PLAN.md) -- these
+// tests only need GET /channels/the WS event to reflect the channel, never
+// real capture.
+func addChannel(t *testing.T, farcd *farcdTestServer, id uint16, storageID string, unit *storage.Unit) {
+	t.Helper()
+	cfg := ingest.ChannelConfig{
+		Channel:      id,
+		RTSPURL:      "rtsp://127.0.0.1:1/none",
+		StorageID:    storageID,
+		Recorder:     unit,
+		PolicyType:   ingest.PolicyContinuous,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	if err := farcd.ing.AddChannel(cfg); err != nil {
+		t.Fatalf("AddChannel(%d): %v", id, err)
+	}
+	t.Cleanup(func() { _, _ = farcd.ing.RemoveChannel(id) })
+	farcd.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: id, Storage: storageID})
+}
+
+// removeChannel removes a channel from farcd's IngestManager and publishes
+// api.EventChannelRemoved, mirroring internal/farcd.go's
+// persistRemovedChannel -- for tests exercising hls_server's reaction to a
+// channel disappearing.
+func removeChannel(t *testing.T, farcd *farcdTestServer, id uint16, storageID string) {
+	t.Helper()
+	if _, err := farcd.ing.RemoveChannel(id); err != nil {
+		t.Fatalf("RemoveChannel(%d): %v", id, err)
+	}
+	farcd.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelRemoved, Channel: id, Storage: storageID})
 }
 
 func freePort(t *testing.T) int {

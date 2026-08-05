@@ -107,3 +107,14 @@ func (idx *Index) Channel(channel uint16) *ChannelIndex {
 	}
 	return ci
 }
+
+// Remove drops channel's entire ChannelIndex, so a later Channel(channel)
+// call starts empty rather than serving stale records left over from
+// before a live storage reassignment or removal (internal/hlsd's
+// reconciliation, ADR-021) -- previously only a full process restart threw
+// the whole Index away, which always cleared this implicitly.
+func (idx *Index) Remove(channel uint16) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	delete(idx.channels, channel)
+}

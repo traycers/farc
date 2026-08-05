@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"traycers/farc/internal/api"
 	"traycers/farc/internal/hlsclient"
 	"traycers/farc/internal/storage"
 	"traycers/farc/mediatree"
@@ -75,6 +76,58 @@ func TestClient_GetTOCAndReadRanges(t *testing.T) {
 	}
 	if len(bufs) != 1 || string(bufs[0]) != "frame-a" {
 		t.Fatalf("bufs = %v, want [\"frame-a\"]", bufs)
+	}
+}
+
+func TestClient_ListChannels(t *testing.T) {
+	unit := newTestUnit(t)
+	ts := newTestServer(t, unit, 1, 2)
+	client := hlsclient.New(ts.URL, ts.wsURL)
+
+	channels, err := client.ListChannels(context.Background())
+	if err != nil {
+		t.Fatalf("ListChannels: %v", err)
+	}
+	if len(channels) != 2 {
+		t.Fatalf("channels = %+v, want exactly 2", channels)
+	}
+	byID := make(map[uint16]string, len(channels))
+	for _, c := range channels {
+		byID[c.Channel] = c.Storage
+	}
+	if byID[1] != "s1" || byID[2] != "s1" {
+		t.Fatalf("channels = %+v, want {1:s1, 2:s1}", channels)
+	}
+}
+
+// TestClient_Subscribe_GlobalChannelEvents mirrors TestClient_Subscribe for
+// a global (storageID == "") subscription -- channel-lifecycle events
+// rather than a per-storage fblock event.
+func TestClient_Subscribe_GlobalChannelEvents(t *testing.T) {
+	unit := newTestUnit(t)
+	ts := newTestServer(t, unit)
+	client := hlsclient.New(ts.URL, ts.wsURL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	events, err := client.Subscribe(ctx, "", []string{hlsclient.EventChannelCreated}, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	ts.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: 7, Storage: "disk0"})
+
+	select {
+	case ev, ok := <-events:
+		if !ok {
+			t.Fatalf("events channel closed unexpectedly")
+		}
+		if ev.Name != hlsclient.EventChannelCreated || ev.Channel != 7 || ev.Storage != "disk0" {
+			t.Fatalf("event = %+v, want channel.created for channel 7/disk0", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for push event")
 	}
 }
 

@@ -188,8 +188,13 @@ func buildBinary(t *testing.T, pkgDir, out string) {
 // writeFarcConfig writes only the JSON-backed part of farcd's config
 // (storages/channels) -- HTTP/WS/Metrics are env-sourced now
 // (internal/config's package doc), so the caller passes those via
-// farcEnv/startProcess instead.
-func writeFarcConfig(t *testing.T, imgPath string) string {
+// farcEnv/startProcess instead. channelsJSON is the raw "channels" array
+// literal: since hls_server now reconciles its served-channel set against
+// farcd's live GET /channels (ADR-021), a channel only "exists" for
+// hls_server's purposes if it's actually registered here (or created later
+// via a real POST /channels) -- writing a fcontainer directly into the
+// storage image (prepareStorageImage) is not enough by itself anymore.
+func writeFarcConfig(t *testing.T, imgPath string, channelsJSON string) string {
 	t.Helper()
 	imgJSON, err := json.Marshal(imgPath)
 	if err != nil {
@@ -197,8 +202,8 @@ func writeFarcConfig(t *testing.T, imgPath string) string {
 	}
 	doc := fmt.Sprintf(`{
   "storages": [{"id":"disk0","path":%s}],
-  "channels": []
-}`, imgJSON)
+  "channels": %s
+}`, imgJSON, channelsJSON)
 	path := filepath.Join(t.TempDir(), "farc.config.json")
 	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		t.Fatalf("write farc config: %v", err)
@@ -224,10 +229,13 @@ func farcEnv(httpPort, wsPort, metricsPort int) []string {
 // writeHlsConfig writes only the JSON-backed part of hls_server's config
 // (channels) -- HTTP/Farcd/TargetSegmentDuration/CacheDir/CacheQuotaBytes
 // are env-sourced now (internal/hlsconfig's package doc), so the caller
-// passes those via hlsEnv/startProcess instead.
-func writeHlsConfig(t *testing.T) string {
+// passes those via hlsEnv/startProcess instead. channelsJSON is the raw
+// "channels" array literal (e.g. `[{"id":1,"storage":"disk0"}]` or `[]`) --
+// ADR-021 makes this only a bootstrap seed, so tests exercising live
+// reconciliation can start from an empty one.
+func writeHlsConfig(t *testing.T, channelsJSON string) string {
 	t.Helper()
-	const doc = `{"channels": [{"id":1,"storage":"disk0"}]}`
+	doc := fmt.Sprintf(`{"channels": %s}`, channelsJSON)
 	path := filepath.Join(t.TempDir(), "hls_server.config.json")
 	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		t.Fatalf("write hls_server config: %v", err)
@@ -392,10 +400,15 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	farcHTTPPort := freePort(t)
 	farcWSPort := freePort(t)
 	farcMetricsPort := freePort(t)
-	farcConfigPath := writeFarcConfig(t, imgPath)
+	// The RTSP URL is deliberately unreachable garbage -- ChannelIngest
+	// starts asynchronously and returns immediately regardless of whether it
+	// ever connects (PLAN.md); this test only needs GET /channels to report
+	// channel 1 so hls_server's reconciliation (ADR-021) confirms it, not
+	// real capture (the fcontainer is seeded directly, prepareStorageImage).
+	farcConfigPath := writeFarcConfig(t, imgPath, `[{"id":1,"rtsp_url":"rtsp://127.0.0.1:1/none","storage":"disk0","capture_policy":{"type":"continuous"}}]`)
 
 	hlsHTTPPort := freePort(t)
-	hlsConfigPath := writeHlsConfig(t)
+	hlsConfigPath := writeHlsConfig(t, `[{"id":1,"storage":"disk0"}]`)
 
 	farcCmd := startProcess(t, "farc", farcBin, farcConfigPath, farcEnv(farcHTTPPort, farcWSPort, farcMetricsPort))
 	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
@@ -456,5 +469,96 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	stopProcessGracefully(t, "farc", farcCmd)
 	fetchAndVerify()
 
+	stopProcessGracefully(t, "hls_server", hlsCmd)
+}
+
+// TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart is
+// ADR-021's real-process end-to-end proof: both binaries start with zero
+// channels configured, a channel is created on the running farc process via
+// its real HTTP API (POST /channels -- IngestManager.AddChannel starts the
+// ingest loop asynchronously and returns immediately regardless of RTSP
+// reachability, so the deliberately unreachable rtsp_url below is fine),
+// and the already-running hls_server process picks it up live -- no
+// restart -- because the storage image was already seeded with a
+// fcontainer for channel 1 (prepareStorageImage), so reconciliation's
+// bootstrap has real data to find the moment it starts tracking the
+// channel. DELETE /channels/1 then confirms hls_server stops serving it,
+// again without a restart.
+func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *testing.T) {
+	farcBin := filepath.Join(t.TempDir(), "farc")
+	buildBinary(t, "../cmd/farc", farcBin)
+	hlsBin := filepath.Join(t.TempDir(), "hls_server")
+	buildBinary(t, "../cmd/hls_server", hlsBin)
+
+	imgPath, begin, end, _ := prepareStorageImage(t)
+
+	farcHTTPPort := freePort(t)
+	farcWSPort := freePort(t)
+	farcMetricsPort := freePort(t)
+	farcConfigPath := writeFarcConfig(t, imgPath, `[]`) // channel 1 is created live, via POST /channels below
+
+	hlsHTTPPort := freePort(t)
+	hlsConfigPath := writeHlsConfig(t, `[]`) // no seed -- reconciliation must discover the channel live
+
+	farcCmd := startProcess(t, "farc", farcBin, farcConfigPath, farcEnv(farcHTTPPort, farcWSPort, farcMetricsPort))
+	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
+	waitForServer(t, farcAddr)
+
+	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, farcHTTPPort, farcWSPort, t.TempDir()))
+	hlsAddr := fmt.Sprintf("127.0.0.1:%d", hlsHTTPPort)
+	waitForServer(t, hlsAddr)
+
+	playlistURL := fmt.Sprintf("http://%s/channels/1/hls/%d/%d/playlist.m3u8", hlsAddr, begin, end)
+
+	status, body := mustGet(t, playlistURL)
+	if status != http.StatusNotFound || !strings.Contains(string(body), "not configured") {
+		t.Fatalf("playlist before channel creation: status=%d body=%s, want 404 \"not configured\"", status, body)
+	}
+
+	createBody, err := json.Marshal(map[string]any{
+		"id": 1, "rtsp_url": "rtsp://127.0.0.1:1/none", "storage": "disk0",
+		"capture_policy": map[string]any{"type": "continuous"},
+	})
+	if err != nil {
+		t.Fatalf("marshal create-channel request: %v", err)
+	}
+	resp, err := http.Post("http://"+farcAddr+"/channels", "application/json", bytes.NewReader(createBody))
+	if err != nil {
+		t.Fatalf("POST /channels: %v", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /channels status = %d, want 201 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	waitForPlaylist(t, playlistURL) // hls_server picked the channel up live, no restart
+
+	req, err := http.NewRequest(http.MethodDelete, "http://"+farcAddr+"/channels/1", nil)
+	if err != nil {
+		t.Fatalf("build DELETE request: %v", err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /channels/1: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE /channels/1 status = %d, want 204", resp.StatusCode)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, body = mustGet(t, playlistURL)
+		if status == http.StatusNotFound && strings.Contains(string(body), "not configured") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if status != http.StatusNotFound || !strings.Contains(string(body), "not configured") {
+		t.Fatalf("playlist never became \"not configured\" again after removal: status=%d body=%s", status, body)
+	}
+
+	stopProcessGracefully(t, "farc", farcCmd)
 	stopProcessGracefully(t, "hls_server", hlsCmd)
 }

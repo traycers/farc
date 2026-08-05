@@ -49,6 +49,37 @@ func TestChannelIndex_InsertRemoveRecords(t *testing.T) {
 	}
 }
 
+// TestIndex_Remove_ClearsChannel is ADR-021's direct regression test:
+// without Remove, records from a channel's old storage would linger
+// forever after a live reassignment (internal/hlsd's reconciliation), and a
+// later Insert under the new storage could be shadowed by stale data with
+// the same UUID.
+func TestIndex_Remove_ClearsChannel(t *testing.T) {
+	idx := tocindex.NewIndex()
+	uuid := [16]byte{1}
+	idx.Channel(1).Insert(tocindex.Record{UUID: uuid, StorageID: "disk0", Begin: 100, End: 200})
+
+	idx.Remove(1)
+
+	if _, ok := idx.Channel(1).Lookup(uuid); ok {
+		t.Fatalf("Lookup(uuid) after Remove(1) = found, want not found")
+	}
+	if len(idx.Channel(1).All()) != 0 {
+		t.Fatalf("Channel(1).All() after Remove(1) = %+v, want empty", idx.Channel(1).All())
+	}
+
+	// A later Insert under a different storage must not be shadowed by
+	// anything left over from before Remove.
+	idx.Channel(1).Insert(tocindex.Record{UUID: uuid, StorageID: "disk1", Begin: 300, End: 400})
+	rec, ok := idx.Channel(1).Lookup(uuid)
+	if !ok {
+		t.Fatalf("Lookup(uuid) after re-Insert = not found")
+	}
+	if rec.StorageID != "disk1" || rec.Begin != 300 {
+		t.Fatalf("rec = %+v, want the new disk1 record, not stale disk0 data", rec)
+	}
+}
+
 func TestIndex_ChannelIsPerChannelAndReused(t *testing.T) {
 	idx := tocindex.NewIndex()
 	a1 := idx.Channel(1)

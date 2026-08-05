@@ -1,9 +1,12 @@
 // Package hlsd is hls_server's process wiring, mirroring internal/farcd's
 // own New/SetLogger/Run/shutdown orchestrator shape: load hlsconfig ->
-// build the one hlsclient.Client for cfg.Farcd (ADR-020) -> open the
-// disk segment cache -> start one tocindex.EventSubscriber per configured
-// channel (ADR-018) -> serve internal/hlsapi on one listener -> graceful
-// shutdown on context cancellation.
+// build the one hlsclient.Client for cfg.Farcd (ADR-020) -> open the disk
+// segment cache -> run a reconciliation loop that starts one
+// tocindex.EventSubscriber per channel farcd currently has (ADR-018,
+// ADR-021) and keeps that set converged to farcd's live GET /channels list
+// for the process's whole lifetime, no restart needed -> serve
+// internal/hlsapi on one listener -> graceful shutdown on context
+// cancellation.
 package hlsd
 
 import (
@@ -25,11 +28,33 @@ import (
 // own constant.
 const shutdownTimeout = 10 * time.Second
 
+// reconcileRetryDelay bounds how soon reconcile retries after a failed
+// GET /channels call or a dropped channel-lifecycle WS connection —
+// matches tocindex.EventSubscriber's own fixed retry backoff.
+const reconcileRetryDelay = 2 * time.Second
+
+// channelRecheckInterval bounds how stale a *dropped* channel-lifecycle
+// event (api.EventPushServer.PublishChannelEvent's drop-if-full policy) can
+// leave this process while its WS connection stays healthy — reconcileOnce
+// re-lists GET /channels on this cadence in addition to reacting to events.
+const channelRecheckInterval = 30 * time.Second
+
+// trackedSub is one channel's live subscription bookkeeping: the
+// tocindex.EventSubscriber's own cancelable context and the storage it's
+// currently reading from (so a later re-list can tell a genuine storage
+// move from a no-op).
+type trackedSub struct {
+	cancel  context.CancelFunc
+	storage string
+}
+
 // Hlsd is one running hls_server process.
 type Hlsd struct {
-	index *tocindex.Index
-	subs  []*tocindex.EventSubscriber
-	cache *segmentcache.Cache
+	index     *tocindex.Index
+	client    *hlsclient.Client
+	apiServer *hlsapi.Server
+	cache     *segmentcache.Cache
+	seed      []hlsconfig.Channel
 
 	httpSrv *http.Server
 
@@ -38,15 +63,18 @@ type Hlsd struct {
 
 // New builds the one hlsclient.Client for cfg.Farcd, opens the disk cache,
 // and wires internal/hlsapi's handler, but starts nothing yet — call Run to
-// actually start serving and subscribing. cfg is assumed already validated
-// by hlsconfig.Load.
+// actually start serving, subscribing, and reconciling. cfg is assumed
+// already validated by hlsconfig.Load. cfg.Channels is only a bootstrap
+// seed (ADR-021): Run's reconcile loop converges the actually-served
+// channel set to farcd's live GET /channels list, which becomes
+// authoritative from the first reconciliation pass onward.
 func New(cfg *hlsconfig.Config) (*Hlsd, error) {
 	h := &Hlsd{
-		index: tocindex.NewIndex(),
-		logf:  func(string, ...any) {},
+		index:  tocindex.NewIndex(),
+		client: hlsclient.New(cfg.Farcd.HTTP, cfg.Farcd.WS),
+		seed:   cfg.Channels,
+		logf:   func(string, ...any) {},
 	}
-
-	client := hlsclient.New(cfg.Farcd.HTTP, cfg.Farcd.WS)
 
 	cache, err := segmentcache.New(cfg.CacheDir, cfg.CacheQuotaBytes)
 	if err != nil {
@@ -54,42 +82,37 @@ func New(cfg *hlsconfig.Config) (*Hlsd, error) {
 	}
 	h.cache = cache
 
-	channels := make(map[uint16]bool, len(cfg.Channels))
+	initial := make(map[uint16]bool, len(cfg.Channels))
 	for _, cc := range cfg.Channels {
-		channels[cc.ID] = true
-		h.subs = append(h.subs, tocindex.NewEventSubscriber(client, cc.Storage, []uint16{cc.ID}, h.index))
+		initial[cc.ID] = true
 	}
-
-	apiServer := hlsapi.New(h.index, client, channels, h.cache, cfg.TargetSegmentDuration.Duration())
-	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler()}
+	h.apiServer = hlsapi.New(h.index, h.client, initial, h.cache, cfg.TargetSegmentDuration.Duration())
+	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: h.apiServer.Handler()}
 
 	return h, nil
 }
 
-// SetLogger sets a callback for non-fatal diagnostics, forwarded to every
-// EventSubscriber and used for this package's own shutdown logging.
+// SetLogger sets a callback for non-fatal diagnostics, used by this
+// package's own shutdown/reconciliation logging and passed to every
+// tocindex.EventSubscriber started after this call — Run's seed loop and
+// reconcile's startChannel both construct subscribers only after SetLogger
+// has already been called (cmd/hls_server always calls SetLogger before
+// Run).
 func (h *Hlsd) SetLogger(logf func(format string, args ...any)) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	h.logf = logf
-	for _, s := range h.subs {
-		s.SetLogger(logf)
-	}
 }
 
-// Run starts every EventSubscriber and the HTTP server, then blocks until
-// ctx is cancelled, at which point it shuts everything down gracefully and
-// returns. The listener failing to start (e.g. port already in use) also
-// triggers shutdown and is returned as this call's error.
+// Run starts the reconciliation loop (which itself starts one
+// tocindex.EventSubscriber per currently-known channel and keeps that set
+// converged to farcd's live channel list) and the HTTP server, then blocks
+// until ctx is cancelled, at which point it shuts everything down
+// gracefully and returns. The listener failing to start (e.g. port already
+// in use) also triggers shutdown and is returned as this call's error.
 func (h *Hlsd) Run(ctx context.Context) error {
-	for _, s := range h.subs {
-		go func(s *tocindex.EventSubscriber) {
-			if err := s.Run(ctx); err != nil {
-				h.logf("hlsd: event subscriber: %v", err)
-			}
-		}(s)
-	}
+	go h.reconcile(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -116,4 +139,150 @@ func (h *Hlsd) shutdown() {
 	if err := h.httpSrv.Shutdown(shutdownCtx); err != nil {
 		h.logf("hlsd: server shutdown: %v", err)
 	}
+}
+
+// reconcile owns tracked for the entire process lifetime — it is the only
+// goroutine that ever touches it, by construction (the seed loop below,
+// applyRemoteList's diff-and-act, and the event-consuming select in
+// reconcileOnce all run sequentially, one after another, inside this same
+// goroutine), so tracked needs no mutex at all. This is deliberate, not an
+// oversight: internal/hlsapi.Server's channelSet and internal/tocindex.Index
+// are genuinely read concurrently by per-request HTTP handler goroutines
+// while this goroutine writes them, and those are exactly the two places
+// that do carry a mutex.
+func (h *Hlsd) reconcile(ctx context.Context) {
+	tracked := make(map[uint16]*trackedSub, len(h.seed))
+	for _, cc := range h.seed {
+		h.startChannel(ctx, tracked, cc.ID, cc.Storage)
+	}
+
+	for {
+		if err := h.reconcileOnce(ctx, tracked); err != nil {
+			h.logf("hlsd: channel reconciliation: %v", err)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(reconcileRetryDelay):
+		}
+	}
+}
+
+// reconcileOnce does a full GET /channels diff (the startup/reconnect
+// catch-up — run every time a connection to the channel-lifecycle stream
+// is (re)established, mirroring tocindex.EventSubscriber's own
+// bootstrap-on-reconnect convention, ADR-016), then subscribes to
+// channel.created/channel.removed (ADR-021) and processes them until the
+// connection drops, periodically re-listing in the meantime to bound how
+// stale a dropped event (EventPushServer.PublishChannelEvent's
+// drop-if-full policy) can leave this process. A periodic re-list landing
+// a moment before or after a live event for the same channel is benign and
+// self-healing either way — startChannel/stopChannel are idempotent
+// against tracked's current state.
+func (h *Hlsd) reconcileOnce(ctx context.Context, tracked map[uint16]*trackedSub) error {
+	if err := h.applyRemoteList(ctx, tracked); err != nil {
+		return fmt.Errorf("initial channel list: %w", err)
+	}
+
+	events, err := h.client.Subscribe(ctx, "", []string{hlsclient.EventChannelCreated, hlsclient.EventChannelRemoved}, nil)
+	if err != nil {
+		return fmt.Errorf("subscribe to channel events: %w", err)
+	}
+
+	ticker := time.NewTicker(channelRecheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := h.applyRemoteList(ctx, tracked); err != nil {
+				h.logf("hlsd: periodic channel list recheck: %v", err)
+			}
+		case ev, ok := <-events:
+			if !ok {
+				return nil // disconnected -- reconcile's outer loop retries after backoff
+			}
+			switch ev.Name {
+			case hlsclient.EventChannelCreated:
+				h.startChannel(ctx, tracked, ev.Channel, ev.Storage)
+			case hlsclient.EventChannelRemoved:
+				h.stopChannel(tracked, ev.Channel)
+			}
+		}
+	}
+}
+
+// applyRemoteList fetches farcd's live channel list and converges tracked
+// to match: anything remote but untracked (or tracked under a different
+// storage) is started, anything tracked but no longer remote is stopped. A
+// channel already tracked under the same storage is left alone.
+func (h *Hlsd) applyRemoteList(ctx context.Context, tracked map[uint16]*trackedSub) error {
+	remote, err := h.client.ListChannels(ctx)
+	if err != nil {
+		return err
+	}
+	remoteByID := make(map[uint16]string, len(remote))
+	for _, c := range remote {
+		remoteByID[c.Channel] = c.Storage
+	}
+
+	for id, storage := range remoteByID {
+		if sub, ok := tracked[id]; !ok || sub.storage != storage {
+			h.startChannel(ctx, tracked, id, storage)
+		}
+	}
+	for id := range tracked {
+		if _, ok := remoteByID[id]; !ok {
+			h.stopChannel(tracked, id)
+		}
+	}
+	return nil
+}
+
+// startChannel is idempotent against tracked's current state: a no-op if
+// id is already tracked under the same storage; if tracked under a
+// different storage, the old subscription is torn down first (via
+// stopChannel, which also clears the stale tocindex.Index entries) before
+// starting the new one.
+func (h *Hlsd) startChannel(ctx context.Context, tracked map[uint16]*trackedSub, id uint16, storage string) {
+	if existing, ok := tracked[id]; ok {
+		if existing.storage == storage {
+			return
+		}
+		h.stopChannel(tracked, id)
+	}
+
+	subCtx, cancel := context.WithCancel(ctx)
+	sub := tocindex.NewEventSubscriber(h.client, storage, []uint16{id}, h.index)
+	sub.SetLogger(h.logf)
+	tracked[id] = &trackedSub{cancel: cancel, storage: storage}
+	h.apiServer.AddChannel(id)
+
+	go func() {
+		if err := sub.Run(subCtx); err != nil {
+			h.logf("hlsd: event subscriber for channel %d: %v", id, err)
+		}
+	}()
+}
+
+// stopChannel is a no-op if id isn't tracked. Otherwise it cancels the
+// subscriber's context, drops it from tracked, stops serving the channel
+// over HTTP, and clears its tocindex.Index entries — without this last
+// step, records from a channel's old storage (before a live removal or
+// reassignment) would linger forever and could be served against the wrong
+// storage, something only a full process restart used to prevent (ADR-021).
+func (h *Hlsd) stopChannel(tracked map[uint16]*trackedSub, id uint16) {
+	sub, ok := tracked[id]
+	if !ok {
+		return
+	}
+	sub.cancel()
+	delete(tracked, id)
+	h.apiServer.RemoveChannel(id)
+	h.index.Remove(id)
 }

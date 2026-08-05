@@ -66,6 +66,12 @@ type Farcd struct {
 	configPath string
 	cfgMu      sync.Mutex
 
+	// push publishes channel.created/channel.removed (api.ChannelEvent) to
+	// any "global" /events/ws subscriber -- internal/hlsd's reconciliation
+	// loop is the intended consumer, kept in sync with farcd's live channel
+	// list without polling GET /channels on every change.
+	push *api.EventPushServer
+
 	httpSrv    *http.Server
 	wsSrv      *http.Server
 	metricsSrv *http.Server
@@ -111,10 +117,14 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	}
 
 	push := api.NewEventPushServer(f.registry)
+	f.push = push
 	// push is deliberately not passed into NewHttpApiServer here: WS gets
 	// its own listener on cfg.WS below, matching §2.1's "разные серверы"
 	// (see api.go's own package doc for the alternative, single-port mode
 	// that combined routing still supports for tests/simple deployments).
+	// f.push above is still how persistNewChannel/Updated/Removed reach it
+	// to call PublishChannelEvent, entirely independent of which listener
+	// serves its ServeHTTP.
 	apiServer := api.NewHttpApiServer(f.registry, f.ing, nil)
 	apiServer.SetOnStorageCreated(f.persistNewStorage)
 	apiServer.SetOnChannelCreated(f.persistNewChannel)
@@ -251,7 +261,9 @@ func specToConfigChannel(spec api.ChannelSpec) config.Channel {
 // be gone on the next restart, same gap POST /storages had before
 // persistNewStorage (PLAN.md's Gap 3, now also closed for channels). If
 // Save fails, the in-memory append is rolled back so cfg still matches
-// what's on disk.
+// what's on disk. On success, publishes api.EventChannelCreated so any
+// "global" /events/ws subscriber (internal/hlsd's reconciliation loop) picks
+// the channel up without waiting for its next GET /channels re-list.
 func (f *Farcd) persistNewChannel(spec api.ChannelSpec) error {
 	f.cfgMu.Lock()
 	defer f.cfgMu.Unlock()
@@ -266,11 +278,18 @@ func (f *Farcd) persistNewChannel(spec api.ChannelSpec) error {
 		f.cfg.Channels = f.cfg.Channels[:len(f.cfg.Channels)-1]
 		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
 	}
+	f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: spec.ID, Storage: spec.Storage})
 	return nil
 }
 
 // persistUpdatedChannel replaces an existing channel's config entry
 // (PUT /channels/{id}), rolling back to the previous entry if Save fails.
+// On success, if the channel's storage actually changed, publishes
+// api.EventChannelRemoved (old storage) then api.EventChannelCreated (new
+// storage) -- there's no separate "channel updated" event; a storage move
+// is exactly the same transition a remove-then-create would produce, and a
+// PUT that only edits rtsp_url/capture_policy (storage unchanged) publishes
+// nothing, since nothing a subscriber cares about actually moved.
 func (f *Farcd) persistUpdatedChannel(spec api.ChannelSpec) error {
 	f.cfgMu.Lock()
 	defer f.cfgMu.Unlock()
@@ -291,11 +310,16 @@ func (f *Farcd) persistUpdatedChannel(spec api.ChannelSpec) error {
 		f.cfg.Channels[idx] = old
 		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
 	}
+	if old.Storage != spec.Storage {
+		f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelRemoved, Channel: spec.ID, Storage: old.Storage})
+		f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelCreated, Channel: spec.ID, Storage: spec.Storage})
+	}
 	return nil
 }
 
 // persistRemovedChannel removes a channel's config entry (DELETE
-// /channels/{id}), restoring it at the same index if Save fails.
+// /channels/{id}), restoring it at the same index if Save fails. On
+// success, publishes api.EventChannelRemoved (see persistNewChannel).
 func (f *Farcd) persistRemovedChannel(id uint16) error {
 	f.cfgMu.Lock()
 	defer f.cfgMu.Unlock()
@@ -320,6 +344,7 @@ func (f *Farcd) persistRemovedChannel(id uint16) error {
 		f.cfg.Channels = restored
 		return fmt.Errorf("farcd: persist removal of channel %d from %s: %w", id, f.configPath, err)
 	}
+	f.push.PublishChannelEvent(api.ChannelEvent{Name: api.EventChannelRemoved, Channel: id, Storage: removed.Storage})
 	return nil
 }
 

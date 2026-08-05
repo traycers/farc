@@ -52,6 +52,56 @@ func mustGet(t *testing.T, url string) (int, []byte) {
 	return resp.StatusCode, body
 }
 
+// TestServer_AddChannel_ThenRemoveChannel exercises the mutable channel set
+// (ADR-021): a channel absent at construction is a clean 404 "not
+// configured" (including from handlePlaylist, the one handler that used to
+// skip this check), AddChannel flips it to servable without rebuilding the
+// Server, and RemoveChannel flips it back.
+func TestServer_AddChannel_ThenRemoveChannel(t *testing.T) {
+	unit := newTestUnit(t)
+	videoFrames := []videoFrameSpec{{Time: 0, Kind: mediatree.FrameKindI, NAL: []byte{0x65, 0xaa, 0xbb}}}
+	uuid := writeAVFcontainer(t, unit, 1, videoFrames, nil, 0, 1_000_000, 1000)
+
+	farcd := newFarcdTestServer(t, unit)
+	client := hlsclient.New(farcd.URL, farcd.wsURL)
+
+	columns, err := client.GetTOC(context.Background(), "s1", uuid)
+	if err != nil {
+		t.Fatalf("GetTOC: %v", err)
+	}
+	idx := tocindex.NewIndex()
+	idx.Channel(1).Insert(tocindex.Record{UUID: uuid, StorageID: "s1", Begin: 0, End: 1_000_000, Columns: columns})
+
+	cache, err := segmentcache.New(t.TempDir(), 0)
+	if err != nil {
+		t.Fatalf("segmentcache.New: %v", err)
+	}
+	const targetDur = 10 * time.Millisecond
+
+	srv := hlsapi.New(idx, client, map[uint16]bool{}, cache, targetDur)
+	hls := httptest.NewServer(srv.Handler())
+	defer hls.Close()
+
+	playlistURL := hls.URL + "/channels/1/hls/0/1000000/playlist.m3u8"
+
+	status, body := mustGet(t, playlistURL)
+	if status != http.StatusNotFound || !strings.Contains(string(body), "not configured") {
+		t.Fatalf("playlist before AddChannel: status=%d body=%s, want 404 \"not configured\"", status, body)
+	}
+
+	srv.AddChannel(1)
+	status, body = mustGet(t, playlistURL)
+	if status != http.StatusOK {
+		t.Fatalf("playlist after AddChannel: status=%d body=%s, want 200", status, body)
+	}
+
+	srv.RemoveChannel(1)
+	status, body = mustGet(t, playlistURL)
+	if status != http.StatusNotFound || !strings.Contains(string(body), "not configured") {
+		t.Fatalf("playlist after RemoveChannel: status=%d body=%s, want 404 \"not configured\"", status, body)
+	}
+}
+
 func TestServer_PlaylistThenSegments_ThenServedFromCacheAfterFarcdGone(t *testing.T) {
 	unit := newTestUnit(t)
 	videoFrames := []videoFrameSpec{

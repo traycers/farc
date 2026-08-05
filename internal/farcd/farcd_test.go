@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"traycers/farc/fblock"
 	"traycers/farc/internal/config"
 	"traycers/farc/internal/ingest"
@@ -96,6 +98,257 @@ func testConfig(t *testing.T, channels []config.Channel) (*config.Config, string
 		t.Fatalf("Save: %v", err)
 	}
 	return cfg, path
+}
+
+// testConfigTwoStorages is like testConfig but registers two storages
+// (disk0, disk1) -- used by tests exercising a channel moving between
+// storages via PUT /channels/{id}.
+func testConfigTwoStorages(t *testing.T, channels []config.Channel) (*config.Config, string) {
+	t.Helper()
+	cfg := &config.Config{
+		HTTP:    config.Addr{IP: "127.0.0.1", Port: freePort(t)},
+		WS:      config.WSAddr{IP: "127.0.0.1", Port: freePort(t)},
+		Metrics: config.Addr{IP: "127.0.0.1", Port: freePort(t)},
+		Storages: []config.Storage{
+			{ID: "disk0", Path: newInitializedStorageImage(t)},
+			{ID: "disk1", Path: newInitializedStorageImage(t)},
+		},
+		Channels: channels,
+	}
+	t.Setenv("FARC_HTTP_IP", cfg.HTTP.IP)
+	t.Setenv("FARC_HTTP_PORT", strconv.Itoa(cfg.HTTP.Port))
+	t.Setenv("FARC_WS_IP", cfg.WS.IP)
+	t.Setenv("FARC_WS_PORT", strconv.Itoa(cfg.WS.Port))
+	t.Setenv("FARC_METRICS_IP", cfg.Metrics.IP)
+	t.Setenv("FARC_METRICS_PORT", strconv.Itoa(cfg.Metrics.Port))
+	path := filepath.Join(t.TempDir(), "farc.config.json")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	return cfg, path
+}
+
+// channelEventMsg is the subset of internal/api's pushMessage a global
+// (channel-lifecycle) subscription cares about.
+type channelEventMsg struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Channel uint16 `json:"channel"`
+	Storage string `json:"storage"`
+}
+
+// dialGlobalEvents dials wsAddr's /events/ws and sends a global
+// (Storage: "") subscribe message -- the same subscription
+// internal/hlsd's reconciliation loop uses.
+func dialGlobalEvents(t *testing.T, wsAddr string) *websocket.Conn {
+	t.Helper()
+	url := "ws://" + wsAddr + "/events/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial %s: %v", url, err)
+	}
+	if err := conn.WriteJSON(map[string]any{"storage": ""}); err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+func TestRun_CreateChannelOverHTTP_PublishesGlobalChannelCreatedEvent(t *testing.T) {
+	cfg, path := testConfig(t, nil)
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+	waitForServer(t, cfg.WS.String())
+
+	conn := dialGlobalEvents(t, cfg.WS.String())
+	time.Sleep(50 * time.Millisecond) // let the subscribe register before publishing
+
+	body := map[string]any{
+		"id": 7, "rtsp_url": "rtsp://127.0.0.1:1/cam", "storage": "disk0",
+		"capture_policy": map[string]any{"type": "continuous"},
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	resp, err := http.Post("http://"+cfg.HTTP.String()+"/channels", "application/json", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("POST /channels: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg channelEventMsg
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read channel event: %v", err)
+	}
+	if msg.Name != "channel.created" || msg.Channel != 7 || msg.Storage != "disk0" {
+		t.Fatalf("msg = %+v", msg)
+	}
+}
+
+func TestRun_RemoveChannelOverHTTP_PublishesGlobalChannelRemovedEvent(t *testing.T) {
+	cfg, path := testConfig(t, []config.Channel{
+		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
+	})
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+	waitForServer(t, cfg.WS.String())
+
+	conn := dialGlobalEvents(t, cfg.WS.String())
+	time.Sleep(50 * time.Millisecond)
+
+	req, err := http.NewRequest(http.MethodDelete, "http://"+cfg.HTTP.String()+"/channels/7", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /channels/7: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg channelEventMsg
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read channel event: %v", err)
+	}
+	if msg.Name != "channel.removed" || msg.Channel != 7 || msg.Storage != "disk0" {
+		t.Fatalf("msg = %+v", msg)
+	}
+}
+
+func TestRun_UpdateChannelOverHTTP_StorageChanged_PublishesRemovedThenCreated(t *testing.T) {
+	cfg, path := testConfigTwoStorages(t, []config.Channel{
+		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
+	})
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+	waitForServer(t, cfg.WS.String())
+
+	conn := dialGlobalEvents(t, cfg.WS.String())
+	time.Sleep(50 * time.Millisecond)
+
+	body := map[string]any{
+		"rtsp_url": "rtsp://127.0.0.1:1/cam", "storage": "disk1",
+		"capture_policy": map[string]any{"type": "continuous"},
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPut, "http://"+cfg.HTTP.String()+"/channels/7", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /channels/7: %v", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var removed, created channelEventMsg
+	if err := conn.ReadJSON(&removed); err != nil {
+		t.Fatalf("read first channel event: %v", err)
+	}
+	if err := conn.ReadJSON(&created); err != nil {
+		t.Fatalf("read second channel event: %v", err)
+	}
+	if removed.Name != "channel.removed" || removed.Channel != 7 || removed.Storage != "disk0" {
+		t.Fatalf("first event = %+v, want channel.removed for disk0", removed)
+	}
+	if created.Name != "channel.created" || created.Channel != 7 || created.Storage != "disk1" {
+		t.Fatalf("second event = %+v, want channel.created for disk1", created)
+	}
+}
+
+// TestRun_UpdateChannelOverHTTP_StorageUnchanged_PublishesNoGlobalEvent
+// regression-tests the "don't churn hls_server's index for a no-op storage
+// change" behavior: a PUT that only edits rtsp_url/capture_policy, leaving
+// storage the same, must not publish anything.
+func TestRun_UpdateChannelOverHTTP_StorageUnchanged_PublishesNoGlobalEvent(t *testing.T) {
+	cfg, path := testConfig(t, []config.Channel{
+		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
+	})
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+	waitForServer(t, cfg.WS.String())
+
+	conn := dialGlobalEvents(t, cfg.WS.String())
+	time.Sleep(50 * time.Millisecond)
+
+	body := map[string]any{
+		"rtsp_url": "rtsp://127.0.0.1:1/cam-edited", "storage": "disk0",
+		"capture_policy": map[string]any{"type": "continuous"},
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPut, "http://"+cfg.HTTP.String()+"/channels/7", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /channels/7: %v", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	var msg channelEventMsg
+	if err := conn.ReadJSON(&msg); err == nil {
+		t.Fatalf("unexpectedly received a channel event for a same-storage update: %+v", msg)
+	}
 }
 
 func TestNew_OpensStorageAndBuildsChannelConfig(t *testing.T) {

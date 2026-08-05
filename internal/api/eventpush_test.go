@@ -3,6 +3,7 @@ package api
 import (
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,4 +153,169 @@ func TestEventPushServer_UnknownStorage(t *testing.T) {
 	if msg["error"] == "" {
 		t.Fatalf("msg = %+v, want an error field", msg)
 	}
+}
+
+// TestEventPushServer_ServesGlobalSubscription confirms Storage == "" is
+// treated as a global (channel-lifecycle-only) subscription, not an
+// "unknown storage" error the way any other non-empty, unregistered id is
+// (TestEventPushServer_UnknownStorage).
+func TestEventPushServer_ServesGlobalSubscription(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	if err := conn.WriteJSON(subscribeMessage{Storage: ""}); err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: 7, Storage: "disk0"})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg pushMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read push: %v", err)
+	}
+	if msg.Type != "event" || msg.Name != EventChannelCreated || msg.Channel != 7 || msg.Storage != "disk0" {
+		t.Fatalf("msg = %+v", msg)
+	}
+}
+
+// TestEventPushServer_GlobalFiltersByWant mirrors
+// TestEventPushServer_FiltersByWant for the global subscription path.
+func TestEventPushServer_GlobalFiltersByWant(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	if err := conn.WriteJSON(subscribeMessage{Storage: "", Want: []string{EventChannelRemoved}}); err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: 1, Storage: "disk0"}) // filtered out
+	push.PublishChannelEvent(ChannelEvent{Name: EventChannelRemoved, Channel: 2, Storage: "disk0"})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg pushMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read push: %v", err)
+	}
+	if msg.Name != EventChannelRemoved || msg.Channel != 2 {
+		t.Fatalf("msg = %+v, want only the removed event to survive the want filter", msg)
+	}
+}
+
+// TestEventPushServer_GlobalDropsWhenSubscriberBufferFull confirms
+// PublishChannelEvent never blocks the caller (a full subscriber buffer is
+// dropped, not queued). It deliberately doesn't try to keep reading from
+// the same connection afterward: gorilla/websocket connections aren't
+// guaranteed usable after a read has timed out, and "does one specific
+// slow reader eventually catch up" isn't a property this policy promises
+// anyway -- what matters is that publishing never blocks, and that the
+// server as a whole keeps working afterward (checked via a fresh
+// connection).
+func TestEventPushServer_GlobalDropsWhenSubscriberBufferFull(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	if err := conn.WriteJSON(subscribeMessage{Storage: ""}); err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Flood well past the 64-buffer without reading anything -- must not
+	// block regardless of how many of these get dropped.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: uint16(i % 65536), Storage: "disk0"})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("PublishChannelEvent blocked with a full subscriber buffer")
+	}
+	conn.Close()
+
+	// The server as a whole must still work: a fresh connection sees a
+	// fresh publish.
+	conn2 := dialWS(t, srv)
+	if err := conn2.WriteJSON(subscribeMessage{Storage: ""}); err != nil {
+		t.Fatalf("write subscribe (second conn): %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	push.PublishChannelEvent(ChannelEvent{Name: EventChannelRemoved, Channel: 999, Storage: "disk0"})
+	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg pushMessage
+	if err := conn2.ReadJSON(&msg); err != nil {
+		t.Fatalf("server unusable after overflowing an earlier subscriber: %v", err)
+	}
+	if msg.Channel != 999 {
+		t.Fatalf("msg = %+v, want channel 999", msg)
+	}
+}
+
+// TestEventPushServer_ConcurrentPublishAndConnect drives concurrent
+// PublishChannelEvent calls against concurrently connecting/disconnecting
+// global subscribers -- meant to be run with -race.
+func TestEventPushServer_ConcurrentPublishAndConnect(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				push.PublishChannelEvent(ChannelEvent{Name: EventChannelCreated, Channel: 1, Storage: "disk0"})
+			}
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				conn := dialWS(t, srv)
+				_ = conn.WriteJSON(subscribeMessage{Storage: ""})
+				conn.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
+				var msg pushMessage
+				_ = conn.ReadJSON(&msg)
+				conn.Close()
+			}
+		}()
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+	wg.Wait()
 }

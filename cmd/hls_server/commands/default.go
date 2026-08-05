@@ -34,7 +34,7 @@ func doByDefault(cmd *cobra.Command, args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("hls_server: starting (http=%s, farcd=%s, %d channels)",
+	log.Printf("hls_server: starting (http=%s, farcd=%s, %d seed channels -- reconciled live against farcd afterward, ADR-021)",
 		cfg.HTTP, cfg.Farcd.HTTP, len(cfg.Channels))
 	if err := h.Run(ctx); err != nil {
 		log.Printf("hls_server: exited with error: %v", err)

@@ -29,6 +29,11 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.channels.Has(channel) {
+		writeError(w, http.StatusNotFound, fmt.Errorf("hlsapi: channel %d is not configured", channel))
+		return
+	}
+
 	m3u8, err := playlist.Build(s.index, channel, t1, t2, s.targetDur)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
@@ -74,7 +79,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.channels[channel] {
+	if !s.channels.Has(channel) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("hlsapi: channel %d is not configured", channel))
 		return
 	}
@@ -114,7 +119,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.channels[channel] {
+	if !s.channels.Has(channel) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("hlsapi: channel %d is not configured", channel))
 		return
 	}

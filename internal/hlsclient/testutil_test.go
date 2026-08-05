@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"traycers/farc/fblock"
 	"traycers/farc/internal/api"
 	"traycers/farc/internal/fcontainer"
+	"traycers/farc/internal/ingest"
 	"traycers/farc/internal/ioengine"
 	"traycers/farc/internal/storage"
 	"traycers/farc/mediatree"
@@ -93,21 +95,43 @@ func writeVideoFrame(t *testing.T, unit *storage.Unit, channels []uint16, channe
 // testServer wraps an httptest.Server exposing a single registered storage
 // ("s1" backed by unit) over both HttpApiServer routes and EventPushServer's
 // WS route, mirroring how farcd's own three-server model exposes them (here
-// combined onto one httptest server for test simplicity).
+// combined onto one httptest server for test simplicity). push is exposed
+// so a test can call PublishChannelEvent directly, mirroring what
+// internal/farcd's persist hooks do in the real process.
 type testServer struct {
 	*httptest.Server
 	wsURL string
+	push  *api.EventPushServer
 }
 
-func newTestServer(t *testing.T, unit *storage.Unit) *testServer {
+// newTestServer registers "s1" (backed by unit) and, for each of channels,
+// an already-running channel on it -- so GET /channels reports it, for
+// tests exercising Client.ListChannels. The RTSP URL is unreachable garbage
+// on purpose (PLAN.md: AddChannel starts the ingest loop asynchronously and
+// returns immediately regardless of reachability); these tests only care
+// about GET /channels reporting the channel.
+func newTestServer(t *testing.T, unit *storage.Unit, channels ...uint16) *testServer {
 	t.Helper()
 	reg := api.NewStorageRegistry()
 	if err := reg.Register("s1", unit, "/dev/null"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	var ing *ingest.IngestManager
+	if len(channels) > 0 {
+		ing = ingest.NewIngestManager()
+		for _, ch := range channels {
+			cfg := ingest.ChannelConfig{
+				Channel: ch, RTSPURL: "rtsp://127.0.0.1:1/none", StorageID: "s1", Recorder: unit,
+				PolicyType: ingest.PolicyContinuous, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
+			}
+			if err := ing.AddChannel(cfg); err != nil {
+				t.Fatalf("AddChannel(%d): %v", ch, err)
+			}
+		}
+	}
 	push := api.NewEventPushServer(reg)
-	srv := api.NewHttpApiServer(reg, nil, push)
+	srv := api.NewHttpApiServer(reg, ing, push)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return &testServer{Server: ts, wsURL: "ws" + strings.TrimPrefix(ts.URL, "http")}
+	return &testServer{Server: ts, wsURL: "ws" + strings.TrimPrefix(ts.URL, "http"), push: push}
 }

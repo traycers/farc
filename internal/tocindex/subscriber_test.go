@@ -75,3 +75,57 @@ func TestEventSubscriber_BootstrapThenLive(t *testing.T) {
 		t.Fatalf("All() = %+v, want exactly 4 records (uuid1 evicted)", all)
 	}
 }
+
+// TestEventSubscriber_Run_ReturnsNilOnContextCancel locks in the invariant
+// internal/hlsd's stopChannel relies on: cancelling Run's context always
+// makes it return nil, never a logged "subscriber failed" error, whether
+// that happens before Run does any work at all or while it's already deep
+// in its live follow loop.
+func TestEventSubscriber_Run_ReturnsNilOnContextCancel(t *testing.T) {
+	t.Run("cancelled before Run starts", func(t *testing.T) {
+		unit := newTestUnit(t)
+		ts := newTestServer(t, unit)
+		client := hlsclient.New(ts.URL, ts.wsURL)
+		idx := tocindex.NewIndex()
+		sub := tocindex.NewEventSubscriber(client, "s1", []uint16{9}, idx)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- sub.Run(ctx) }()
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Run returned %v, want nil", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Run did not return after an already-cancelled context")
+		}
+	})
+
+	t.Run("cancelled during live follow", func(t *testing.T) {
+		unit := newTestUnit(t)
+		ts := newTestServer(t, unit)
+		client := hlsclient.New(ts.URL, ts.wsURL)
+		idx := tocindex.NewIndex()
+		sub := tocindex.NewEventSubscriber(client, "s1", []uint16{9}, idx)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() { errCh <- sub.Run(ctx) }()
+
+		// Give bootstrap+subscribe time to complete and settle into follow.
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Run returned %v, want nil", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Run did not return after cancellation during follow")
+		}
+	})
+}

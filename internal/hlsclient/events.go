@@ -7,16 +7,31 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// EventChannelCreated/EventChannelRemoved mirror internal/api's
+// EventChannelCreated/EventChannelRemoved -- the Name values a "global"
+// subscription (storageID == "" in Subscribe below) delivers, duplicated
+// here rather than imported since internal/api's constants aren't meant to
+// be depended on directly (see this package's own doc comment).
+const (
+	EventChannelCreated = "channel.created"
+	EventChannelRemoved = "channel.removed"
+)
+
 // Event is a decoded WS push frame — a typed mirror of internal/api's
-// pushMessage, with UUID decoded from hex into [16]byte.
+// pushMessage, with UUID decoded from hex into [16]byte. Channel/Storage
+// are only set for a global subscription's channel-lifecycle events
+// (Name == EventChannelCreated/EventChannelRemoved); Index/UUID/Severity/
+// Reason are only set for a per-storage fblock event.
 type Event struct {
 	Type     string
-	Name     string // storage.Event* name, e.g. "fblock.write.completed"
+	Name     string // storage.Event* name, e.g. "fblock.write.completed", or EventChannelCreated/Removed
 	Index    uint32
 	UUID     [16]byte
 	HasUUID  bool
 	Severity string
 	Reason   string
+	Channel  uint16
+	Storage  string
 }
 
 // wireSubscribeMessage mirrors internal/api's subscribeMessage.
@@ -34,6 +49,8 @@ type wirePushMessage struct {
 	UUID     string `json:"uuid,omitempty"`
 	Severity string `json:"severity,omitempty"`
 	Reason   string `json:"reason,omitempty"`
+	Channel  uint16 `json:"channel,omitempty"`
+	Storage  string `json:"storage,omitempty"`
 }
 
 // Subscribe dials farcd's EventPushServer (GET /events/ws), sends the one
@@ -41,6 +58,10 @@ type wirePushMessage struct {
 // decoded events until ctx is cancelled or the connection ends. want and
 // channels behave exactly as internal/api/eventpush.go's
 // matchesSubscription — empty means no filter on that dimension.
+// storageID == "" is a "global" subscription (ADR-021): no per-storage
+// fblock filtering, just channel-lifecycle events (EventChannelCreated/
+// EventChannelRemoved) regardless of channels' filtering, which only
+// applies to a per-storage subscription.
 //
 // The returned channel closes when the connection ends for any reason
 // (ctx cancellation, server close, network error); this package does not
@@ -72,7 +93,7 @@ func (c *Client) Subscribe(ctx context.Context, storageID string, want []string,
 			if err := conn.ReadJSON(&msg); err != nil {
 				return
 			}
-			ev := Event{Type: msg.Type, Name: msg.Name, Index: msg.Index, Severity: msg.Severity, Reason: msg.Reason}
+			ev := Event{Type: msg.Type, Name: msg.Name, Index: msg.Index, Severity: msg.Severity, Reason: msg.Reason, Channel: msg.Channel, Storage: msg.Storage}
 			if msg.UUID != "" {
 				if uuid, err := decodeHexUUID(msg.UUID); err == nil {
 					ev.UUID = uuid
