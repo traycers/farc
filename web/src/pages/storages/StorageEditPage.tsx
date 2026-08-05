@@ -9,6 +9,20 @@ function formatGiB(bytes: number): string {
   return (bytes / GiB).toFixed(2)
 }
 
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+
+// Auto-scaling 1024-based formatter for a single fblock size (typically MiB-GiB),
+// distinct from formatGiB above which is for whole-storage totals.
+function formatBytes(bytes: number): string {
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return `${unitIndex === 0 ? value : value.toFixed(2)} ${BYTE_UNITS[unitIndex]}`
+}
+
 export default function StorageEditPage() {
   const { id } = useParams<{ id: string }>()
   const [storage, setStorage] = useState<StorageInfo | null | undefined>(undefined) // undefined = loading
@@ -83,10 +97,8 @@ export default function StorageEditPage() {
             <dd className="col-sm-9">{storage.path}</dd>
             <dt className="col-sm-3">size</dt>
             <dd className="col-sm-9">{formatGiB(storage.geometry.FblockSize * storage.geometry.N)} GiB</dd>
-            <dt className="col-sm-3">fblock size × N</dt>
-            <dd className="col-sm-9">
-              {storage.geometry.FblockSize} × {storage.geometry.N}
-            </dd>
+            <dt className="col-sm-3">fblock size</dt>
+            <dd className="col-sm-9">{formatBytes(storage.geometry.FblockSize)}</dd>
             <dt className="col-sm-3">max channels</dt>
             <dd className="col-sm-9">{storage.geometry.MaxChannels}</dd>
           </dl>

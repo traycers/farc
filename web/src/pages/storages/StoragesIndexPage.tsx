@@ -10,6 +10,20 @@ function formatGiB(bytes: number): string {
   return (bytes / GiB).toFixed(2)
 }
 
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+
+// Auto-scaling 1024-based formatter for a single fblock size (typically MiB-GiB),
+// distinct from formatGiB above which is for whole-storage totals.
+function formatBytes(bytes: number): string {
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return `${unitIndex === 0 ? value : value.toFixed(2)} ${BYTE_UNITS[unitIndex]}`
+}
+
 export default function StoragesIndexPage() {
   const [storages, setStorages] = useState<StorageInfo[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -37,7 +51,7 @@ export default function StoragesIndexPage() {
               <th>id</th>
               <th>path</th>
               <th>size</th>
-              <th>fblock size × N</th>
+              <th>fblock size</th>
               <th>max channels</th>
               <th></th>
             </tr>
@@ -48,9 +62,7 @@ export default function StoragesIndexPage() {
                 <td>{s.id}</td>
                 <td>{s.path}</td>
                 <td>{formatGiB(s.geometry.FblockSize * s.geometry.N)} GiB</td>
-                <td>
-                  {s.geometry.FblockSize} × {s.geometry.N}
-                </td>
+                <td>{formatBytes(s.geometry.FblockSize)}</td>
                 <td>{s.geometry.MaxChannels}</td>
                 <td>
                   <Link to={`${s.id}/edit`} className="btn btn-outline-secondary btn-sm">
