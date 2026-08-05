@@ -19,8 +19,14 @@ export const CHANNEL_2 = 2
 // CANDIDATE_POLL_TIMEOUT_MS below if fblocks never reach Ready in time.
 const FCHUNK_SIZE = 4 * 1024 * 1024 // 4 MiB -- the documented fchunk floor
 const FBLOCK_SIZE = 32 * 1024 * 1024 // 32 MiB -- 8 fchunks per fblock
-const CANDIDATE_POLL_TIMEOUT_MS = 90_000
+const CANDIDATE_POLL_TIMEOUT_MS = 60_000
 const CANDIDATE_POLL_INTERVAL_MS = 2_000
+// How long to let each channel accumulate real frames in memory before
+// StopRecording flushes them -- comfortably under FBLOCK_SIZE at the
+// sample video's bitrate (~490 KB/s for the 3.9 Mbps H.264 + 15 kbps AAC
+// track ffprobe reported), leaving headroom before the ~65s point where a
+// single fcontainer would exceed FBLOCK_SIZE's 32 MiB.
+const RECORD_WINDOW_MS = 10_000
 
 async function ok(res: Response): Promise<Response> {
   if (!res.ok) {
@@ -71,6 +77,27 @@ async function createChannel(channel: number, rtspPath: string): Promise<void> {
   await ok(res)
 }
 
+// A 'continuous' channel does not record automatically on creation -- this
+// mirrors the "start recording" button ChannelsIndexPage.tsx renders for
+// exactly this policy type (POST /channels/{id}/recording/start).
+async function startRecording(channel: number): Promise<void> {
+  const res = await fetch(`${FARC_URL}/channels/${channel}/recording/start`, { method: 'POST' })
+  await ok(res)
+}
+
+// CapturePolicy.HandleFrame (internal/ingest/policy.go) only queues frames
+// into an in-memory Filler while recording -- for the 'continuous' policy
+// there is no time/size-based auto-rotation (Tick is a no-op for it), so
+// nothing ever reaches disk until StopRecording explicitly closes the
+// segment and hands it to storage.Unit.WriteFcontainer. One WriteFcontainer
+// call writes exactly one whole fblock (internal/storage/recorder.go), so
+// this must run before RECORD_WINDOW_MS produces more content than
+// FBLOCK_SIZE can hold.
+async function stopRecording(channel: number): Promise<void> {
+  const res = await fetch(`${FARC_URL}/channels/${channel}/recording/stop`, { method: 'POST' })
+  await ok(res)
+}
+
 type Candidate = { index: number; uuid: string; begin: number; end: number }
 
 async function hasConfirmedCandidate(channel: number): Promise<boolean> {
@@ -116,5 +143,10 @@ export async function setupStack(): Promise<void> {
   await createStorage()
   await createChannel(CHANNEL_1, 'ch1')
   await createChannel(CHANNEL_2, 'ch2')
+  await startRecording(CHANNEL_1)
+  await startRecording(CHANNEL_2)
+  await sleep(RECORD_WINDOW_MS)
+  await stopRecording(CHANNEL_1)
+  await stopRecording(CHANNEL_2)
   await waitForRecordings()
 }

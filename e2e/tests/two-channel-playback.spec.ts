@@ -12,14 +12,44 @@ test.beforeAll(async () => {
   await setupStack()
 })
 
+// PlayerPage.tsx's default "to" is `now`, but <input type="datetime-local">
+// only has minute granularity -- re-parsing its displayed value truncates
+// seconds to :00, which can retroactively exclude a candidate whose actual
+// end falls later within that same minute (exactly what happened against
+// this harness's short, just-recorded segments). Bump "to" a few minutes
+// into the future -- read from the browser's own field so it shares
+// whatever timezone the page itself is rendering in, rather than assuming
+// Node's clock/timezone lines up with the browser's.
+async function bumpSearchWindowIntoFuture(page: Page): Promise<void> {
+  // exact: true -- getByLabel's default substring match makes plain 'to'
+  // match the "storage" select too ("s-TO-rage").
+  const toField = page.getByLabel('to', { exact: true })
+  const current = await toField.inputValue()
+  const d = new Date(current)
+  d.setMinutes(d.getMinutes() + 5)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  await toField.fill(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
+}
+
 async function searchAndPlay(page: Page, channel: number): Promise<void> {
   await page.goto('/player')
   await page.getByLabel('storage').selectOption(STORAGE_ID)
   await page.getByLabel('channel id').fill(String(channel))
+  await bumpSearchWindowIntoFuture(page)
   await page.getByRole('button', { name: 'Search' }).click()
 
   await expect(page.getByRole('button', { name: 'play' }).first()).toBeVisible({ timeout: 30_000 })
   await page.getByRole('button', { name: 'play' }).first().click()
+
+  // PlayerPage.tsx's <video> has neither `autoplay` nor an explicit
+  // .play() call -- it only attaches hls.js/sets .src, same as a real
+  // browser leaving playback for the native player controls. A real user
+  // would press play next; do the same here rather than asserting on a
+  // video that was never asked to play.
+  // .catch: a rejected play() (e.g. no valid source yet) should surface via
+  // the currentTime/.alert-danger assertions below, not as a raw evaluate()
+  // exception.
+  await page.locator('video').evaluate((el: HTMLVideoElement) => el.play().catch(() => {}))
 
   // The strong assertion: real decoded playback actually progressed, not
   // just "no error observed yet".
