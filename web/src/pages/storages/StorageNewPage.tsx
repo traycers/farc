@@ -39,11 +39,19 @@ function generateStoragePath(id: string): string {
   return `/data/${id || generateStorageId()}.img`
 }
 
+function generateName(prefix: string): string {
+  const bytes = new Uint8Array(4)
+  crypto.getRandomValues(bytes)
+  const suffix = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${prefix}-${suffix}`
+}
+
 export default function StorageNewPage() {
   const navigate = useNavigate()
 
   const [id, setId] = useState('')
   const [path, setPath] = useState('')
+  const [name, setName] = useState('')
   // farcd's POST /storages has no separate "total size" field -- it creates
   // the file itself, sized to exactly FblockSize*N (handleCreateStorage).
   // desiredSizeGiB is purely a UI convenience: N is derived from it so the
@@ -70,6 +78,7 @@ export default function StorageNewPage() {
       await createStorage({
         id,
         path,
+        name,
         geometry: { FblockSize: fblockSize, N: n, MaxChannels: maxChannels },
         params: {
           fchunk_size: FCHUNK_SIZE,
@@ -138,6 +147,21 @@ export default function StorageNewPage() {
                     type="button"
                     className="btn btn-outline-secondary"
                     onClick={() => setPath(generateStoragePath(id))}
+                  >
+                    Generate
+                  </button>
+                </div>
+              </label>
+            </div>
+            <div>
+              <label className="form-label">
+                name
+                <div className="input-group">
+                  <input className="form-control" value={name} onChange={(e) => setName(e.target.value)} />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    onClick={() => setName(generateName('storage'))}
                   >
                     Generate
                   </button>

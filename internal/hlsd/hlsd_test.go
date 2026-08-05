@@ -219,7 +219,7 @@ func TestRun_ChannelMovedToDifferentStorage_ReindexesFromNewStorage(t *testing.T
 	}, 0, 1_000_000, 2000)
 
 	farcd := newFarcdTestServer(t, unitS1, 1) // channel 1 starts on s1
-	if err := farcd.reg.Register("s2", unitS2, "/dev/null"); err != nil {
+	if err := farcd.reg.Register("s2", unitS2, "/dev/null", ""); err != nil {
 		t.Fatalf("Register s2: %v", err)
 	}
 

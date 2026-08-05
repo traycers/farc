@@ -94,6 +94,7 @@ type Storage struct {
 	ID          string `json:"id"`
 	Path        string `json:"path"`
 	CatalogPath string `json:"catalog_path,omitempty"`
+	Name        string `json:"name,omitempty"`
 }
 
 // CapturePolicyType names, as they appear in the config file's
@@ -120,6 +121,7 @@ type Channel struct {
 	RTSPURL       string        `json:"rtsp_url"`
 	Storage       string        `json:"storage"`
 	CapturePolicy CapturePolicy `json:"capture_policy"`
+	Name          string        `json:"name,omitempty"`
 }
 
 // Config is the whole process configuration: HTTP/WS/Metrics come from env

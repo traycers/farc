@@ -108,7 +108,7 @@ export default function ChannelsIndexPage() {
           <thead>
             <tr>
               <th>id</th>
-              <th>rtsp_url</th>
+              <th>name</th>
               <th>policy</th>
               <th>prerecord</th>
               <th>postrecord</th>
@@ -119,7 +119,7 @@ export default function ChannelsIndexPage() {
             {shown.map((c) => (
               <tr key={c.channel}>
                 <td>{c.channel}</td>
-                <td>{c.rtsp_url}</td>
+                <td>{c.name}</td>
                 <td>{c.capture_policy_type}</td>
                 <td>{c.prerecord_ns / 1e9}s</td>
                 <td>{c.postrecord_ns / 1e9}s</td>

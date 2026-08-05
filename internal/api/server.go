@@ -16,7 +16,8 @@ type HttpApiServer struct {
 	push *EventPushServer
 	mux  *http.ServeMux
 
-	onStorageCreated func(id, path, catalogPath string) error
+	onStorageCreated func(id, path, catalogPath, name string) error
+	onStorageUpdated func(id, name string) error
 	onChannelCreated func(spec ChannelSpec) error
 	onChannelUpdated func(spec ChannelSpec) error
 	onChannelRemoved func(id uint16) error
@@ -28,7 +29,8 @@ type HttpApiServer struct {
 func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *EventPushServer) *HttpApiServer {
 	s := &HttpApiServer{
 		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
-		onStorageCreated: func(string, string, string) error { return nil },
+		onStorageCreated: func(string, string, string, string) error { return nil },
+		onStorageUpdated: func(string, string) error { return nil },
 		onChannelCreated: func(ChannelSpec) error { return nil },
 		onChannelUpdated: func(ChannelSpec) error { return nil },
 		onChannelRemoved: func(uint16) error { return nil },
@@ -46,11 +48,23 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 // registered and usable for this process's lifetime — persistence failing
 // doesn't undo an already-completed (and possibly expensive) Init. A nil fn
 // restores the default no-op, matching this package's original behavior.
-func (s *HttpApiServer) SetOnStorageCreated(fn func(id, path, catalogPath string) error) {
+func (s *HttpApiServer) SetOnStorageCreated(fn func(id, path, catalogPath, name string) error) {
 	if fn == nil {
-		fn = func(string, string, string) error { return nil }
+		fn = func(string, string, string, string) error { return nil }
 	}
 	s.onStorageCreated = fn
+}
+
+// SetOnStorageUpdated installs a hook run synchronously by PATCH
+// /storages/{id} when the request includes a name change, after the
+// registry's own in-memory rename succeeds but before the response is
+// written -- mirrors SetOnStorageCreated's role, keeping farcd's config file
+// in sync with a renamed storage. A nil fn restores the default no-op.
+func (s *HttpApiServer) SetOnStorageUpdated(fn func(id, name string) error) {
+	if fn == nil {
+		fn = func(string, string) error { return nil }
+	}
+	s.onStorageUpdated = fn
 }
 
 // SetOnChannelCreated/SetOnChannelUpdated/SetOnChannelRemoved install hooks

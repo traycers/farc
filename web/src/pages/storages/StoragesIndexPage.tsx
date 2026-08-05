@@ -48,7 +48,7 @@ export default function StoragesIndexPage() {
         <table className="table table-striped table-hover align-middle">
           <thead>
             <tr>
-              <th>id</th>
+              <th>name</th>
               <th>path</th>
               <th>size</th>
               <th>fblock size</th>
@@ -59,7 +59,7 @@ export default function StoragesIndexPage() {
           <tbody>
             {storages.map((s) => (
               <tr key={s.id}>
-                <td>{s.id}</td>
+                <td>{s.name}</td>
                 <td>{s.path}</td>
                 <td>{formatGiB(s.geometry.FblockSize * s.geometry.N)} GiB</td>
                 <td>{formatBytes(s.geometry.FblockSize)}</td>

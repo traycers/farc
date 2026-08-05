@@ -23,6 +23,7 @@ export type Params = {
 export type StorageInfo = {
   id: string
   path: string
+  name?: string
   geometry: Geometry
 }
 
@@ -41,6 +42,7 @@ export async function listStorages(): Promise<StorageInfo[]> {
 export type CreateStorageInput = {
   id: string
   path: string
+  name: string
   geometry: Geometry
   params: Params
   force: boolean
@@ -62,7 +64,7 @@ export async function createStorage(input: CreateStorageInput): Promise<StorageI
 
 export async function patchStorage(
   id: string,
-  patch: { retention_days?: number; write_mode?: string },
+  patch: { retention_days?: number; write_mode?: string; name?: string },
 ): Promise<void> {
   await ok(
     await fetch(`${BASE}/storages/${encodeURIComponent(id)}`, {
@@ -150,6 +152,7 @@ export type ChannelInfo = {
   capture_policy_type: 'continuous' | 'event'
   prerecord_ns: number
   postrecord_ns: number
+  name?: string
 }
 
 export async function listChannels(): Promise<ChannelInfo[]> {
@@ -161,6 +164,7 @@ export async function createChannel(input: {
   rtsp_url: string
   storage: string
   capture_policy: CapturePolicyInput
+  name: string
 }): Promise<ChannelInfo> {
   return (
     await ok(
@@ -175,7 +179,7 @@ export async function createChannel(input: {
 
 export async function updateChannel(
   id: number,
-  input: { rtsp_url: string; storage: string; capture_policy: CapturePolicyInput },
+  input: { rtsp_url: string; storage: string; capture_policy: CapturePolicyInput; name: string },
 ): Promise<ChannelInfo> {
   return (
     await ok(

@@ -161,7 +161,7 @@ type farcdTestServer struct {
 func newFarcdTestServer(t *testing.T, unit *storage.Unit) *farcdTestServer {
 	t.Helper()
 	reg := api.NewStorageRegistry()
-	if err := reg.Register("s1", unit, "/dev/null"); err != nil {
+	if err := reg.Register("s1", unit, "/dev/null", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := api.NewEventPushServer(reg)

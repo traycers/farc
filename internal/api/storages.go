@@ -25,6 +25,9 @@ type createStorageRequest struct {
 	// Backend selects ioengine.Options.Backend ("direct"/"standard"/"");
 	// exposed mainly for tests (tmpfs doesn't support O_DIRECT).
 	Backend string `json:"backend"`
+	// Name is an optional human-readable label -- purely cosmetic, no
+	// uniqueness constraint, id remains the only identity key.
+	Name string `json:"name,omitempty"`
 }
 
 // handleCreateStorage runs Initializer inline (ADR-006 makes this cheap —
@@ -78,18 +81,18 @@ func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := s.reg.Register(req.ID, unit, req.Path); err != nil {
+	if err := s.reg.Register(req.ID, unit, req.Path, req.Name); err != nil {
 		_ = unit.Close()
 		writeError(w, http.StatusConflict, err)
 		return
 	}
 
-	if err := s.onStorageCreated(req.ID, req.Path, req.CatalogPath); err != nil {
+	if err := s.onStorageCreated(req.ID, req.Path, req.CatalogPath, req.Name); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q: %w", req.ID, err))
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, StorageInfo{ID: req.ID, Path: req.Path, Geometry: req.Geometry})
+	writeJSON(w, http.StatusCreated, StorageInfo{ID: req.ID, Path: req.Path, Name: req.Name, Geometry: req.Geometry})
 }
 
 func (s *HttpApiServer) handleListStorages(w http.ResponseWriter, r *http.Request) {
@@ -103,12 +106,14 @@ func (s *HttpApiServer) handleListStorages(w http.ResponseWriter, r *http.Reques
 type patchStorageRequest struct {
 	RetentionDays *int64  `json:"retention_days,omitempty"`
 	WriteMode     *string `json:"write_mode,omitempty"`
+	Name          *string `json:"name,omitempty"`
 }
 
 func (s *HttpApiServer) handlePatchStorage(w http.ResponseWriter, r *http.Request) {
-	unit, ok := s.reg.Get(r.PathValue("id"))
+	id := r.PathValue("id")
+	unit, ok := s.reg.Get(id)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", r.PathValue("id")))
+		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))
 		return
 	}
 	var req patchStorageRequest
@@ -121,6 +126,13 @@ func (s *HttpApiServer) handlePatchStorage(w http.ResponseWriter, r *http.Reques
 	}
 	if req.WriteMode != nil {
 		unit.Index().SetWriteMode(*req.WriteMode)
+	}
+	if req.Name != nil {
+		s.reg.SetName(id, *req.Name)
+		if err := s.onStorageUpdated(id, *req.Name); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q rename: %w", id, err))
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

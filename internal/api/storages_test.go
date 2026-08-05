@@ -87,10 +87,10 @@ func TestHandleCreateStorage_CallsOnStorageCreatedHook(t *testing.T) {
 	reg := NewStorageRegistry()
 	s := NewHttpApiServer(reg, nil, nil)
 
-	type call struct{ id, path, catalogPath string }
+	type call struct{ id, path, catalogPath, name string }
 	var got *call
-	s.SetOnStorageCreated(func(id, path, catalogPath string) error {
-		got = &call{id, path, catalogPath}
+	s.SetOnStorageCreated(func(id, path, catalogPath, name string) error {
+		got = &call{id, path, catalogPath, name}
 		return nil
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -122,7 +122,7 @@ func TestHandleCreateStorage_CallsOnStorageCreatedHook(t *testing.T) {
 func TestHandleCreateStorage_OnStorageCreatedErrorFailsRequestButKeepsRegistration(t *testing.T) {
 	reg := NewStorageRegistry()
 	s := NewHttpApiServer(reg, nil, nil)
-	s.SetOnStorageCreated(func(id, path, catalogPath string) error {
+	s.SetOnStorageCreated(func(id, path, catalogPath, name string) error {
 		return fmt.Errorf("disk full")
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -175,7 +175,7 @@ func TestHandleCreateStorage_DuplicateIDConflicts(t *testing.T) {
 func TestHandleListStorages(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("a", u, "/x/a.img"); err != nil {
+	if err := reg.Register("a", u, "/x/a.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	s := NewHttpApiServer(reg, nil, nil)
@@ -199,7 +199,7 @@ func TestHandleListStorages(t *testing.T) {
 func TestHandlePatchStorage_RetentionDays(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("a", u, "a.img"); err != nil {
+	if err := reg.Register("a", u, "a.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	s := NewHttpApiServer(reg, nil, nil)

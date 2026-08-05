@@ -15,7 +15,7 @@ func TestHandleCandidates(t *testing.T) {
 	u := newTestUnit(t)
 	uuid1 := writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
 	writeVideoFrame(t, u, []uint16{2}, 2, 300, 400, "frame-b", 300, 2000)
-	if err := reg.Register("s1", u, "s1.img"); err != nil {
+	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -45,7 +45,7 @@ func TestHandleCandidates_NoMatch(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img"); err != nil {
+	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -73,7 +73,7 @@ func TestHandleResolve(t *testing.T) {
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{2}, 2, 100, 200, "frame-a", 100, 1000)
 	writeVideoFrame(t, u, []uint16{2}, 2, 300, 400, "frame-b", 300, 2000)
-	if err := reg.Register("s1", u, "s1.img"); err != nil {
+	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -113,7 +113,7 @@ func TestHandleResolve_ChannelNotPresent(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img"); err != nil {
+	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)

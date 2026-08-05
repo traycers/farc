@@ -27,6 +27,10 @@ type ChannelConfig struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 
+	// Name is an optional human-readable label -- reporting-only, same
+	// status as StorageID above; IngestManager never keys off it.
+	Name string
+
 	// BackpressureSignal, if non-nil, is wired onto the ChannelIngest as
 	// its skip-frames check (docs/docs/archive/10-capture-policy.md §8) --
 	// see ChannelIngest.SetBackpressureSignal. internal/farcd supplies a
@@ -53,6 +57,7 @@ type ChannelInfo struct {
 	StorageID    string
 	PolicyType   PolicyType
 	PolicyParams PolicyParams
+	Name         string
 }
 
 // IngestManager creates and owns one ChannelIngest per configured channel
@@ -125,6 +130,7 @@ func (m *IngestManager) List() []ChannelInfo {
 			StorageID:    e.cfg.StorageID,
 			PolicyType:   policyType,
 			PolicyParams: params,
+			Name:         e.cfg.Name,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Channel < out[j].Channel })

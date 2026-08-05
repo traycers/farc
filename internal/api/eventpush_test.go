@@ -26,7 +26,7 @@ func dialWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
 func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img"); err != nil {
+	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := NewEventPushServer(reg)
@@ -59,7 +59,7 @@ func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 func TestEventPushServer_FiltersByWant(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img"); err != nil {
+	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := NewEventPushServer(reg)
@@ -99,7 +99,7 @@ func TestEventPushServer_FiltersByChannel(t *testing.T) {
 	if !ok {
 		t.Fatalf("ResolveUUID: not found")
 	}
-	if err := reg.Register("s1", u, "s1.img"); err != nil {
+	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := NewEventPushServer(reg)

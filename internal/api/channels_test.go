@@ -267,7 +267,7 @@ func TestHandleStopRecording_NoIngestManager(t *testing.T) {
 
 func regTestUnit(t *testing.T, reg *StorageRegistry, id string) {
 	t.Helper()
-	if err := reg.Register(id, newTestUnit(t), id+".img"); err != nil {
+	if err := reg.Register(id, newTestUnit(t), id+".img", ""); err != nil {
 		t.Fatalf("Register(%q): %v", id, err)
 	}
 }

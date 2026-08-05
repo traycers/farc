@@ -4,12 +4,20 @@ import { createChannel, listChannels, listStorages, type StorageInfo } from '../
 
 const POLICY_TYPES = ['continuous', 'event'] as const
 
+function generateName(prefix: string): string {
+  const bytes = new Uint8Array(4)
+  crypto.getRandomValues(bytes)
+  const suffix = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${prefix}-${suffix}`
+}
+
 export default function ChannelNewPage() {
   const navigate = useNavigate()
 
   const [storages, setStorages] = useState<StorageInfo[]>([])
   const [storage, setStorage] = useState('')
   const [id, setId] = useState(1)
+  const [name, setName] = useState('')
   const [rtspURL, setRtspURL] = useState('')
   const [policyType, setPolicyType] = useState<(typeof POLICY_TYPES)[number]>('continuous')
   const [maxDeferredStartSec, setMaxDeferredStartSec] = useState(30)
@@ -35,6 +43,7 @@ export default function ChannelNewPage() {
     try {
       await createChannel({
         id,
+        name,
         rtsp_url: rtspURL,
         storage,
         capture_policy: {
@@ -72,6 +81,21 @@ export default function ChannelNewPage() {
                   value={id}
                   onChange={(e) => setId(Number(e.target.value))}
                 />
+              </label>
+            </div>
+            <div>
+              <label className="form-label">
+                name
+                <div className="input-group">
+                  <input className="form-control" value={name} onChange={(e) => setName(e.target.value)} />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    onClick={() => setName(generateName('channel'))}
+                  >
+                    Generate
+                  </button>
+                </div>
               </label>
             </div>
             <div>

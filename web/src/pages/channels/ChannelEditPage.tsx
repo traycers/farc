@@ -12,6 +12,7 @@ export default function ChannelEditPage() {
   const [storages, setStorages] = useState<StorageInfo[]>([])
   const [found, setFound] = useState<ChannelInfo | null | undefined>(undefined) // undefined = loading
   const [storage, setStorage] = useState('')
+  const [name, setName] = useState('')
   const [rtspURL, setRtspURL] = useState('')
   const [policyType, setPolicyType] = useState<(typeof POLICY_TYPES)[number]>('continuous')
   const [maxDeferredStartSec, setMaxDeferredStartSec] = useState(30)
@@ -29,6 +30,7 @@ export default function ChannelEditPage() {
         setFound(c)
         if (c) {
           setStorage(c.storage)
+          setName(c.name ?? '')
           setRtspURL(c.rtsp_url)
           setPolicyType(c.capture_policy_type)
           setPrerecordSec(c.prerecord_ns / 1e9)
@@ -45,6 +47,7 @@ export default function ChannelEditPage() {
       await updateChannel(channel, {
         rtsp_url: rtspURL,
         storage,
+        name,
         capture_policy: {
           type: policyType,
           max_deferred_start_ns: Math.round(maxDeferredStartSec * 1e9),
@@ -102,6 +105,12 @@ export default function ChannelEditPage() {
                       </option>
                     ))}
                   </select>
+                </label>
+              </div>
+              <div>
+                <label className="form-label">
+                  name
+                  <input className="form-control" value={name} onChange={(e) => setName(e.target.value)} />
                 </label>
               </div>
               <div>

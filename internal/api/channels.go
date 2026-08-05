@@ -187,6 +187,7 @@ type channelInfo struct {
 	PolicyType   string `json:"capture_policy_type"`
 	PrerecordNS  uint64 `json:"prerecord_ns"`
 	PostrecordNS uint64 `json:"postrecord_ns"`
+	Name         string `json:"name,omitempty"`
 }
 
 func (s *HttpApiServer) handleListChannels(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +201,7 @@ func (s *HttpApiServer) handleListChannels(w http.ResponseWriter, r *http.Reques
 		out[i] = channelInfo{
 			Channel: c.Channel, RTSPURL: c.RTSPURL, Storage: c.StorageID,
 			PolicyType: c.PolicyType.String(), PrerecordNS: c.PolicyParams.Prerecord, PostrecordNS: c.PolicyParams.Postrecord,
+			Name: c.Name,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -240,12 +242,14 @@ type ChannelSpec struct {
 	MaxDeferredStartNS uint64
 	PrerecordNS        uint64
 	PostrecordNS       uint64
+	Name               string
 }
 
-func specFromRequest(id uint16, rtspURL, storage string, cp channelCapturePolicyRequest) ChannelSpec {
+func specFromRequest(id uint16, rtspURL, storage string, cp channelCapturePolicyRequest, name string) ChannelSpec {
 	return ChannelSpec{
 		ID: id, RTSPURL: rtspURL, Storage: storage, PolicyType: cp.Type,
 		MaxDeferredStartNS: cp.MaxDeferredStartNS, PrerecordNS: cp.PrerecordNS, PostrecordNS: cp.PostrecordNS,
+		Name: name,
 	}
 }
 
@@ -254,6 +258,7 @@ type createChannelRequest struct {
 	RTSPURL       string                      `json:"rtsp_url"`
 	Storage       string                      `json:"storage"`
 	CapturePolicy channelCapturePolicyRequest `json:"capture_policy"`
+	Name          string                      `json:"name,omitempty"`
 }
 
 func (s *HttpApiServer) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
@@ -297,13 +302,14 @@ func (s *HttpApiServer) handleCreateChannel(w http.ResponseWriter, r *http.Reque
 		ReadTimeout:        channelTimeout,
 		WriteTimeout:       channelTimeout,
 		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
+		Name:               req.Name,
 	}
 	if err := s.ing.AddChannel(cfg); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
 
-	spec := specFromRequest(req.ID, req.RTSPURL, req.Storage, req.CapturePolicy)
+	spec := specFromRequest(req.ID, req.RTSPURL, req.Storage, req.CapturePolicy, req.Name)
 	if err := s.onChannelCreated(spec); err != nil {
 		_, _ = s.ing.RemoveChannel(req.ID)
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist channel %d: %w", req.ID, err))
@@ -312,6 +318,7 @@ func (s *HttpApiServer) handleCreateChannel(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusCreated, channelInfo{
 		Channel: req.ID, RTSPURL: req.RTSPURL, Storage: req.Storage,
 		PolicyType: policyType.String(), PrerecordNS: req.CapturePolicy.PrerecordNS, PostrecordNS: req.CapturePolicy.PostrecordNS,
+		Name: req.Name,
 	})
 }
 
@@ -319,6 +326,7 @@ type updateChannelRequest struct {
 	RTSPURL       string                      `json:"rtsp_url"`
 	Storage       string                      `json:"storage"`
 	CapturePolicy channelCapturePolicyRequest `json:"capture_policy"`
+	Name          string                      `json:"name,omitempty"`
 }
 
 // handleUpdateChannel replaces an already-running channel's rtsp_url/
@@ -376,6 +384,7 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 		ReadTimeout:        channelTimeout,
 		WriteTimeout:       channelTimeout,
 		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
+		Name:               req.Name,
 	}
 	if err := s.ing.AddChannel(cfg); err != nil {
 		// Only plausible if another request raced to (re-)create the same
@@ -385,7 +394,7 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	spec := specFromRequest(channel, req.RTSPURL, req.Storage, req.CapturePolicy)
+	spec := specFromRequest(channel, req.RTSPURL, req.Storage, req.CapturePolicy, req.Name)
 	if err := s.onChannelUpdated(spec); err != nil {
 		_, _ = s.ing.RemoveChannel(channel)
 		_ = s.ing.AddChannel(old)
@@ -395,6 +404,7 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, channelInfo{
 		Channel: channel, RTSPURL: req.RTSPURL, Storage: req.Storage,
 		PolicyType: policyType.String(), PrerecordNS: req.CapturePolicy.PrerecordNS, PostrecordNS: req.CapturePolicy.PostrecordNS,
+		Name: req.Name,
 	})
 }
 

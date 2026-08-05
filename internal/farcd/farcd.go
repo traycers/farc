@@ -101,7 +101,7 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 			return nil, fmt.Errorf("farcd: open storage %q: %w", sc.ID, err)
 		}
 		f.units = append(f.units, unit)
-		if err := f.registry.Register(sc.ID, unit, sc.Path); err != nil {
+		if err := f.registry.Register(sc.ID, unit, sc.Path, sc.Name); err != nil {
 			f.closeUnits()
 			return nil, fmt.Errorf("farcd: register storage %q: %w", sc.ID, err)
 		}
@@ -127,6 +127,7 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	// serves its ServeHTTP.
 	apiServer := api.NewHttpApiServer(f.registry, f.ing, nil)
 	apiServer.SetOnStorageCreated(f.persistNewStorage)
+	apiServer.SetOnStorageUpdated(f.persistUpdatedStorage)
 	apiServer.SetOnChannelCreated(f.persistNewChannel)
 	apiServer.SetOnChannelUpdated(f.persistUpdatedChannel)
 	apiServer.SetOnChannelRemoved(f.persistRemovedChannel)
@@ -206,6 +207,7 @@ func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, err
 		},
 		ReadTimeout:  rtspTimeout,
 		WriteTimeout: rtspTimeout,
+		Name:         cc.Name,
 		// StorageUnit -> CapturePolicy backpressure signal (10-capture-
 		// policy.md §8, resolved in PLAN.md's gap-resolutions section):
 		// polled live off unit.EngineLevel() rather than tracked via a
@@ -221,7 +223,7 @@ func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, err
 // (config.Load is the only thing New's own storage-opening loop ever reads;
 // it never Inits, see this package's own doc comment). If Save fails, the
 // in-memory append is rolled back so cfg still matches what's on disk.
-func (f *Farcd) persistNewStorage(id, path, catalogPath string) error {
+func (f *Farcd) persistNewStorage(id, path, catalogPath, name string) error {
 	f.cfgMu.Lock()
 	defer f.cfgMu.Unlock()
 
@@ -230,10 +232,37 @@ func (f *Farcd) persistNewStorage(id, path, catalogPath string) error {
 			return nil
 		}
 	}
-	f.cfg.Storages = append(f.cfg.Storages, config.Storage{ID: id, Path: path, CatalogPath: catalogPath})
+	f.cfg.Storages = append(f.cfg.Storages, config.Storage{ID: id, Path: path, CatalogPath: catalogPath, Name: name})
 	if err := config.Save(f.configPath, f.cfg); err != nil {
 		f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
 		return fmt.Errorf("farcd: persist storage %q to %s: %w", id, f.configPath, err)
+	}
+	return nil
+}
+
+// persistUpdatedStorage renames an existing storage's config entry (PATCH
+// /storages/{id} with a name field), wired into HttpApiServer via
+// SetOnStorageUpdated -- mirrors persistNewStorage's role, rolling back the
+// in-memory rename if Save fails.
+func (f *Farcd) persistUpdatedStorage(id, name string) error {
+	f.cfgMu.Lock()
+	defer f.cfgMu.Unlock()
+
+	idx := -1
+	for i, s := range f.cfg.Storages {
+		if s.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("farcd: persist storage %q: not present in config", id)
+	}
+	old := f.cfg.Storages[idx].Name
+	f.cfg.Storages[idx].Name = name
+	if err := config.Save(f.configPath, f.cfg); err != nil {
+		f.cfg.Storages[idx].Name = old
+		return fmt.Errorf("farcd: persist storage %q rename to %s: %w", id, f.configPath, err)
 	}
 	return nil
 }
@@ -252,6 +281,7 @@ func specToConfigChannel(spec api.ChannelSpec) config.Channel {
 			Prerecord:        config.Duration(spec.PrerecordNS),
 			Postrecord:       config.Duration(spec.PostrecordNS),
 		},
+		Name: spec.Name,
 	}
 }
 

@@ -31,10 +31,17 @@ export default function StorageEditPage() {
 
   const [retentionDays, setRetentionDays] = useState(30)
   const [writeMode, setWriteMode] = useState('')
+  const [name, setName] = useState('')
 
   useEffect(() => {
     listStorages()
-      .then((all) => setStorage(all.find((s) => s.id === id) ?? null))
+      .then((all) => {
+        const found = all.find((s) => s.id === id) ?? null
+        setStorage(found)
+        if (found) {
+          setName(found.name ?? '')
+        }
+      })
       .catch((e) => setError(String(e)))
   }, [id])
 
@@ -48,6 +55,17 @@ export default function StorageEditPage() {
     try {
       await patchStorage(id!, { retention_days: retentionDays })
       setStatus(`retention set to ${retentionDays} days`)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function onSaveName() {
+    setError(null)
+    setStatus(null)
+    try {
+      await patchStorage(id!, { name })
+      setStatus(`name set to "${name}"`)
     } catch (e) {
       setError(String(e))
     }
@@ -110,6 +128,17 @@ export default function StorageEditPage() {
                 Everything above is fixed at creation time. Only retention and write mode can still change.
               </p>
               <div className="d-flex flex-column gap-3">
+                <div>
+                  <label className="form-label">
+                    name
+                    <div className="input-group">
+                      <input className="form-control" value={name} onChange={(e) => setName(e.target.value)} />
+                      <button type="button" className="btn btn-outline-secondary" onClick={onSaveName}>
+                        Save
+                      </button>
+                    </div>
+                  </label>
+                </div>
                 <div>
                   <label className="form-label">
                     retention (days)
