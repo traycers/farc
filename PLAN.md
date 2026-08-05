@@ -14,6 +14,7 @@
 - [x] Phase 10 — full channel CRUD (`GET/POST/PUT/DELETE /channels`), persisted the same way (closes Gap 1); `ChannelsPage` redesigned around it
 - [x] Phase 11 — restrict `hls_server` config to exactly one `farcd` (ADR-020, `docs/docs/archive/adr/020-hls-server-single-farcd.md`)
 - [x] Phase 12 — `hls_server` reconciles its served-channel set against farcd's live `GET /channels` + a new global `channel.created`/`channel.removed` WS subscription, no restart needed (ADR-021, `docs/docs/archive/adr/021-hls-server-channel-reconciliation.md`)
+- [x] Phase 13 — `hls_server` persists its reconciled channel list back into its own config file after every tracked-state change (`hlsconfig.Save`, `internal/hlsd`'s `persist`), the same way `farcd` already does for its own config (Phase 9/10) — updates ADR-021's "never rewritten" note and `12-hls-server.md` §7
 
 ## Context
 
@@ -99,9 +100,9 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 - `internal/api/{server,storages,channels,query,fcontainers}.go` — exact farcd route/body/response shapes this client mirrors; `server.go` also has `SetOnStorageCreated`/`SetOnChannelCreated`/`SetOnChannelUpdated`/`SetOnChannelRemoved`.
 - `internal/ingest/ingestmanager.go` — `List`/`AddChannel`/`RemoveChannel`, the runtime primitives Phase 10's HTTP handlers are built on; `policy.go`'s `Policy()` getter.
 - `internal/hlsapi/server.go` — exact hls_server route shapes.
-- `internal/config/config.go`, `internal/hlsconfig/config.go` — exact JSON shapes for `deploy/*.config.json`; `config.go` also has `Save`/`Duration.MarshalJSON`.
+- `internal/config/config.go`, `internal/hlsconfig/config.go` — exact JSON shapes for `deploy/*.config.json`; both now have `Save`/`Duration.MarshalJSON` (Phase 13 added `hlsconfig.Save`, mirroring `config.Save`).
 - `internal/farcd/farcd.go` (`persistNewStorage`, `persistNewChannel`/`persistUpdatedChannel`/`persistRemovedChannel`, `specToConfigChannel`, `openStorage`, `buildChannelConfig`) — Gaps 1/2/3's fixes, plus Gap 5's `f.push.PublishChannelEvent` calls.
 - `internal/api/eventpush.go` — `ChannelEvent`/`EventChannelCreated`/`EventChannelRemoved`, `EventPushServer.PublishChannelEvent`, the `serveGlobal` branch — Gap 5's server-side wire protocol.
-- `internal/hlsd/hlsd.go` (`reconcile`/`reconcileOnce`/`applyRemoteList`/`startChannel`/`stopChannel`) — Gap 5's client-side reconciliation loop; single-goroutine ownership of `tracked`, no mutex, is deliberate (see ADR-021).
+- `internal/hlsd/hlsd.go` (`reconcile`/`reconcileOnce`/`applyRemoteList`/`startChannel`/`stopChannel`) — Gap 5's client-side reconciliation loop; single-goroutine ownership of `tracked`, no mutex, is deliberate (see ADR-021). Phase 13's `persist` hangs off the same two mutation points (`startChannel`/`stopChannel`) for the same reason: no extra synchronization needed.
 - `cmd/farc/commands/index.go`, `cmd/hls_server/commands/index.go` — `-c/--config` flag both Dockerfiles' `CMD` must match.
 - `taskfile.yaml` — existing `build/app`/`build/hls_server` tasks `build/web` mirrors; per `CLAUDE.md`, leave the unrelated stale tasks (`run`, `help`, `db/*`, `env/*`) untouched.

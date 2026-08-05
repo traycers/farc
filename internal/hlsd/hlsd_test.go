@@ -3,9 +3,12 @@ package hlsd_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +20,21 @@ import (
 	"traycers/farc/internal/hlsd"
 	"traycers/farc/mediatree"
 )
+
+// hlsConfigPath returns a writable path for a fresh test's config file,
+// bootstrapped via hlsconfig.EnsureExists exactly like
+// cmd/hls_server/commands/default.go does before calling hlsd.New --
+// hlsd.New never reads this path back, only writes to it later (persist), so
+// its initial content doesn't need to match cfg, but the file must already
+// exist as it would in production.
+func hlsConfigPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "hls_server.config.json")
+	if err := hlsconfig.EnsureExists(path); err != nil {
+		t.Fatalf("hlsconfig.EnsureExists(%s): %v", path, err)
+	}
+	return path
+}
 
 // TestRun_FullStack exercises the entire hls_server binary's wiring end to
 // end (PLAN.md phase 7's verify clause): a real farcd fixture, a real hlsd
@@ -44,7 +62,7 @@ func TestRun_FullStack(t *testing.T) {
 		CacheDir:              t.TempDir(),
 	}
 
-	h, err := hlsd.New(cfg)
+	h, err := hlsd.New(cfg, hlsConfigPath(t))
 	if err != nil {
 		t.Fatalf("hlsd.New: %v", err)
 	}
@@ -127,7 +145,7 @@ func TestRun_ChannelCreatedOnFarcd_ServedWithoutRestart(t *testing.T) {
 		TargetSegmentDuration: hlsconfig.Duration(10 * time.Millisecond),
 		CacheDir:              t.TempDir(),
 	}
-	h, err := hlsd.New(cfg)
+	h, err := hlsd.New(cfg, hlsConfigPath(t))
 	if err != nil {
 		t.Fatalf("hlsd.New: %v", err)
 	}
@@ -163,7 +181,7 @@ func TestRun_ChannelRemovedOnFarcd_StopsBeingServed(t *testing.T) {
 		TargetSegmentDuration: hlsconfig.Duration(10 * time.Millisecond),
 		CacheDir:              t.TempDir(),
 	}
-	h, err := hlsd.New(cfg)
+	h, err := hlsd.New(cfg, hlsConfigPath(t))
 	if err != nil {
 		t.Fatalf("hlsd.New: %v", err)
 	}
@@ -212,7 +230,7 @@ func TestRun_ChannelMovedToDifferentStorage_ReindexesFromNewStorage(t *testing.T
 		TargetSegmentDuration: hlsconfig.Duration(10 * time.Millisecond),
 		CacheDir:              t.TempDir(),
 	}
-	h, err := hlsd.New(cfg)
+	h, err := hlsd.New(cfg, hlsConfigPath(t))
 	if err != nil {
 		t.Fatalf("hlsd.New: %v", err)
 	}
@@ -254,6 +272,48 @@ func TestRun_ChannelMovedToDifferentStorage_ReindexesFromNewStorage(t *testing.T
 	t.Fatalf("playlist never converged to serving only s2's data: %s", last)
 }
 
+// TestRun_ChannelLifecycle_PersistsToConfigFile is the config-file
+// write-back scenario: hls_server rewrites configPath after every
+// tracked-state change (add, remove), so the file mirrors what's actually
+// being served rather than staying frozen at whatever it held at startup.
+func TestRun_ChannelLifecycle_PersistsToConfigFile(t *testing.T) {
+	unit := newTestUnit(t)
+	writeVideoFcontainer(t, unit, 1, []videoFrameSpec{
+		{Time: 0, Kind: mediatree.FrameKindI, NAL: []byte{0x65, 0x01, 0x02}},
+		{Time: 500_000, Kind: mediatree.FrameKindP, NAL: []byte{0x41, 0x11}},
+	}, 0, 1_000_000, 1000)
+
+	farcd := newFarcdTestServer(t, unit) // no channels registered yet
+
+	configPath := hlsConfigPath(t)
+	cfg := &hlsconfig.Config{
+		HTTP:                  hlsconfig.Addr{IP: "127.0.0.1", Port: freePort(t)},
+		Farcd:                 hlsconfig.Farcd{HTTP: farcd.URL, WS: farcd.wsURL},
+		TargetSegmentDuration: hlsconfig.Duration(10 * time.Millisecond),
+		CacheDir:              t.TempDir(),
+	}
+	h, err := hlsd.New(cfg, configPath)
+	if err != nil {
+		t.Fatalf("hlsd.New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = h.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+
+	playlistURL := "http://" + cfg.HTTP.String() + "/channels/1/hls/0/1000000/playlist.m3u8"
+	waitForNotConfigured(t, playlistURL)
+	waitForPersistedChannels(t, configPath, nil)
+
+	addChannel(t, farcd, 1, "s1", unit)
+	waitForPlaylist(t, playlistURL)
+	waitForPersistedChannels(t, configPath, []hlsconfig.Channel{{ID: 1, Storage: "s1"}})
+
+	removeChannel(t, farcd, 1, "s1")
+	waitForNotConfigured(t, playlistURL)
+	waitForPersistedChannels(t, configPath, nil)
+}
+
 // TestHlsd_ConcurrentChannelChurnAndRequests drives rapid channel add/remove
 // churn concurrently with HTTP requests -- meant to be run with -race. It
 // doesn't assert a specific final state (the churner never stops mid-cycle
@@ -273,7 +333,7 @@ func TestHlsd_ConcurrentChannelChurnAndRequests(t *testing.T) {
 		TargetSegmentDuration: hlsconfig.Duration(10 * time.Millisecond),
 		CacheDir:              t.TempDir(),
 	}
-	h, err := hlsd.New(cfg)
+	h, err := hlsd.New(cfg, hlsConfigPath(t))
 	if err != nil {
 		t.Fatalf("hlsd.New: %v", err)
 	}
@@ -354,6 +414,56 @@ func waitForNotConfigured(t *testing.T, url string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("channel never became \"not configured\": last status=%d body=%s", lastStatus, lastBody)
+}
+
+// readPersistedChannels reads path's raw JSON "channels" list directly,
+// bypassing hlsconfig.Load's env-sourced field validation (which would fail
+// in a test process with no HLS_SERVER_* env set).
+func readPersistedChannels(t *testing.T, path string) []hlsconfig.Channel {
+	t.Helper()
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var wire struct {
+		Channels []hlsconfig.Channel `json:"channels"`
+	}
+	if err := json.Unmarshal(buf, &wire); err != nil {
+		t.Fatalf("unmarshal %s: %v", path, err)
+	}
+	return wire.Channels
+}
+
+// waitForPersistedChannels polls path until its persisted channel list
+// equals want (order-sensitive -- hlsd.persist sorts by channel id) or the
+// deadline expires. Polling, rather than a single read, accounts for the
+// small window between an HTTP request observing a tracked-state change
+// (via hlsapi's channelSet) and hlsd.persist's own file write actually
+// landing on disk, moments later in the same reconcile goroutine call.
+func waitForPersistedChannels(t *testing.T, path string, want []hlsconfig.Channel) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var last []hlsconfig.Channel
+	for time.Now().Before(deadline) {
+		last = readPersistedChannels(t, path)
+		if channelListsEqual(last, want) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("config file channels never converged to %v, last = %v", want, last)
+}
+
+func channelListsEqual(a, b []hlsconfig.Channel) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func waitForServer(t *testing.T, addr string) {

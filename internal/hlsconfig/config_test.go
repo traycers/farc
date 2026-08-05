@@ -204,6 +204,59 @@ func TestLoad_MissingFile(t *testing.T) {
 	}
 }
 
+func TestSave_RoundTripsThroughLoad(t *testing.T) {
+	setRequiredEnv(t)
+	path := writeConfig(t, docExample)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Channels = append(cfg.Channels, Channel{ID: 7, Storage: "disk1"})
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	if len(got.Channels) != 2 || got.Channels[1].ID != 7 || got.Channels[1].Storage != "disk1" {
+		t.Fatalf("Channels after round-trip = %+v", got.Channels)
+	}
+	if got.HTTP.String() != cfg.HTTP.String() {
+		t.Fatalf("Save lost env-sourced fields: got HTTP = %v, want %v", got.HTTP, cfg.HTTP)
+	}
+}
+
+func TestSave_OverwritesInPlace(t *testing.T) {
+	// hls_config is a Docker named volume, like farc_config -- Save must
+	// overwrite the same inode, not swap it via rename, or the write would
+	// silently detach from the volume-backed file under Docker.
+	setRequiredEnv(t)
+	path := writeConfig(t, docExample)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after Save: %v", err)
+	}
+	if !os.SameFile(info, after) {
+		t.Fatalf("Save replaced the file's inode instead of overwriting it in place")
+	}
+}
+
 func TestEnsureExists_CreatesEmptyConfigWhenMissing(t *testing.T) {
 	setRequiredEnv(t)
 	path := filepath.Join(t.TempDir(), "hls_server.config.json")

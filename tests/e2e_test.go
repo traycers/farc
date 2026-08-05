@@ -42,6 +42,7 @@ import (
 
 	"traycers/farc/fblock"
 	"traycers/farc/internal/fcontainer"
+	"traycers/farc/internal/hlsconfig"
 	"traycers/farc/internal/ioengine"
 	"traycers/farc/internal/storage"
 	"traycers/farc/mediatree"
@@ -534,6 +535,11 @@ func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *te
 
 	waitForPlaylist(t, playlistURL) // hls_server picked the channel up live, no restart
 
+	// hls_server writes its own config file back after every tracked-state
+	// change (internal/hlsd's persist) -- assert the real process actually
+	// did that, not just its in-memory/HTTP-visible state.
+	waitForHlsConfigChannels(t, hlsConfigPath, []hlsconfig.Channel{{ID: 1, Storage: "disk0"}})
+
 	req, err := http.NewRequest(http.MethodDelete, "http://"+farcAddr+"/channels/1", nil)
 	if err != nil {
 		t.Fatalf("build DELETE request: %v", err)
@@ -558,7 +564,57 @@ func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *te
 	if status != http.StatusNotFound || !strings.Contains(string(body), "not configured") {
 		t.Fatalf("playlist never became \"not configured\" again after removal: status=%d body=%s", status, body)
 	}
+	waitForHlsConfigChannels(t, hlsConfigPath, nil)
 
 	stopProcessGracefully(t, "farc", farcCmd)
 	stopProcessGracefully(t, "hls_server", hlsCmd)
+}
+
+// readHlsConfigChannels reads path's raw JSON "channels" list directly,
+// bypassing hlsconfig.Load's env-sourced field validation (the test process
+// itself doesn't set HLS_SERVER_* env -- only the hls_server subprocess
+// does, via hlsEnv).
+func readHlsConfigChannels(t *testing.T, path string) []hlsconfig.Channel {
+	t.Helper()
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var wire struct {
+		Channels []hlsconfig.Channel `json:"channels"`
+	}
+	if err := json.Unmarshal(buf, &wire); err != nil {
+		t.Fatalf("unmarshal %s: %v", path, err)
+	}
+	return wire.Channels
+}
+
+// waitForHlsConfigChannels polls path until its persisted channel list
+// equals want or a deadline expires -- internal/hlsd's persist runs
+// moments after the HTTP-visible state change, in the same reconcile
+// goroutine call.
+func waitForHlsConfigChannels(t *testing.T, path string, want []hlsconfig.Channel) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var last []hlsconfig.Channel
+	for time.Now().Before(deadline) {
+		last = readHlsConfigChannels(t, path)
+		if channelListsEqual(last, want) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("hls_server config file channels never converged to %+v, last = %+v", want, last)
+}
+
+func channelListsEqual(a, b []hlsconfig.Channel) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

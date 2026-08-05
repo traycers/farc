@@ -25,7 +25,7 @@ func doByDefault(cmd *cobra.Command, args []string) {
 		log.Fatalf("hls_server: %v", err)
 	}
 
-	h, err := hlsd.New(cfg)
+	h, err := hlsd.New(cfg, configPath)
 	if err != nil {
 		log.Fatalf("hls_server: %v", err)
 	}

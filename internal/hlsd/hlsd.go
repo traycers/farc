@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"traycers/farc/internal/hlsapi"
@@ -56,6 +57,8 @@ type Hlsd struct {
 	cache     *segmentcache.Cache
 	seed      []hlsconfig.Channel
 
+	configPath string
+
 	httpSrv *http.Server
 
 	logf func(format string, args ...any)
@@ -67,13 +70,17 @@ type Hlsd struct {
 // already validated by hlsconfig.Load. cfg.Channels is only a bootstrap
 // seed (ADR-021): Run's reconcile loop converges the actually-served
 // channel set to farcd's live GET /channels list, which becomes
-// authoritative from the first reconciliation pass onward.
-func New(cfg *hlsconfig.Config) (*Hlsd, error) {
+// authoritative from the first reconciliation pass onward. configPath is
+// the file cfg's Channels came from — kept so every subsequent tracked-state
+// change can be written back to it (persist), the same way
+// internal/farcd.New keeps its own configPath for persistNewChannel/etc.
+func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 	h := &Hlsd{
-		index:  tocindex.NewIndex(),
-		client: hlsclient.New(cfg.Farcd.HTTP, cfg.Farcd.WS),
-		seed:   cfg.Channels,
-		logf:   func(string, ...any) {},
+		index:      tocindex.NewIndex(),
+		client:     hlsclient.New(cfg.Farcd.HTTP, cfg.Farcd.WS),
+		seed:       cfg.Channels,
+		configPath: configPath,
+		logf:       func(string, ...any) {},
 	}
 
 	cache, err := segmentcache.New(cfg.CacheDir, cfg.CacheQuotaBytes)
@@ -262,6 +269,7 @@ func (h *Hlsd) startChannel(ctx context.Context, tracked map[uint16]*trackedSub,
 	sub.SetLogger(h.logf)
 	tracked[id] = &trackedSub{cancel: cancel, storage: storage}
 	h.apiServer.AddChannel(id)
+	h.persist(tracked)
 
 	go func() {
 		if err := sub.Run(subCtx); err != nil {
@@ -285,4 +293,25 @@ func (h *Hlsd) stopChannel(tracked map[uint16]*trackedSub, id uint16) {
 	delete(tracked, id)
 	h.apiServer.RemoveChannel(id)
 	h.index.Remove(id)
+	h.persist(tracked)
+}
+
+// persist rewrites configPath to match tracked's current channel/storage
+// pairs. Called after every tracked mutation (startChannel/stopChannel) so
+// the file mirrors farcd's live state and becomes a better-informed
+// bootstrap seed on the next restart -- ADR-021 still applies: farcd's live
+// GET /channels remains authoritative at runtime regardless of what this
+// file says. Sorted by channel id for a stable, diffable file, since
+// tracked is a map and would otherwise iterate in random order. A write
+// failure is only logged: the in-memory tracked state, and therefore what's
+// actually being served, is unaffected either way.
+func (h *Hlsd) persist(tracked map[uint16]*trackedSub) {
+	channels := make([]hlsconfig.Channel, 0, len(tracked))
+	for id, sub := range tracked {
+		channels = append(channels, hlsconfig.Channel{ID: id, Storage: sub.storage})
+	}
+	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
+	if err := hlsconfig.Save(h.configPath, &hlsconfig.Config{Channels: channels}); err != nil {
+		h.logf("hlsd: persist channel list to %s: %v", h.configPath, err)
+	}
 }

@@ -111,6 +111,22 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Save serializes cfg's JSON-backed Channels field (json:"-" excludes
+// everything else) as indented JSON and writes it to path, overwriting any
+// existing content in place. Mirrors internal/config.Save's own convention,
+// including its reason for writing in place rather than temp-plus-rename:
+// path is a Docker volume mount (hls_config), not a repo file.
+func Save(path string, cfg *Config) error {
+	buf, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("hlsconfig: marshal: %w", err)
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		return fmt.Errorf("hlsconfig: write %s: %w", path, err)
+	}
+	return nil
+}
+
 // EnsureExists writes an empty config (no channels) to path if no file
 // exists there yet; it is a no-op otherwise. Lets a fresh Docker volume —
 // which starts out empty, since deploy/hls_server.config.json no longer
