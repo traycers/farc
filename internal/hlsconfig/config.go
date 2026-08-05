@@ -1,12 +1,14 @@
 // Package hlsconfig implements hls_server's process configuration, split the
 // same way internal/config splits farcd's (see that package's doc comment):
 // server/tuning parameters come from environment variables (HLS_SERVER_
-// HTTP_IP/PORT, HLS_SERVER_TARGET_SEGMENT_DURATION, HLS_SERVER_CACHE_DIR,
-// HLS_SERVER_CACHE_QUOTA_BYTES) so a working deployment's env can be
-// committed to git, while the JSON file (docs/docs/archive/12-hls-server.md
-// §7) keeps only the site-specific data: the farcd endpoints hls_server
-// talks to and the channel -> (farcd endpoint, farcd-side storage id)
-// mapping.
+// HTTP_IP/PORT, HLS_SERVER_FARC_HTTP/WS, HLS_SERVER_TARGET_SEGMENT_DURATION,
+// HLS_SERVER_CACHE_DIR, HLS_SERVER_CACHE_QUOTA_BYTES) so a working
+// deployment's env can be committed to git, while the JSON file
+// (docs/docs/archive/12-hls-server.md §7) keeps only the site-specific
+// data: the channel -> farcd-side storage id mapping. The one farcd
+// hls_server talks to (ADR-020 — v1 supports exactly one, not a list) is
+// itself an env-sourced address, not JSON, like HTTP/WS/Metrics are for
+// farcd's own config.
 //
 // Depends on stdlib only, per PLAN.md's package layout table.
 package hlsconfig
@@ -48,31 +50,31 @@ type Addr struct {
 
 func (a Addr) String() string { return fmt.Sprintf("%s:%d", a.IP, a.Port) }
 
-// Farcd is one farcd endpoint hls_server talks to: its HTTP API base URL
-// (internal/api/server.go's routes) and its EventPushServer base URL
-// (internal/api/eventpush.go) — the same two addresses farcd's own config
-// exposes as separate "http"/"ws" servers (04-storage-operations.md §2.1).
+// Farcd is the one farcd endpoint hls_server talks to (ADR-020): its HTTP
+// API base URL (internal/api/server.go's routes) and its EventPushServer
+// base URL (internal/api/eventpush.go) — the same two addresses farcd's own
+// config exposes as separate "http"/"ws" servers (04-storage-operations.md
+// §2.1). Sourced from env (HLS_SERVER_FARC_HTTP/WS), not the JSON file —
+// see this package's doc comment — hence no json tags.
 type Farcd struct {
-	ID   string `json:"id"`
-	HTTP string `json:"http"` // e.g. "http://10.0.0.1:8080"
-	WS   string `json:"ws"`   // e.g. "ws://10.0.0.1:8081"
+	HTTP string // e.g. "http://10.0.0.1:8080"
+	WS   string // e.g. "ws://10.0.0.1:8081"
 }
 
-// Channel is one entry in the top-level "channels" list: which farcd
-// endpoint and which farcd-side storage id serves this channel number.
+// Channel is one entry in the top-level "channels" list: which farcd-side
+// storage id serves this channel number (on the one Farcd above).
 type Channel struct {
 	ID      uint16 `json:"id"`
-	Farcd   string `json:"farcd"`   // references a Farcd.ID above
 	Storage string `json:"storage"` // farcd's own storage id (its config's storages[].id)
 }
 
-// Config is hls_server's whole process configuration: HTTP/
+// Config is hls_server's whole process configuration: HTTP/Farcd/
 // TargetSegmentDuration/CacheDir/CacheQuotaBytes come from env (loadEnv),
-// Farcds/Channels from the JSON file at path.
+// Channels from the JSON file at path.
 type Config struct {
 	HTTP Addr `json:"-"` // hls_server's own player-facing listen address
 
-	Farcds   []Farcd   `json:"farcds"`
+	Farcd    Farcd     `json:"-"`
 	Channels []Channel `json:"channels"`
 
 	TargetSegmentDuration Duration `json:"-"`
@@ -82,9 +84,9 @@ type Config struct {
 	CacheQuotaBytes int64 `json:"-"`
 }
 
-// Load reads HTTP/TargetSegmentDuration/CacheDir/CacheQuotaBytes from the
-// environment and Farcds/Channels from the JSON file at path, then
-// validates the combined result.
+// Load reads HTTP/Farcd/TargetSegmentDuration/CacheDir/CacheQuotaBytes from
+// the environment and Channels from the JSON file at path, then validates
+// the combined result.
 func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := loadEnv(&cfg); err != nil {
@@ -109,8 +111,8 @@ func Load(path string) (*Config, error) {
 // loadEnv populates cfg's env-sourced fields. An unset HLS_SERVER_HTTP_PORT
 // is left as 0 rather than rejected here, so validate's own "port is
 // required" error stays the single place port-missing is reported;
-// HLS_SERVER_TARGET_SEGMENT_DURATION/CACHE_DIR are likewise left zero when
-// unset and caught by validate's existing checks.
+// HLS_SERVER_FARC_HTTP/WS/HLS_SERVER_TARGET_SEGMENT_DURATION/CACHE_DIR are
+// likewise left zero when unset and caught by validate's existing checks.
 func loadEnv(cfg *Config) error {
 	cfg.HTTP.IP = envOr("HLS_SERVER_HTTP_IP", "0.0.0.0")
 	port, err := envInt("HLS_SERVER_HTTP_PORT")
@@ -118,6 +120,9 @@ func loadEnv(cfg *Config) error {
 		return err
 	}
 	cfg.HTTP.Port = port
+
+	cfg.Farcd.HTTP = os.Getenv("HLS_SERVER_FARC_HTTP")
+	cfg.Farcd.WS = os.Getenv("HLS_SERVER_FARC_WS")
 
 	if v := os.Getenv("HLS_SERVER_TARGET_SEGMENT_DURATION"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -174,21 +179,11 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("http.port is required")
 	}
 
-	farcdIDs := make(map[string]bool, len(cfg.Farcds))
-	for i, f := range cfg.Farcds {
-		if f.ID == "" {
-			return fmt.Errorf("farcds[%d]: id is required", i)
-		}
-		if f.HTTP == "" {
-			return fmt.Errorf("farcds[%d]: http is required", i)
-		}
-		if f.WS == "" {
-			return fmt.Errorf("farcds[%d]: ws is required", i)
-		}
-		if farcdIDs[f.ID] {
-			return fmt.Errorf("farcds[%d]: duplicate id %q", i, f.ID)
-		}
-		farcdIDs[f.ID] = true
+	if cfg.Farcd.HTTP == "" {
+		return fmt.Errorf("farcd.http is required")
+	}
+	if cfg.Farcd.WS == "" {
+		return fmt.Errorf("farcd.ws is required")
 	}
 
 	channelIDs := make(map[uint16]bool, len(cfg.Channels))
@@ -204,13 +199,6 @@ func (cfg *Config) validate() error {
 		channelIDs[c.ID] = true
 		if c.Storage == "" {
 			return fmt.Errorf("channels[%d]: storage is required", i)
-		}
-		// Fails fast here, at load time, rather than at first playback
-		// request — the mismatch PLAN.md's Gap resolutions flags as
-		// otherwise-undetected "канал -> хранилище duplication" between
-		// farcd's own config and this one.
-		if !farcdIDs[c.Farcd] {
-			return fmt.Errorf("channels[%d]: farcd %q is not in the farcds list", i, c.Farcd)
 		}
 	}
 

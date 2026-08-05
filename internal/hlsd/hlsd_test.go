@@ -34,10 +34,10 @@ func TestRun_FullStack(t *testing.T) {
 	farcd := newFarcdTestServer(t, unit)
 
 	cfg := &hlsconfig.Config{
-		HTTP:   hlsconfig.Addr{IP: "127.0.0.1", Port: freePort(t)},
-		Farcds: []hlsconfig.Farcd{{ID: "farcd0", HTTP: farcd.URL, WS: farcd.wsURL}},
+		HTTP:  hlsconfig.Addr{IP: "127.0.0.1", Port: freePort(t)},
+		Farcd: hlsconfig.Farcd{HTTP: farcd.URL, WS: farcd.wsURL},
 		Channels: []hlsconfig.Channel{
-			{ID: 1, Farcd: "farcd0", Storage: "s1"},
+			{ID: 1, Storage: "s1"},
 		},
 		TargetSegmentDuration: hlsconfig.Duration(10 * time.Millisecond),
 		CacheDir:              t.TempDir(),

@@ -74,8 +74,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, ok := s.clients[channel]
-	if !ok {
+	if !s.channels[channel] {
 		writeError(w, http.StatusNotFound, fmt.Errorf("hlsapi: channel %d is not configured", channel))
 		return
 	}
@@ -84,7 +83,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("hlsapi: fcontainer %x not indexed for channel %d", uuid, channel))
 		return
 	}
-	data, err := segment.BuildInit(r.Context(), client, rec, channel)
+	data, err := segment.BuildInit(r.Context(), s.client, rec, channel)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -115,8 +114,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, ok := s.clients[channel]
-	if !ok {
+	if !s.channels[channel] {
 		writeError(w, http.StatusNotFound, fmt.Errorf("hlsapi: channel %d is not configured", channel))
 		return
 	}
@@ -131,7 +129,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := segment.BuildMedia(r.Context(), client, rec, channel, bounds[segIndex].Start, bounds[segIndex].End)
+	data, err := segment.BuildMedia(r.Context(), s.client, rec, channel, bounds[segIndex].Start, bounds[segIndex].End)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

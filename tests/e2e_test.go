@@ -222,15 +222,12 @@ func farcEnv(httpPort, wsPort, metricsPort int) []string {
 }
 
 // writeHlsConfig writes only the JSON-backed part of hls_server's config
-// (farcds/channels) -- HTTP/TargetSegmentDuration/CacheDir/CacheQuotaBytes
+// (channels) -- HTTP/Farcd/TargetSegmentDuration/CacheDir/CacheQuotaBytes
 // are env-sourced now (internal/hlsconfig's package doc), so the caller
 // passes those via hlsEnv/startProcess instead.
-func writeHlsConfig(t *testing.T, farcdHTTPPort, farcdWSPort int) string {
+func writeHlsConfig(t *testing.T) string {
 	t.Helper()
-	doc := fmt.Sprintf(`{
-  "farcds": [{"id":"farcd0","http":"http://127.0.0.1:%d","ws":"ws://127.0.0.1:%d"}],
-  "channels": [{"id":1,"farcd":"farcd0","storage":"disk0"}]
-}`, farcdHTTPPort, farcdWSPort)
+	const doc = `{"channels": [{"id":1,"storage":"disk0"}]}`
 	path := filepath.Join(t.TempDir(), "hls_server.config.json")
 	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		t.Fatalf("write hls_server config: %v", err)
@@ -239,12 +236,14 @@ func writeHlsConfig(t *testing.T, farcdHTTPPort, farcdWSPort int) string {
 }
 
 // hlsEnv builds the HLS_SERVER_* environment variables the hls_server
-// process reads its HTTP address and segment/cache tuning from
-// (internal/hlsconfig's loadEnv).
-func hlsEnv(httpPort int, cacheDir string) []string {
+// process reads its HTTP address, the one farcd it talks to (ADR-020), and
+// segment/cache tuning from (internal/hlsconfig's loadEnv).
+func hlsEnv(httpPort, farcdHTTPPort, farcdWSPort int, cacheDir string) []string {
 	return append(os.Environ(),
 		"HLS_SERVER_HTTP_IP=127.0.0.1",
 		fmt.Sprintf("HLS_SERVER_HTTP_PORT=%d", httpPort),
+		fmt.Sprintf("HLS_SERVER_FARC_HTTP=http://127.0.0.1:%d", farcdHTTPPort),
+		fmt.Sprintf("HLS_SERVER_FARC_WS=ws://127.0.0.1:%d", farcdWSPort),
 		"HLS_SERVER_TARGET_SEGMENT_DURATION=2s",
 		"HLS_SERVER_CACHE_DIR="+cacheDir,
 		"HLS_SERVER_CACHE_QUOTA_BYTES=104857600",
@@ -396,13 +395,13 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	farcConfigPath := writeFarcConfig(t, imgPath)
 
 	hlsHTTPPort := freePort(t)
-	hlsConfigPath := writeHlsConfig(t, farcHTTPPort, farcWSPort)
+	hlsConfigPath := writeHlsConfig(t)
 
 	farcCmd := startProcess(t, "farc", farcBin, farcConfigPath, farcEnv(farcHTTPPort, farcWSPort, farcMetricsPort))
 	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
 	waitForServer(t, farcAddr)
 
-	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, t.TempDir()))
+	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, farcHTTPPort, farcWSPort, t.TempDir()))
 	hlsAddr := fmt.Sprintf("127.0.0.1:%d", hlsHTTPPort)
 	waitForServer(t, hlsAddr)
 

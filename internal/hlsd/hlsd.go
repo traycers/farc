@@ -1,6 +1,6 @@
 // Package hlsd is hls_server's process wiring, mirroring internal/farcd's
 // own New/SetLogger/Run/shutdown orchestrator shape: load hlsconfig ->
-// build one hlsclient.Client per configured farcd endpoint -> open the
+// build the one hlsclient.Client for cfg.Farcd (ADR-020) -> open the
 // disk segment cache -> start one tocindex.EventSubscriber per configured
 // channel (ADR-018) -> serve internal/hlsapi on one listener -> graceful
 // shutdown on context cancellation.
@@ -36,21 +36,17 @@ type Hlsd struct {
 	logf func(format string, args ...any)
 }
 
-// New builds every hlsclient.Client, opens the disk cache, and wires
-// internal/hlsapi's handler, but starts nothing yet — call Run to actually
-// start serving and subscribing. cfg is assumed already validated by
-// hlsconfig.Load (in particular, every cc.Farcd is guaranteed present in
-// cfg.Farcds).
+// New builds the one hlsclient.Client for cfg.Farcd, opens the disk cache,
+// and wires internal/hlsapi's handler, but starts nothing yet — call Run to
+// actually start serving and subscribing. cfg is assumed already validated
+// by hlsconfig.Load.
 func New(cfg *hlsconfig.Config) (*Hlsd, error) {
 	h := &Hlsd{
 		index: tocindex.NewIndex(),
 		logf:  func(string, ...any) {},
 	}
 
-	clientsByFarcd := make(map[string]*hlsclient.Client, len(cfg.Farcds))
-	for _, f := range cfg.Farcds {
-		clientsByFarcd[f.ID] = hlsclient.New(f.HTTP, f.WS)
-	}
+	client := hlsclient.New(cfg.Farcd.HTTP, cfg.Farcd.WS)
 
 	cache, err := segmentcache.New(cfg.CacheDir, cfg.CacheQuotaBytes)
 	if err != nil {
@@ -58,14 +54,13 @@ func New(cfg *hlsconfig.Config) (*Hlsd, error) {
 	}
 	h.cache = cache
 
-	clientsByChannel := make(map[uint16]*hlsclient.Client, len(cfg.Channels))
+	channels := make(map[uint16]bool, len(cfg.Channels))
 	for _, cc := range cfg.Channels {
-		client := clientsByFarcd[cc.Farcd]
-		clientsByChannel[cc.ID] = client
+		channels[cc.ID] = true
 		h.subs = append(h.subs, tocindex.NewEventSubscriber(client, cc.Storage, []uint16{cc.ID}, h.index))
 	}
 
-	apiServer := hlsapi.New(h.index, clientsByChannel, h.cache, cfg.TargetSegmentDuration.Duration())
+	apiServer := hlsapi.New(h.index, client, channels, h.cache, cfg.TargetSegmentDuration.Duration())
 	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler()}
 
 	return h, nil

@@ -84,7 +84,7 @@ func TestServer_PlaylistThenSegments_ThenServedFromCacheAfterFarcdGone(t *testin
 	// segment -- keeps the test's expectations simple.
 	const targetDur = 10 * time.Millisecond
 
-	srv := hlsapi.New(idx, map[uint16]*hlsclient.Client{1: client}, cache, targetDur)
+	srv := hlsapi.New(idx, client, map[uint16]bool{1: true}, cache, targetDur)
 	hls := httptest.NewServer(srv.Handler())
 	defer hls.Close()
 

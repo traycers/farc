@@ -19,24 +19,26 @@ import (
 // router library).
 type Server struct {
 	index     *tocindex.Index
-	clients   map[uint16]*hlsclient.Client // channel -> the farcd endpoint that serves it
+	client    *hlsclient.Client // the one farcd this hls_server talks to (ADR-020)
+	channels  map[uint16]bool   // which channels this hls_server is configured to serve
 	cache     *segmentcache.Cache
 	targetDur time.Duration
 	mux       *http.ServeMux
 }
 
-// New builds a Server. clients maps each configured channel to the
-// hlsclient.Client for the farcd endpoint that serves it — a single client
-// isn't enough because hlsconfig may point different channels at different
-// farcd processes, while the segment route only carries (channel, storage,
-// uuid), not a farcd endpoint id (see internal/hlsd, which builds this map
-// from hlsconfig.Config). targetDur is the nominal segment duration
-// (docs/docs/archive/12-hls-server.md's target_segment_duration) — the same
-// value internal/playlist.Build and internal/playlist.RecordSegments must
-// both be called with for a segment index to mean the same thing on both
-// the playlist and the segment route.
-func New(index *tocindex.Index, clients map[uint16]*hlsclient.Client, cache *segmentcache.Cache, targetDur time.Duration) *Server {
-	s := &Server{index: index, clients: clients, cache: cache, targetDur: targetDur, mux: http.NewServeMux()}
+// New builds a Server. client is the hlsclient.Client for the one farcd
+// hls_server talks to (ADR-020 — v1 supports exactly one, not a per-channel
+// choice); channels is the set of channel numbers this hls_server is
+// configured to serve — the segment route only carries (channel, storage,
+// uuid), not anything to distinguish configured from unconfigured channels
+// on its own, so handlers consult this set directly (see internal/hlsd,
+// which builds it from hlsconfig.Config). targetDur is the nominal segment
+// duration (docs/docs/archive/12-hls-server.md's target_segment_duration) —
+// the same value internal/playlist.Build and internal/playlist.
+// RecordSegments must both be called with for a segment index to mean the
+// same thing on both the playlist and the segment route.
+func New(index *tocindex.Index, client *hlsclient.Client, channels map[uint16]bool, cache *segmentcache.Cache, targetDur time.Duration) *Server {
+	s := &Server{index: index, client: client, channels: channels, cache: cache, targetDur: targetDur, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
