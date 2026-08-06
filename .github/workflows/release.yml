@@ -1,11 +1,16 @@
 name: Release
 
-# Every PR merged into main gets a release: bump the patch version, tag it,
-# build+package the three service images, publish a GitHub Release with the
-# resulting *.tar. Plain pushes to main that aren't a PR merge (direct
-# pushes, if branch protection ever allows them) intentionally don't trigger
-# this -- only closed-and-merged PRs do.
+# A direct push to main bumps patch; a merged PR into main bumps minor.
+# Both are listened for separately, but merging a PR via the GitHub UI
+# *also* pushes the merge/squash/rebase result to main -- so a naive
+# `push` + `pull_request: closed` pair would fire twice for the same
+# merge. The `determine` job below tells them apart via the API (whether
+# the pushed commit is already associated with a merged PR) rather than
+# guessing from the commit message, since that works for all three merge
+# strategies, including rebase (which otherwise leaves no trace at all).
 on:
+  push:
+    branches: [main]
   pull_request:
     types: [closed]
     branches: [main]
@@ -15,7 +20,7 @@ permissions:
   # with the default GITHUB_TOKEN -- that token is read-only otherwise.
   contents: write
 
-# Serialize releases rather than cancel-in-progress: two PRs merged close
+# Serialize releases rather than cancel-in-progress: two pushes/merges close
 # together must each get their own tag/release, not have one clobber the
 # other's in-flight version bump.
 concurrency:
@@ -23,25 +28,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  determine:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    outputs:
+      bump: ${{ steps.decide.outputs.bump }}
+    steps:
+      - name: Decide bump type
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # This push might just BE a just-merged PR landing on main --
+          # in that case the pull_request-triggered run above handles it
+          # as a minor bump, and this push must not also release it.
+          prs="$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '[.[] | select(.merged_at != null)] | length')"
+          if [ "$prs" -gt 0 ]; then
+            echo "bump=skip" >> "$GITHUB_OUTPUT"
+          else
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
-    if: github.event.pull_request.merged == true
+    needs: determine
+    if: needs.determine.outputs.bump != 'skip'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
 
       # No version file in the repo -- the latest v*.*.* tag IS the current
-      # version. Start at v0.1.0 if no tag exists yet.
+      # version. Start at v0.0.1 (patch) / v0.1.0 (minor) if no tag exists
+      # yet.
       - name: Determine next version
         id: version
+        env:
+          BUMP: ${{ needs.determine.outputs.bump }}
         run: |
           last="$(git tag --list 'v*.*.*' | sort -V | tail -1)"
           last="${last#v}"
           last="${last:-0.0.0}"
           IFS=. read -r major minor patch <<< "$last"
-          value="$major.$minor.$((patch + 1))"
+          case "$BUMP" in
+            minor) value="$major.$((minor + 1)).0" ;;
+            patch) value="$major.$minor.$((patch + 1))" ;;
+            *) echo "unknown bump type: $BUMP" >&2; exit 1 ;;
+          esac
           echo "value=$value" >> "$GITHUB_OUTPUT"
           echo "tag=v$value" >> "$GITHUB_OUTPUT"
 
