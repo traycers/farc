@@ -69,8 +69,19 @@ func (ci *ChannelIngest) setupMedia(c rtspSource, medi *description.Media, strea
 	}
 }
 
+// muxAnnexB is called once per decoded access unit -- the returned slice is
+// retained by CapturePolicy's FrameQueue for the channel's whole retention
+// window (and, while recording, by the open segment's Filler too), so it
+// must be a single owned allocation, not a view into anything gortsplib
+// reuses. Pre-sizing avoids the repeated grow-and-copy append(nil, ...)
+// would otherwise do per NALU -- for a keyframe access unit (SPS+PPS+IDR)
+// that's the difference between one allocation and several.
 func muxAnnexB(nalus [][]byte) []byte {
-	var out []byte
+	size := 0
+	for _, n := range nalus {
+		size += 4 + len(n)
+	}
+	out := make([]byte, 0, size)
 	for _, n := range nalus {
 		out = append(out, 0, 0, 0, 1)
 		out = append(out, n...)
