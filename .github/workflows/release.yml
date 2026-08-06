@@ -1,30 +1,59 @@
 name: Release
 
+# Every PR merged into main gets a release: bump the patch version, tag it,
+# build+package the three service images, publish a GitHub Release with the
+# resulting *.tar. Plain pushes to main that aren't a PR merge (direct
+# pushes, if branch protection ever allows them) intentionally don't trigger
+# this -- only closed-and-merged PRs do.
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 permissions:
-  # Needed to create the GitHub Release and upload its asset with the
-  # default GITHUB_TOKEN -- that token is read-only otherwise.
+  # Needed to push the new version tag and to create the GitHub Release
+  # with the default GITHUB_TOKEN -- that token is read-only otherwise.
   contents: write
+
+# Serialize releases rather than cancel-in-progress: two PRs merged close
+# together must each get their own tag/release, not have one clobber the
+# other's in-flight version bump.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
   release:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
-      # Tags keep the "v" (v1.2.3); Docker tags conventionally don't.
-      - name: Derive version
+      # No version file in the repo -- the latest v*.*.* tag IS the current
+      # version. Start at v0.1.0 if no tag exists yet.
+      - name: Determine next version
         id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          last="$(git tag --list 'v*.*.*' | sort -V | tail -1)"
+          last="${last#v}"
+          last="${last:-0.0.0}"
+          IFS=. read -r major minor patch <<< "$last"
+          value="$major.$minor.$((patch + 1))"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+          echo "tag=v$value" >> "$GITHUB_OUTPUT"
 
-      # Self-contained guard rather than reaching into ci.yml's run via
-      # workflow_run -- cheap enough to just re-run before packaging a
-      # release, and this workflow triggers on a tag push, which ci.yml
-      # (branch/PR-triggered) never sees on its own.
+      - name: Tag release
+        env:
+          VERSION_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git tag "$VERSION_TAG"
+          git push origin "$VERSION_TAG"
+
+      # Self-contained guard rather than trusting the PR's own CI run --
+      # cheap enough to just re-run before packaging a release.
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.3"
@@ -52,4 +81,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.value }}
-        run: gh release create "$GITHUB_REF_NAME" farc-"$VERSION".tar --generate-notes
+          VERSION_TAG: ${{ steps.version.outputs.tag }}
+        run: gh release create "$VERSION_TAG" farc-"$VERSION".tar --generate-notes
