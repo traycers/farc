@@ -20,7 +20,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 func decodeJSON(r *http.Request, v any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	err := dec.Decode(v)
+	if err != nil {
 		return fmt.Errorf("api: decode request body: %w", err)
 	}
 	return nil

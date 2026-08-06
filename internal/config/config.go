@@ -29,6 +29,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -51,7 +52,8 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
+	err := json.Unmarshal(data, &s)
+	if err != nil {
 		return fmt.Errorf("config: duration must be a Go-style duration string: %w", err)
 	}
 	if s == "" {
@@ -148,7 +150,8 @@ func Save(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("config: marshal: %w", err)
 	}
-	if err := os.WriteFile(path, buf, 0o644); err != nil {
+	err = os.WriteFile(path, buf, 0o600)
+	if err != nil {
 		return fmt.Errorf("config: write %s: %w", path, err)
 	}
 	return nil
@@ -162,7 +165,8 @@ func Save(path string, cfg *Config) error {
 // and channels then arriving at runtime via POST /storages and /channels
 // (persisted back to the same path by Save).
 func EnsureExists(path string) error {
-	if _, err := os.Stat(path); err == nil {
+	_, err := os.Stat(path)
+	if err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("config: stat %s: %w", path, err)
@@ -174,7 +178,8 @@ func EnsureExists(path string) error {
 // from the JSON file at path, then validates the combined result.
 func Load(path string) (*Config, error) {
 	var cfg Config
-	if err := loadEnv(&cfg); err != nil {
+	err := loadEnv(&cfg)
+	if err != nil {
 		return nil, err
 	}
 
@@ -184,10 +189,12 @@ func Load(path string) (*Config, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(buf))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	err = dec.Decode(&cfg)
+	if err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	if err := cfg.validate(); err != nil {
+	err = cfg.validate()
+	if err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return &cfg, nil
@@ -200,20 +207,24 @@ func loadEnv(cfg *Config) error {
 	var err error
 
 	cfg.HTTP.IP = envOr("FARC_HTTP_IP", "0.0.0.0")
-	if cfg.HTTP.Port, err = envInt("FARC_HTTP_PORT"); err != nil {
+	cfg.HTTP.Port, err = envInt("FARC_HTTP_PORT")
+	if err != nil {
 		return err
 	}
 
 	cfg.WS.IP = envOr("FARC_WS_IP", "0.0.0.0")
-	if cfg.WS.Port, err = envInt("FARC_WS_PORT"); err != nil {
+	cfg.WS.Port, err = envInt("FARC_WS_PORT")
+	if err != nil {
 		return err
 	}
-	if cfg.WS.MaxConnections, err = envInt("FARC_WS_MAX_CONNECTIONS"); err != nil {
+	cfg.WS.MaxConnections, err = envInt("FARC_WS_MAX_CONNECTIONS")
+	if err != nil {
 		return err
 	}
 
 	cfg.Metrics.IP = envOr("FARC_METRICS_IP", "0.0.0.0")
-	if cfg.Metrics.Port, err = envInt("FARC_METRICS_PORT"); err != nil {
+	cfg.Metrics.Port, err = envInt("FARC_METRICS_PORT")
+	if err != nil {
 		return err
 	}
 
@@ -243,13 +254,13 @@ func envInt(key string) (int, error) {
 
 func (cfg *Config) validate() error {
 	if cfg.HTTP.Port == 0 {
-		return fmt.Errorf("http.port is required")
+		return errors.New("http.port is required")
 	}
 	if cfg.WS.Port == 0 {
-		return fmt.Errorf("ws.port is required")
+		return errors.New("ws.port is required")
 	}
 	if cfg.Metrics.Port == 0 {
-		return fmt.Errorf("metrics.port is required")
+		return errors.New("metrics.port is required")
 	}
 
 	storageIDs := make(map[string]bool, len(cfg.Storages))

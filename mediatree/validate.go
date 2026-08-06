@@ -1,6 +1,9 @@
 package mediatree
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Validate checks the structural invariants required of a Content tree —
 // the checklist from docs/docs/archive/08-array-trees.md §13, applied to the
@@ -18,7 +21,7 @@ import "fmt"
 func Validate(elems []Element) error {
 	n := uint32(len(elems))
 	if n == 0 {
-		return fmt.Errorf("mediatree: empty tree")
+		return errors.New("mediatree: empty tree")
 	}
 
 	rootCount := 0

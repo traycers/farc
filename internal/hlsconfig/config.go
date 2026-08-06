@@ -22,6 +22,7 @@ package hlsconfig
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -36,7 +37,8 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
+	err := json.Unmarshal(data, &s)
+	if err != nil {
 		return fmt.Errorf("hlsconfig: duration must be a Go-style duration string: %w", err)
 	}
 	parsed, err := time.ParseDuration(s)
@@ -110,7 +112,8 @@ type Config struct {
 // the combined result.
 func Load(path string) (*Config, error) {
 	var cfg Config
-	if err := loadEnv(&cfg); err != nil {
+	err := loadEnv(&cfg)
+	if err != nil {
 		return nil, err
 	}
 
@@ -120,10 +123,12 @@ func Load(path string) (*Config, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(buf))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	err = dec.Decode(&cfg)
+	if err != nil {
 		return nil, fmt.Errorf("hlsconfig: parse %s: %w", path, err)
 	}
-	if err := cfg.validate(); err != nil {
+	err = cfg.validate()
+	if err != nil {
 		return nil, fmt.Errorf("hlsconfig: %s: %w", path, err)
 	}
 	return &cfg, nil
@@ -139,7 +144,8 @@ func Save(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("hlsconfig: marshal: %w", err)
 	}
-	if err := os.WriteFile(path, buf, 0o644); err != nil {
+	err = os.WriteFile(path, buf, 0o600)
+	if err != nil {
 		return fmt.Errorf("hlsconfig: write %s: %w", path, err)
 	}
 	return nil
@@ -152,7 +158,8 @@ func Save(path string, cfg *Config) error {
 // hls_config volume) — bootstrap itself into a valid, loadable config on
 // first container start, mirroring internal/config.EnsureExists.
 func EnsureExists(path string) error {
-	if _, err := os.Stat(path); err == nil {
+	_, err := os.Stat(path)
+	if err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("hlsconfig: stat %s: %w", path, err)
@@ -161,7 +168,8 @@ func EnsureExists(path string) error {
 	if err != nil {
 		return fmt.Errorf("hlsconfig: marshal: %w", err)
 	}
-	if err := os.WriteFile(path, buf, 0o644); err != nil {
+	err = os.WriteFile(path, buf, 0o600)
+	if err != nil {
 		return fmt.Errorf("hlsconfig: write %s: %w", path, err)
 	}
 	return nil
@@ -242,14 +250,14 @@ func envInt64(key string) (int64, error) {
 
 func (cfg *Config) validate() error {
 	if cfg.HTTP.Port == 0 {
-		return fmt.Errorf("http.port is required")
+		return errors.New("http.port is required")
 	}
 
 	if cfg.Farcd.HTTP == "" {
-		return fmt.Errorf("farcd.http is required")
+		return errors.New("farcd.http is required")
 	}
 	if cfg.Farcd.WS == "" {
-		return fmt.Errorf("farcd.ws is required")
+		return errors.New("farcd.ws is required")
 	}
 
 	channelIDs := make(map[uint16]bool, len(cfg.Channels))
@@ -269,20 +277,20 @@ func (cfg *Config) validate() error {
 	}
 
 	if cfg.TargetSegmentDuration.Duration() <= 0 {
-		return fmt.Errorf("target_segment_duration must be a positive duration")
+		return errors.New("target_segment_duration must be a positive duration")
 	}
 
 	switch cfg.CacheBackend {
 	case "disk":
 		if cfg.CacheDir == "" {
-			return fmt.Errorf("cache_dir is required")
+			return errors.New("cache_dir is required")
 		}
 	case "s3":
 		if cfg.S3Endpoint == "" {
-			return fmt.Errorf("s3_endpoint is required when cache_backend is \"s3\"")
+			return errors.New(`s3_endpoint is required when cache_backend is "s3"`)
 		}
 		if cfg.S3Bucket == "" {
-			return fmt.Errorf("s3_bucket is required when cache_backend is \"s3\"")
+			return errors.New(`s3_bucket is required when cache_backend is "s3"`)
 		}
 	default:
 		return fmt.Errorf("cache_backend must be \"disk\" or \"s3\", got %q", cfg.CacheBackend)

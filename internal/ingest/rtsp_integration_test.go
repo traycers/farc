@@ -46,7 +46,8 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 		Handler:     handler,
 		RTSPAddress: "127.0.0.1:0",
 	}
-	if err := server.Start(); err != nil {
+	err := server.Start()
+	if err != nil {
 		t.Fatalf("server.Start: %v", err)
 	}
 	defer server.Close()
@@ -58,7 +59,8 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 		}},
 	}
 	stream := &gortsplib.ServerStream{Server: server, Desc: desc}
-	if err := stream.Initialize(); err != nil {
+	err = stream.Initialize()
+	if err != nil {
 		t.Fatalf("stream.Initialize: %v", err)
 	}
 	defer stream.Close()
@@ -71,7 +73,8 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 
 	rec := &fakeRecorder{}
 	policy := NewCapturePolicy(1, rec, uint64(10*time.Second), PolicyContinuous, PolicyParams{})
-	if err := policy.StartRecording(0, nil); err != nil {
+	err = policy.StartRecording(0, nil)
+	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
 	ci := NewChannelIngest(1, policy)
@@ -108,7 +111,8 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 		}
 		for _, pkt := range packets {
 			pkt.Timestamp = ts
-			if err := stream.WritePacketRTP(desc.Medias[0], pkt); err != nil {
+			err := stream.WritePacketRTP(desc.Medias[0], pkt)
+			if err != nil {
 				t.Fatalf("WritePacketRTP: %v", err)
 			}
 		}

@@ -124,7 +124,8 @@ func (m *IngestManager) startLocked(cfg ChannelConfig) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := ci.Run(ctx, cfg.RTSPURL, cfg.ReadTimeout, cfg.WriteTimeout); err != nil {
+		err := ci.Run(ctx, cfg.RTSPURL, cfg.ReadTimeout, cfg.WriteTimeout)
+		if err != nil {
 			m.logf("ingest: channel %d stopped: %v", cfg.Channel, err)
 		}
 	}()

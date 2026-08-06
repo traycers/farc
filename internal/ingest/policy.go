@@ -148,7 +148,8 @@ func (p *CapturePolicy) HandleFrame(stream uint32, kind fcontainer.StreamKind, f
 	if err != nil {
 		return err
 	}
-	if err := p.filler.AddFrames(cid, []fcontainer.Frame{frame}); err != nil {
+	err = p.filler.AddFrames(cid, []fcontainer.Frame{frame})
+	if err != nil {
 		return err
 	}
 	p.trackTimeLocked(frame.Time)
@@ -205,7 +206,8 @@ func (p *CapturePolicy) openSegmentLocked(replayFrom uint64) error {
 		if err != nil {
 			return fmt.Errorf("ingest: replay: %w", err)
 		}
-		if err := p.filler.AddFrames(cid, []fcontainer.Frame{qf.Frame}); err != nil {
+		err = p.filler.AddFrames(cid, []fcontainer.Frame{qf.Frame})
+		if err != nil {
 			return fmt.Errorf("ingest: replay: %w", err)
 		}
 		p.trackTimeLocked(qf.Frame.Time)
@@ -276,7 +278,8 @@ func (p *CapturePolicy) Trigger(now, eventTime uint64) error {
 
 	candidate := eventTime + p.params.Postrecord
 	if !p.recording {
-		if err := p.openSegmentLocked(saturatingSub(eventTime, p.params.Prerecord)); err != nil {
+		err := p.openSegmentLocked(saturatingSub(eventTime, p.params.Prerecord))
+		if err != nil {
 			return err
 		}
 		p.stopAt, p.stopAtSet = candidate, true

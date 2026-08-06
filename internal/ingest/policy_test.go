@@ -47,17 +47,21 @@ func TestContinuous_StartWithoutFromTimeDoesNotReplay(t *testing.T) {
 	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
-	if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI)); err != nil {
+	err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI))
+	if err != nil {
 		t.Fatalf("HandleFrame (idle, queued only): %v", err)
 	}
 
-	if err := p.StartRecording(100, nil); err != nil {
+	err = p.StartRecording(100, nil)
+	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
-	if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(110, mediatree.FrameKindP)); err != nil {
+	err = p.HandleFrame(0, fcontainer.KindVideo, vframe(110, mediatree.FrameKindP))
+	if err != nil {
 		t.Fatalf("HandleFrame (recording): %v", err)
 	}
-	if err := p.StopRecording(200); err != nil {
+	err = p.StopRecording(200)
+	if err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}
 
@@ -79,15 +83,18 @@ func TestContinuous_StartWithFromTimeReplaysQueue(t *testing.T) {
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	for _, ts := range []uint64{10, 20, 30} {
-		if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(ts, mediatree.FrameKindI)); err != nil {
+		err := p.HandleFrame(0, fcontainer.KindVideo, vframe(ts, mediatree.FrameKindI))
+		if err != nil {
 			t.Fatalf("HandleFrame: %v", err)
 		}
 	}
 
-	if err := p.StartRecording(100, ptr(uint64(15))); err != nil {
+	err := p.StartRecording(100, ptr(uint64(15)))
+	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
-	if err := p.StopRecording(200); err != nil {
+	err = p.StopRecording(200)
+	if err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}
 
@@ -113,13 +120,15 @@ func TestEvent_TriggerInIdleReplaysPrerecordAndSetsStopAt(t *testing.T) {
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	for _, ts := range []uint64{60, 80, 100} {
-		if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(ts, mediatree.FrameKindI)); err != nil {
+		err := p.HandleFrame(0, fcontainer.KindVideo, vframe(ts, mediatree.FrameKindI))
+		if err != nil {
 			t.Fatalf("HandleFrame: %v", err)
 		}
 	}
 
 	// event at t=100: prerecord window [80,100] -> replays ts=80,100.
-	if err := p.Trigger(100, 100); err != nil {
+	err := p.Trigger(100, 100)
+	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if !p.recording {
@@ -129,14 +138,16 @@ func TestEvent_TriggerInIdleReplaysPrerecordAndSetsStopAt(t *testing.T) {
 		t.Fatalf("stopAt = %d, want 150 (100+50)", p.stopAt)
 	}
 
-	if err := p.Tick(149); err != nil {
+	err = p.Tick(149)
+	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
 	if !p.recording {
 		t.Fatal("should still be recording before stop_at")
 	}
 
-	if err := p.Tick(150); err != nil {
+	err = p.Tick(150)
+	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
 	if p.recording {
@@ -155,7 +166,8 @@ func TestEvent_TriggerDuringRecordingExtendsButNeverShrinks(t *testing.T) {
 	p := NewCapturePolicy(1, rec, 1000, PolicyEvent, PolicyParams{Prerecord: 0, Postrecord: 50})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
-	if err := p.Trigger(100, 100); err != nil {
+	err := p.Trigger(100, 100)
+	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if p.stopAt != 150 {
@@ -163,7 +175,8 @@ func TestEvent_TriggerDuringRecordingExtendsButNeverShrinks(t *testing.T) {
 	}
 
 	// A later trigger with a bigger stop_at candidate extends.
-	if err := p.Trigger(120, 120); err != nil {
+	err = p.Trigger(120, 120)
+	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if p.stopAt != 170 {
@@ -171,7 +184,8 @@ func TestEvent_TriggerDuringRecordingExtendsButNeverShrinks(t *testing.T) {
 	}
 
 	// A trigger whose candidate is smaller must NOT shrink stop_at.
-	if err := p.Trigger(130, 90); err != nil {
+	err = p.Trigger(130, 90)
+	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if p.stopAt != 170 {
@@ -195,10 +209,12 @@ func TestSetPolicy_OpenSegmentSurvivesSwapAndFallsUnderNewRules(t *testing.T) {
 	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
-	if err := p.StartRecording(0, nil); err != nil {
+	err := p.StartRecording(0, nil)
+	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
-	if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI)); err != nil {
+	err = p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI))
+	if err != nil {
 		t.Fatalf("HandleFrame: %v", err)
 	}
 
@@ -213,7 +229,8 @@ func TestSetPolicy_OpenSegmentSurvivesSwapAndFallsUnderNewRules(t *testing.T) {
 	}
 
 	// A tick must not close it (no stop_at set yet).
-	if err := p.Tick(1_000_000); err != nil {
+	err = p.Tick(1_000_000)
+	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
 	if !p.recording {
@@ -222,13 +239,15 @@ func TestSetPolicy_OpenSegmentSurvivesSwapAndFallsUnderNewRules(t *testing.T) {
 
 	// First real trigger under the new policy sets stop_at via plain
 	// assignment (max degenerates since there was no prior value).
-	if err := p.Trigger(20, 20); err != nil {
+	err = p.Trigger(20, 20)
+	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if p.stopAt != 50 {
 		t.Fatalf("stopAt = %d, want 50", p.stopAt)
 	}
-	if err := p.Tick(50); err != nil {
+	err = p.Tick(50)
+	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
 	if p.recording {
@@ -248,20 +267,24 @@ func TestReplay_MultipleConfigVersionsAddedInOrder(t *testing.T) {
 	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
 
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
-	if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI)); err != nil {
+	err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI))
+	if err != nil {
 		t.Fatalf("HandleFrame: %v", err)
 	}
 	// Params change mid-queue (new SPS/PPS) -> a distinct config version.
 	newParams := fcontainer.StreamParams{Time: 15, CodecVideo: mediatree.CodecH264, ParamSPS: []byte{9, 9}, ParamPPS: []byte{8, 8}}
 	p.SetStreamParams(0, fcontainer.KindVideo, newParams)
-	if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(20, mediatree.FrameKindI)); err != nil {
+	err = p.HandleFrame(0, fcontainer.KindVideo, vframe(20, mediatree.FrameKindI))
+	if err != nil {
 		t.Fatalf("HandleFrame: %v", err)
 	}
 
-	if err := p.StartRecording(100, ptr(uint64(0))); err != nil {
+	err = p.StartRecording(100, ptr(uint64(0)))
+	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
-	if err := p.StopRecording(200); err != nil {
+	err = p.StopRecording(200)
+	if err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}
 

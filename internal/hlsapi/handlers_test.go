@@ -164,7 +164,8 @@ func TestServer_PlaylistThenSegments_ThenServedFromCacheAfterFarcdGone(t *testin
 		data := firstFetch[uri]
 		if strings.HasSuffix(uri, "init.mp4") {
 			var parsed fmp4.Init
-			if err := parsed.Unmarshal(bytes.NewReader(data)); err != nil {
+			err := parsed.Unmarshal(bytes.NewReader(data))
+			if err != nil {
 				t.Fatalf("fmp4.Init.Unmarshal(%s): %v", uri, err)
 			}
 			if len(parsed.Tracks) != 2 {
@@ -173,7 +174,8 @@ func TestServer_PlaylistThenSegments_ThenServedFromCacheAfterFarcdGone(t *testin
 			continue
 		}
 		var parts fmp4.Parts
-		if err := parts.Unmarshal(data); err != nil {
+		err := parts.Unmarshal(data)
+		if err != nil {
 			t.Fatalf("fmp4.Parts.Unmarshal(%s): %v", uri, err)
 		}
 		if len(parts) != 1 || len(parts[0].Tracks) != 2 {

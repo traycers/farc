@@ -2,6 +2,7 @@ package fblock
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -34,7 +35,8 @@ type Params struct {
 
 // EncodeParams serializes p to its on-disk JSON representation.
 func EncodeParams(p Params) ([]byte, error) {
-	if err := ValidateParams(p); err != nil {
+	err := ValidateParams(p)
+	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(p)
@@ -45,14 +47,15 @@ func EncodeParams(p Params) ([]byte, error) {
 // 03-storage-format.md §5.2.
 func DecodeParams(buf []byte) (Params, error) {
 	var p Params
-	if err := json.Unmarshal(buf, &p); err != nil {
+	err := json.Unmarshal(buf, &p)
+	if err != nil {
 		return Params{}, fmt.Errorf("fblock: params JSON decode: %w", err)
 	}
 	if p.FchunkSize == 0 {
-		return Params{}, fmt.Errorf("fblock: params: missing required field fchunk_size")
+		return Params{}, errors.New("fblock: params: missing required field fchunk_size")
 	}
 	if p.WriteMode == "" {
-		return Params{}, fmt.Errorf("fblock: params: missing required field write_mode")
+		return Params{}, errors.New("fblock: params: missing required field write_mode")
 	}
 	if p.ReadChunkSize == 0 {
 		p.ReadChunkSize = p.FchunkSize // default per §5.2 table
@@ -60,7 +63,8 @@ func DecodeParams(buf []byte) (Params, error) {
 	if p.MinContainerShare == 0 {
 		p.MinContainerShare = DefaultMinContainerShare
 	}
-	if err := ValidateParams(p); err != nil {
+	err = ValidateParams(p)
+	if err != nil {
 		return Params{}, err
 	}
 	return p, nil

@@ -43,7 +43,8 @@ func TestAddStreamParamsAndFramesVideo(t *testing.T) {
 	}
 
 	elems := f.Elements()
-	if err := mediatree.Validate(elems); err != nil {
+	err = mediatree.Validate(elems)
+	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 
@@ -92,11 +93,13 @@ func TestAddStreamParamsAndFramesAudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddStreamParams: %v", err)
 	}
-	if err := f.AddFrames(configID, []Frame{{Data: []byte("pcm1"), Time: 10}, {Data: []byte("pcm2"), Time: 20}}); err != nil {
+	err = f.AddFrames(configID, []Frame{{Data: []byte("pcm1"), Time: 10}, {Data: []byte("pcm2"), Time: 20}})
+	if err != nil {
 		t.Fatalf("AddFrames: %v", err)
 	}
 	elems := f.Elements()
-	if err := mediatree.Validate(elems); err != nil {
+	err = mediatree.Validate(elems)
+	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	framesID, ok := mediatree.FindChildByRole(elems, configID, mediatree.RoleFramesAudio)
@@ -154,7 +157,8 @@ func TestMultipleChannelsAndStreams(t *testing.T) {
 		t.Fatalf("expected distinct config ids, got %d %d %d", c1, c2, c3)
 	}
 	elems := f.Elements()
-	if err := mediatree.Validate(elems); err != nil {
+	err := mediatree.Validate(elems)
+	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	chID, _ := mediatree.FindChildByRole(elems, 0, mediatree.RoleChannels)
@@ -196,7 +200,8 @@ func TestConcurrentFillUnderRace(t *testing.T) {
 				if i == 0 {
 					fr.Kind = mediatree.FrameKindI
 				}
-				if err := f.AddFrames(configID, []Frame{fr}); err != nil {
+				err := f.AddFrames(configID, []Frame{fr})
+				if err != nil {
 					t.Errorf("goroutine %d: AddFrames: %v", g, err)
 					return
 				}
@@ -206,7 +211,8 @@ func TestConcurrentFillUnderRace(t *testing.T) {
 	wg.Wait()
 
 	elems := f.Elements()
-	if err := mediatree.Validate(elems); err != nil {
+	err := mediatree.Validate(elems)
+	if err != nil {
 		t.Fatalf("Validate after concurrent fill: %v", err)
 	}
 
@@ -233,7 +239,8 @@ func TestContentRoundTripsThroughMediatree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeContent: %v", err)
 	}
-	if err := mediatree.Validate(got); err != nil {
+	err = mediatree.Validate(got)
+	if err != nil {
 		t.Fatalf("Validate decoded content: %v", err)
 	}
 	if len(got) != f.Len() {

@@ -1,7 +1,7 @@
 package api
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -267,7 +267,8 @@ func TestHandleStopRecording_NoIngestManager(t *testing.T) {
 
 func regTestUnit(t *testing.T, reg *StorageRegistry, id string) {
 	t.Helper()
-	if err := reg.Register(id, newTestUnit(t), id+".img", ""); err != nil {
+	err := reg.Register(id, newTestUnit(t), id+".img", "")
+	if err != nil {
 		t.Fatalf("Register(%q): %v", id, err)
 	}
 }
@@ -297,7 +298,8 @@ func TestHandleCreateChannel_StartsItAndListsIt(t *testing.T) {
 	}
 	defer getResp.Body.Close()
 	var list []channelInfo
-	if err := decodeBody(getResp, &list); err != nil {
+	err = decodeBody(getResp, &list)
+	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(list) != 1 || list[0].Channel != 5 || list[0].RTSPURL != req.RTSPURL || list[0].Storage != "s1" || list[0].PolicyType != "continuous" {
@@ -368,7 +370,7 @@ func TestHandleCreateChannel_OnChannelCreatedErrorRemovesChannel(t *testing.T) {
 	im := ingest.NewIngestManager()
 	t.Cleanup(im.Stop)
 	s := NewHttpApiServer(reg, im, nil)
-	s.SetOnChannelCreated(func(ChannelSpec) error { return fmt.Errorf("disk full") })
+	s.SetOnChannelCreated(func(ChannelSpec) error { return errors.New("disk full") })
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 

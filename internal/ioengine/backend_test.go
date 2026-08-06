@@ -41,13 +41,6 @@ func TestRoundRange(t *testing.T) {
 	}
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func TestIsAligned(t *testing.T) {
 	if !isAligned(0, 512) || !isAligned(512, 512) || !isAligned(1024, 512) {
 		t.Error("multiples of 512 should be aligned")

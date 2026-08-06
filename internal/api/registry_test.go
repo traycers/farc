@@ -6,7 +6,8 @@ func TestStorageRegistry_RegisterGetList(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 
-	if err := reg.Register("s1", u, "/tmp/s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "/tmp/s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -29,7 +30,8 @@ func TestStorageRegistry_DuplicateIDRejected(t *testing.T) {
 	u1 := newTestUnit(t)
 	u2 := newTestUnit(t)
 
-	if err := reg.Register("dup", u1, "a", ""); err != nil {
+	err := reg.Register("dup", u1, "a", "")
+	if err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
 	if err := reg.Register("dup", u2, "b", ""); err == nil {

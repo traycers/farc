@@ -178,7 +178,8 @@ func (c *Catalog) Clone() *Catalog {
 // EncodeCatalog serializes c into a new CatalogSize(c.MaxChannels, c.N)-byte
 // buffer, per the exact layout in docs/docs/archive/03-storage-format.md §6.
 func EncodeCatalog(c *Catalog) ([]byte, error) {
-	if err := validateCatalogShape(c); err != nil {
+	err := validateCatalogShape(c)
+	if err != nil {
 		return nil, err
 	}
 	rb := rowBytes(c.MaxChannels)

@@ -17,7 +17,8 @@ import (
 func doByDefault(cmd *cobra.Command, args []string) {
 	_ = godotenv.Load()
 
-	if err := hlsconfig.EnsureExists(configPath); err != nil {
+	err := hlsconfig.EnsureExists(configPath)
+	if err != nil {
 		log.Fatalf("hls_server: %v", err)
 	}
 	cfg, err := hlsconfig.Load(configPath)
@@ -36,9 +37,11 @@ func doByDefault(cmd *cobra.Command, args []string) {
 
 	log.Printf("hls_server: starting (http=%s, farcd=%s, %d seed channels -- reconciled live against farcd afterward, ADR-021)",
 		cfg.HTTP, cfg.Farcd.HTTP, len(cfg.Channels))
-	if err := h.Run(ctx); err != nil {
+	err = h.Run(ctx)
+	if err != nil {
 		log.Printf("hls_server: exited with error: %v", err)
-		os.Exit(1)
+		stop()     // explicit call since the deferred one is skipped by os.Exit below
+		os.Exit(1) //nolint:gocritic // stop() was already called on the line above
 	}
 	log.Printf("hls_server: stopped")
 }

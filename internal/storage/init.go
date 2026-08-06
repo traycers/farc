@@ -38,7 +38,8 @@ type InitConfig struct {
 func Init(backend ioengine.Backend, cfg InitConfig) error {
 	if !cfg.Force {
 		probe := make([]byte, 8)
-		if _, err := backend.ReadAt(probe, 0); err != nil {
+		_, err := backend.ReadAt(probe, 0)
+		if err != nil {
 			return fmt.Errorf("storage: init: probe read: %w", err)
 		}
 		if fblock.HasValidMagicProlog(probe) {
@@ -47,10 +48,10 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 	}
 
 	if cfg.Geometry.N == 0 {
-		return fmt.Errorf("storage: init: N (fblock count) must be positive")
+		return errors.New("storage: init: N (fblock count) must be positive")
 	}
 	if cfg.Geometry.FblockSize == 0 {
-		return fmt.Errorf("storage: init: FblockSize must be positive")
+		return errors.New("storage: init: FblockSize must be positive")
 	}
 
 	catalogSize := fblock.CatalogSize(cfg.Geometry.MaxChannels, cfg.Geometry.N)
@@ -58,7 +59,8 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 	if err != nil {
 		return fmt.Errorf("storage: init: encode params: %w", err)
 	}
-	if err := fblock.CheckMinContainerShare(cfg.Geometry.FblockSize, uint32(len(paramsBuf)), catalogSize, cfg.Params.MinContainerShare); err != nil {
+	err = fblock.CheckMinContainerShare(cfg.Geometry.FblockSize, uint32(len(paramsBuf)), catalogSize, cfg.Params.MinContainerShare)
+	if err != nil {
 		return fmt.Errorf("storage: init: %w", err)
 	}
 
@@ -109,7 +111,8 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 		ssd := cat.Clone()
 		ssd.SetState(0, fblock.Ready)
 		meta := SSDCatalogMeta{WriteSequence: 1, CatalogTime: cfg.Now, Cursor: 0}
-		if err := SaveSSDCatalog(cfg.CatalogPath, ssd, meta); err != nil {
+		err := SaveSSDCatalog(cfg.CatalogPath, ssd, meta)
+		if err != nil {
 			return fmt.Errorf("storage: init: create SSD catalog: %w", err)
 		}
 	}

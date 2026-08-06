@@ -112,7 +112,8 @@ func writeVideoFcontainer(t *testing.T, unit *storage.Unit, channel uint32, fram
 	for i, fr := range frames {
 		fcFrames[i] = fcontainer.Frame{Data: annexB(fr.NAL), Time: fr.Time, Kind: fr.Kind}
 	}
-	if err := f.AddFrames(configID, fcFrames); err != nil {
+	err := f.AddFrames(configID, fcFrames)
+	if err != nil {
 		t.Fatalf("AddFrames: %v", err)
 	}
 	if _, err := unit.WriteFcontainer([]uint16{uint16(channel)}, begin, end, f, now); err != nil {
@@ -130,18 +131,21 @@ func prepareStorageImage(t *testing.T) (imgPath string, begin, end uint64, video
 	imgPath = filepath.Join(dir, "storage.img")
 	geo := smallGeometry()
 
-	if err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644); err != nil {
+	err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	if err := storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1}); err != nil {
+	err := storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
+	if err != nil {
 		b.Close()
 		t.Fatalf("Init: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	err := b.Close()
+	if err != nil {
 		t.Fatalf("close after init: %v", err)
 	}
 
@@ -162,7 +166,8 @@ func prepareStorageImage(t *testing.T) (imgPath string, begin, end uint64, video
 		{Time: 500_000, Kind: mediatree.FrameKindP, NAL: []byte{0x41, 0x11}},
 	}, begin, end, 1000)
 
-	if err := unit.Close(); err != nil {
+	err := unit.Close()
+	if err != nil {
 		t.Fatalf("close storage after writing fixture: %v", err)
 	}
 	return imgPath, begin, end, videoFrame
@@ -206,7 +211,8 @@ func writeFarcConfig(t *testing.T, imgPath string, channelsJSON string) string {
   "channels": %s
 }`, imgJSON, channelsJSON)
 	path := filepath.Join(t.TempDir(), "farc.config.json")
-	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+	err := os.WriteFile(path, []byte(doc), 0o644)
+	if err != nil {
 		t.Fatalf("write farc config: %v", err)
 	}
 	return path
@@ -238,7 +244,8 @@ func writeHlsConfig(t *testing.T, channelsJSON string) string {
 	t.Helper()
 	doc := fmt.Sprintf(`{"channels": %s}`, channelsJSON)
 	path := filepath.Join(t.TempDir(), "hls_server.config.json")
-	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+	err := os.WriteFile(path, []byte(doc), 0o644)
+	if err != nil {
 		t.Fatalf("write hls_server config: %v", err)
 	}
 	return path
@@ -284,7 +291,8 @@ func startProcess(t *testing.T, name, binPath, configPath string, env []string) 
 	cmd.Env = env
 	cmd.Stdout = &logWriter{t: t, name: name}
 	cmd.Stderr = &logWriter{t: t, name: name}
-	if err := cmd.Start(); err != nil {
+	err := cmd.Start()
+	if err != nil {
 		t.Fatalf("start %s: %v", name, err)
 	}
 	t.Cleanup(func() {
@@ -301,7 +309,8 @@ func startProcess(t *testing.T, name, binPath, configPath string, env []string) 
 // listens for) and asserts the process exits cleanly within a bound.
 func stopProcessGracefully(t *testing.T, name string, cmd *exec.Cmd) {
 	t.Helper()
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	err := cmd.Process.Signal(syscall.SIGTERM)
+	if err != nil {
 		t.Fatalf("signal %s: %v", name, err)
 	}
 	done := make(chan error, 1)
@@ -436,7 +445,8 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 			}
 			if strings.HasSuffix(uri, "init.mp4") {
 				var parsed fmp4.Init
-				if err := parsed.Unmarshal(bytes.NewReader(data)); err != nil {
+				err := parsed.Unmarshal(bytes.NewReader(data))
+				if err != nil {
 					t.Fatalf("fmp4.Init.Unmarshal(%s): %v", uri, err)
 				}
 				if len(parsed.Tracks) != 1 {
@@ -448,7 +458,8 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 		}
 
 		var parts fmp4.Parts
-		if err := parts.Unmarshal(mediaData); err != nil {
+		err := parts.Unmarshal(mediaData)
+		if err != nil {
 			t.Fatalf("fmp4.Parts.Unmarshal: %v", err)
 		}
 		if len(parts) != 1 || len(parts[0].Tracks) != 1 || len(parts[0].Tracks[0].Samples) != 2 {
@@ -583,7 +594,8 @@ func readHlsConfigChannels(t *testing.T, path string) []hlsconfig.Channel {
 	var wire struct {
 		Channels []hlsconfig.Channel `json:"channels"`
 	}
-	if err := json.Unmarshal(buf, &wire); err != nil {
+	err := json.Unmarshal(buf, &wire)
+	if err != nil {
 		t.Fatalf("unmarshal %s: %v", path, err)
 	}
 	return wire.Channels

@@ -52,7 +52,8 @@ func TestSampleTreeRoundTripAndValidate(t *testing.T) {
 		}
 	}
 
-	if err := Validate(got); err != nil {
+	err = Validate(got)
+	if err != nil {
 		t.Fatalf("Validate() on the doc's own worked example: %v", err)
 	}
 }

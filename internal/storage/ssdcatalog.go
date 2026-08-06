@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 
@@ -38,7 +39,7 @@ var ssdMagic = [8]byte{'F', 'A', 'R', 'C', 'S', 'S', 'D', 'C'}
 // checksum doesn't check out — the documented trigger for falling back to
 // scanning the main disk (docs/docs/archive/04-storage-operations.md §4.1
 // step 5).
-var ErrSSDCatalogInvalid = fmt.Errorf("storage: SSD catalog missing or invalid")
+var ErrSSDCatalogInvalid = errors.New("storage: SSD catalog missing or invalid")
 
 // SSDCatalogMeta is the envelope's fixed metadata alongside the catalog
 // payload itself.
@@ -87,7 +88,7 @@ func DecodeSSDCatalog(buf []byte, c uint16, n uint32) (*fblock.Catalog, SSDCatal
 	}
 	cat, err := fblock.DecodeCatalog(payload, c, n)
 	if err != nil {
-		return nil, SSDCatalogMeta{}, fmt.Errorf("%w: %v", ErrSSDCatalogInvalid, err)
+		return nil, SSDCatalogMeta{}, fmt.Errorf("%w: %w", ErrSSDCatalogInvalid, err)
 	}
 	return cat, meta, nil
 }
@@ -99,15 +100,17 @@ func SaveSSDCatalog(path string, cat *fblock.Catalog, meta SSDCatalogMeta) error
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("storage: open SSD catalog %s: %w", path, err)
 	}
-	defer f.Close()
-	if _, err := f.Write(buf); err != nil {
+	defer func() { _ = f.Close() }()
+	_, err = f.Write(buf)
+	if err != nil {
 		return fmt.Errorf("storage: write SSD catalog %s: %w", path, err)
 	}
-	if err := f.Sync(); err != nil {
+	err = f.Sync()
+	if err != nil {
 		return fmt.Errorf("storage: fsync SSD catalog %s: %w", path, err)
 	}
 	return nil
@@ -120,7 +123,7 @@ func SaveSSDCatalog(path string, cat *fblock.Catalog, meta SSDCatalogMeta) error
 func LoadSSDCatalog(path string, c uint16, n uint32) (*fblock.Catalog, SSDCatalogMeta, error) {
 	buf, err := os.ReadFile(path)
 	if err != nil {
-		return nil, SSDCatalogMeta{}, fmt.Errorf("%w: %v", ErrSSDCatalogInvalid, err)
+		return nil, SSDCatalogMeta{}, fmt.Errorf("%w: %w", ErrSSDCatalogInvalid, err)
 	}
 	return DecodeSSDCatalog(buf, c, n)
 }

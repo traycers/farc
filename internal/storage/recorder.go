@@ -67,7 +67,8 @@ func (u *Unit) WriteFcontainer(channels []uint16, begin, end uint64, filler *fco
 		wasReady := prev.State(idx) == fblock.Ready
 		prevUUID := prev.UUID[idx]
 
-		if err := u.mgr.BeginWrite(idx); err != nil {
+		err = u.mgr.BeginWrite(idx)
+		if err != nil {
 			return [16]byte{}, err
 		}
 		u.notify.Publish(Event{Name: EventFblockWriteStarted, Index: idx, UUID: uuid})
@@ -81,7 +82,8 @@ func (u *Unit) WriteFcontainer(channels []uint16, begin, end uint64, filler *fco
 		// catalog — CompleteWrite below only ever touches state/uuid/
 		// begin/end, never channel_bitmap (see index.Manager.SetChannelBit).
 		for _, pos := range positions {
-			if err := u.mgr.SetChannelBit(idx, pos, true); err != nil {
+			err := u.mgr.SetChannelBit(idx, pos, true)
+			if err != nil {
 				return [16]byte{}, err
 			}
 		}
@@ -123,14 +125,16 @@ func (u *Unit) WriteFcontainer(channels []uint16, begin, end uint64, filler *fco
 		if res.Corrupted {
 			u.health.RecordWrite(true)
 			u.notify.Publish(Event{Name: EventFblockWriteFailed, Index: idx, UUID: uuid})
-			if err := u.mgr.MarkBad(idx); err != nil {
+			err := u.mgr.MarkBad(idx)
+			if err != nil {
 				return [16]byte{}, err
 			}
 			continue // retry: positions/uuid/begin/end/content/toc unchanged
 		}
 
 		u.health.RecordWrite(false)
-		if err := u.mgr.CompleteWrite(idx, uuid, begin, end); err != nil {
+		err = u.mgr.CompleteWrite(idx, uuid, begin, end)
+		if err != nil {
 			return [16]byte{}, err
 		}
 		u.saveSSDCatalogBestEffort(u.mgr.Snapshot(), SSDCatalogMeta{WriteSequence: seq, CatalogTime: now, Cursor: idx})
@@ -148,7 +152,8 @@ func (u *Unit) saveSSDCatalogBestEffort(cat *fblock.Catalog, meta SSDCatalogMeta
 	if u.catalogPath == "" {
 		return
 	}
-	if err := SaveSSDCatalog(u.catalogPath, cat, meta); err != nil {
+	err := SaveSSDCatalog(u.catalogPath, cat, meta)
+	if err != nil {
 		u.notify.Publish(Event{Name: EventStorageAlert, Severity: "warning", Reason: AlertSSDCatalogWriteFailed})
 	}
 }

@@ -35,18 +35,21 @@ func newTestUnit(t *testing.T) *storage.Unit {
 	imgPath := filepath.Join(dir, "storage.img")
 	geo := smallGeometry()
 
-	if err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644); err != nil {
+	err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	if err := storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1}); err != nil {
+	err = storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
+	if err != nil {
 		b.Close()
 		t.Fatalf("Init: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	err = b.Close()
+	if err != nil {
 		t.Fatalf("close after init: %v", err)
 	}
 

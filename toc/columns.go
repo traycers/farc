@@ -103,7 +103,8 @@ func validateColumnsShape(c *Columns) error {
 // Encode serializes c per the exact column layout and padding rule in
 // docs/docs/archive/06-toc-format.md §3-4.
 func Encode(c *Columns) ([]byte, error) {
-	if err := validateColumnsShape(c); err != nil {
+	err := validateColumnsShape(c)
+	if err != nil {
 		return nil, err
 	}
 	offs := ComputeOffsets(c.N)

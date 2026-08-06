@@ -33,7 +33,8 @@ const docExample = `{
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "hls_server.config.json")
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	err := os.WriteFile(path, []byte(contents), 0o644)
+	if err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	return path
@@ -213,7 +214,8 @@ func TestSave_RoundTripsThroughLoad(t *testing.T) {
 	}
 
 	cfg.Channels = append(cfg.Channels, Channel{ID: 7, Storage: "disk1"})
-	if err := Save(path, cfg); err != nil {
+	err = Save(path, cfg)
+	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -244,7 +246,8 @@ func TestSave_OverwritesInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if err := Save(path, cfg); err != nil {
+	err = Save(path, cfg)
+	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -261,7 +264,8 @@ func TestEnsureExists_CreatesEmptyConfigWhenMissing(t *testing.T) {
 	setRequiredEnv(t)
 	path := filepath.Join(t.TempDir(), "hls_server.config.json")
 
-	if err := EnsureExists(path); err != nil {
+	err := EnsureExists(path)
+	if err != nil {
 		t.Fatalf("EnsureExists: %v", err)
 	}
 
@@ -278,7 +282,8 @@ func TestEnsureExists_LeavesExistingFileUntouched(t *testing.T) {
 	setRequiredEnv(t)
 	path := writeConfig(t, docExample)
 
-	if err := EnsureExists(path); err != nil {
+	err := EnsureExists(path)
+	if err != nil {
 		t.Fatalf("EnsureExists: %v", err)
 	}
 

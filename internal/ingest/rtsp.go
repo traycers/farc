@@ -106,13 +106,13 @@ func (ci *ChannelIngest) setupH264(c rtspSource, medi *description.Media, f *for
 			return // fragment/ordering errors are expected mid-stream
 		}
 
-		kind := uint8(mediatree.FrameKindP)
+		kind := mediatree.FrameKindP
 		changed := false
 		for _, nalu := range au {
 			if len(nalu) == 0 {
 				continue
 			}
-			switch h264.NALUType(nalu[0] & 0x1f) {
+			switch h264.NALUType(nalu[0] & 0x1f) { //nolint:exhaustive // only IDR/SPS/PPS carry information this loop needs; every other NALU type is a deliberate no-op
 			case h264.NALUTypeIDR:
 				kind = mediatree.FrameKindI
 			case h264.NALUTypeSPS:
@@ -131,7 +131,8 @@ func (ci *ChannelIngest) setupH264(c rtspSource, medi *description.Media, f *for
 			return
 		}
 		frame := fcontainer.Frame{Data: muxAnnexB(au), Time: ci.nowNS(), Kind: kind}
-		if err := ci.policy.HandleFrame(streamNum, fcontainer.KindVideo, frame); err != nil {
+		err = ci.policy.HandleFrame(streamNum, fcontainer.KindVideo, frame)
+		if err != nil {
 			ci.logf("ingest: channel %d: %v", ci.channel, err)
 		}
 	})
@@ -154,7 +155,7 @@ func (ci *ChannelIngest) setupH265(c rtspSource, medi *description.Media, f *for
 			return
 		}
 
-		kind := uint8(mediatree.FrameKindP)
+		kind := mediatree.FrameKindP
 		if h265.IsRandomAccess(au) {
 			kind = mediatree.FrameKindI
 		}
@@ -163,7 +164,7 @@ func (ci *ChannelIngest) setupH265(c rtspSource, medi *description.Media, f *for
 			if len(nalu) == 0 {
 				continue
 			}
-			switch h265.NALUType((nalu[0] >> 1) & 0b111111) {
+			switch h265.NALUType((nalu[0] >> 1) & 0b111111) { //nolint:exhaustive // only VPS/SPS/PPS carry information this loop needs; every other NALU type is a deliberate no-op
 			case h265.NALUType_VPS_NUT:
 				vps, changed = nalu, true
 			case h265.NALUType_SPS_NUT:
@@ -182,7 +183,8 @@ func (ci *ChannelIngest) setupH265(c rtspSource, medi *description.Media, f *for
 			return
 		}
 		frame := fcontainer.Frame{Data: muxAnnexB(au), Time: ci.nowNS(), Kind: kind}
-		if err := ci.policy.HandleFrame(streamNum, fcontainer.KindVideo, frame); err != nil {
+		err = ci.policy.HandleFrame(streamNum, fcontainer.KindVideo, frame)
+		if err != nil {
 			ci.logf("ingest: channel %d: %v", ci.channel, err)
 		}
 	})
@@ -202,7 +204,8 @@ func (ci *ChannelIngest) setupG711(c rtspSource, medi *description.Media, f *for
 			return
 		}
 		frame := fcontainer.Frame{Data: append([]byte(nil), pkt.Payload...), Time: ci.nowNS()}
-		if err := ci.policy.HandleFrame(streamNum, fcontainer.KindAudio, frame); err != nil {
+		err := ci.policy.HandleFrame(streamNum, fcontainer.KindAudio, frame)
+		if err != nil {
 			ci.logf("ingest: channel %d: %v", ci.channel, err)
 		}
 	})
@@ -221,7 +224,7 @@ func (ci *ChannelIngest) setupAAC(c rtspSource, medi *description.Media, f *form
 	}
 	ci.policy.SetStreamParams(streamNum, fcontainer.KindAudio, fcontainer.StreamParams{
 		CodecAudio: mediatree.CodecAAC, SampleRate: uint32(f.Config.SampleRate),
-		ChannelCount: uint8(f.Config.ChannelCount), ParamAudioConfig: asc,
+		ChannelCount: uint8(f.Config.ChannelCount), ParamAudioConfig: asc, //nolint:staticcheck // f.Config.ChannelConfig is a raw MPEG-4 config code (7 means 8 channels, not 7) -- ChannelCount is the actual count StreamParams needs, deprecated field or not
 	})
 
 	c.OnPacketRTP(medi, f, func(pkt *rtp.Packet) {
@@ -234,7 +237,8 @@ func (ci *ChannelIngest) setupAAC(c rtspSource, medi *description.Media, f *form
 		}
 		for _, au := range aus {
 			frame := fcontainer.Frame{Data: append([]byte(nil), au...), Time: ci.nowNS()}
-			if err := ci.policy.HandleFrame(streamNum, fcontainer.KindAudio, frame); err != nil {
+			err := ci.policy.HandleFrame(streamNum, fcontainer.KindAudio, frame)
+			if err != nil {
 				ci.logf("ingest: channel %d: %v", ci.channel, err)
 			}
 		}

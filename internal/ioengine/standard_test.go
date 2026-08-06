@@ -26,7 +26,8 @@ func TestStandardBackendRoundTrip(t *testing.T) {
 	if _, err := b.WriteAt(data, 100); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
-	if err := b.Sync(); err != nil {
+	err = b.Sync()
+	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 

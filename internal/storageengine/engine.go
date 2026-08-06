@@ -227,12 +227,14 @@ func (e *Engine) stepWriteLocked(level Level) {
 	off := job.offset + job.pos
 	buf := job.data[job.pos : job.pos+chunkLen]
 
-	if _, err := e.backend.WriteAt(buf, off); err != nil {
+	_, err := e.backend.WriteAt(buf, off)
+	if err != nil {
 		e.finishWriteLocked(job, WriteResult{}, err)
 		return
 	}
 	readBack := make([]byte, chunkLen)
-	if _, err := e.backend.ReadAt(readBack, off); err != nil {
+	_, err = e.backend.ReadAt(readBack, off)
+	if err != nil {
 		e.finishWriteLocked(job, WriteResult{}, err)
 		return
 	}

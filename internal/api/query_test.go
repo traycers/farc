@@ -2,8 +2,8 @@ package api
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -15,12 +15,13 @@ func TestHandleCandidates(t *testing.T) {
 	u := newTestUnit(t)
 	uuid1 := writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
 	writeVideoFrame(t, u, []uint16{2}, 2, 300, 400, "frame-b", 300, 2000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
 
-	resp, err := http.Get(fmt.Sprintf("%s/storages/s1/candidates?channel=1&t1=0&t2=1000", srv.URL))
+	resp, err := http.Get(srv.URL + "/storages/s1/candidates?channel=1&t1=0&t2=1000")
 	if err != nil {
 		t.Fatalf("GET candidates: %v", err)
 	}
@@ -29,13 +30,14 @@ func TestHandleCandidates(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	var got []candidateInfo
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+	err = json.NewDecoder(resp.Body).Decode(&got)
+	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("candidates = %+v, want exactly one (channel 1 only in fcontainer 1)", got)
 	}
-	wantUUID := fmt.Sprintf("%x", uuid1)
+	wantUUID := hex.EncodeToString(uuid1[:])
 	if got[0].UUID != wantUUID || got[0].Begin != 100 || got[0].End != 200 {
 		t.Fatalf("candidate = %+v, want uuid=%s begin=100 end=200", got[0], wantUUID)
 	}
@@ -45,18 +47,20 @@ func TestHandleCandidates_NoMatch(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
 
-	resp, err := http.Get(fmt.Sprintf("%s/storages/s1/candidates?channel=99&t1=0&t2=1000", srv.URL))
+	resp, err := http.Get(srv.URL + "/storages/s1/candidates?channel=99&t1=0&t2=1000")
 	if err != nil {
 		t.Fatalf("GET candidates: %v", err)
 	}
 	defer resp.Body.Close()
 	var got []candidateInfo
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+	err = json.NewDecoder(resp.Body).Decode(&got)
+	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(got) != 0 {
@@ -73,12 +77,13 @@ func TestHandleResolve(t *testing.T) {
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{2}, 2, 100, 200, "frame-a", 100, 1000)
 	writeVideoFrame(t, u, []uint16{2}, 2, 300, 400, "frame-b", 300, 2000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
 
-	resp, err := http.Get(fmt.Sprintf("%s/storages/s1/resolve?channel=2&t1=0&t2=1000", srv.URL))
+	resp, err := http.Get(srv.URL + "/storages/s1/resolve?channel=2&t1=0&t2=1000")
 	if err != nil {
 		t.Fatalf("GET resolve: %v", err)
 	}
@@ -87,7 +92,8 @@ func TestHandleResolve(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	var frames []resolvedFrame
-	if err := json.NewDecoder(resp.Body).Decode(&frames); err != nil {
+	err = json.NewDecoder(resp.Body).Decode(&frames)
+	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(frames) != 2 {
@@ -113,18 +119,20 @@ func TestHandleResolve_ChannelNotPresent(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
 
-	resp, err := http.Get(fmt.Sprintf("%s/storages/s1/resolve?channel=99&t1=0&t2=1000", srv.URL))
+	resp, err := http.Get(srv.URL + "/storages/s1/resolve?channel=99&t1=0&t2=1000")
 	if err != nil {
 		t.Fatalf("GET resolve: %v", err)
 	}
 	defer resp.Body.Close()
 	var frames []resolvedFrame
-	if err := json.NewDecoder(resp.Body).Decode(&frames); err != nil {
+	err = json.NewDecoder(resp.Body).Decode(&frames)
+	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(frames) != 0 {

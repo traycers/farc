@@ -42,18 +42,21 @@ func newInitializedStorageImage(t *testing.T) string {
 	t.Helper()
 	imgPath := filepath.Join(t.TempDir(), "storage.img")
 	geo := smallGeometry()
-	if err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644); err != nil {
+	err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	if err := storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1}); err != nil {
+	err = storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
+	if err != nil {
 		b.Close()
 		t.Fatalf("Init: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	err = b.Close()
+	if err != nil {
 		t.Fatalf("close after init: %v", err)
 	}
 	return imgPath
@@ -94,7 +97,8 @@ func testConfig(t *testing.T, channels []config.Channel) (*config.Config, string
 	t.Setenv("FARC_METRICS_IP", cfg.Metrics.IP)
 	t.Setenv("FARC_METRICS_PORT", strconv.Itoa(cfg.Metrics.Port))
 	path := filepath.Join(t.TempDir(), "farc.config.json")
-	if err := config.Save(path, cfg); err != nil {
+	err := config.Save(path, cfg)
+	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	return cfg, path
@@ -122,7 +126,8 @@ func testConfigTwoStorages(t *testing.T, channels []config.Channel) (*config.Con
 	t.Setenv("FARC_METRICS_IP", cfg.Metrics.IP)
 	t.Setenv("FARC_METRICS_PORT", strconv.Itoa(cfg.Metrics.Port))
 	path := filepath.Join(t.TempDir(), "farc.config.json")
-	if err := config.Save(path, cfg); err != nil {
+	err := config.Save(path, cfg)
+	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	return cfg, path
@@ -143,11 +148,12 @@ type channelEventMsg struct {
 func dialGlobalEvents(t *testing.T, wsAddr string) *websocket.Conn {
 	t.Helper()
 	url := "ws://" + wsAddr + "/events/ws"
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil) //nolint:bodyclose // gorilla/websocket's own doc comment: the handshake response body needs no closing
 	if err != nil {
 		t.Fatalf("dial %s: %v", url, err)
 	}
-	if err := conn.WriteJSON(map[string]any{"storage": ""}); err != nil {
+	err = conn.WriteJSON(map[string]any{"storage": ""})
+	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
@@ -190,7 +196,8 @@ func TestRun_CreateChannelOverHTTP_PublishesGlobalChannelCreatedEvent(t *testing
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg channelEventMsg
-	if err := conn.ReadJSON(&msg); err != nil {
+	err = conn.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("read channel event: %v", err)
 	}
 	if msg.Name != "channel.created" || msg.Channel != 7 || msg.Storage != "disk0" {
@@ -232,7 +239,8 @@ func TestRun_RemoveChannelOverHTTP_PublishesGlobalChannelRemovedEvent(t *testing
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg channelEventMsg
-	if err := conn.ReadJSON(&msg); err != nil {
+	err = conn.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("read channel event: %v", err)
 	}
 	if msg.Name != "channel.removed" || msg.Channel != 7 || msg.Storage != "disk0" {
@@ -284,10 +292,12 @@ func TestRun_UpdateChannelOverHTTP_StorageChanged_PublishesRemovedThenCreated(t 
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var removed, created channelEventMsg
-	if err := conn.ReadJSON(&removed); err != nil {
+	err = conn.ReadJSON(&removed)
+	if err != nil {
 		t.Fatalf("read first channel event: %v", err)
 	}
-	if err := conn.ReadJSON(&created); err != nil {
+	err = conn.ReadJSON(&created)
+	if err != nil {
 		t.Fatalf("read second channel event: %v", err)
 	}
 	if removed.Name != "channel.removed" || removed.Channel != 7 || removed.Storage != "disk0" {
@@ -425,7 +435,8 @@ func TestRun_ServesAndShutsDownGracefully(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	var list []map[string]any
-	if err := json.Unmarshal(body, &list); err != nil {
+	err = json.Unmarshal(body, &list)
+	if err != nil {
 		t.Fatalf("decode: %v (body=%s)", err, body)
 	}
 	if len(list) != 1 || list[0]["id"] != "disk0" {

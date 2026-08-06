@@ -28,7 +28,8 @@ func TestIngestManager_AddChannel_ThenListReportsIt(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()
 
-	if err := m.AddChannel(testChannelConfig(1, "disk0")); err != nil {
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
 
@@ -42,7 +43,8 @@ func TestIngestManager_AddChannel_DuplicateRejected(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()
 
-	if err := m.AddChannel(testChannelConfig(1, "disk0")); err != nil {
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
 	if err := m.AddChannel(testChannelConfig(1, "disk0")); err == nil {
@@ -54,7 +56,8 @@ func TestIngestManager_RemoveChannel_StopsItAndReturnsItsConfig(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()
 
-	if err := m.AddChannel(testChannelConfig(1, "disk0")); err != nil {
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
 
@@ -70,7 +73,8 @@ func TestIngestManager_RemoveChannel_StopsItAndReturnsItsConfig(t *testing.T) {
 	}
 
 	// The channel id is free again -- Add should succeed, not conflict.
-	if err := m.AddChannel(testChannelConfig(1, "disk1")); err != nil {
+	err = m.AddChannel(testChannelConfig(1, "disk1"))
+	if err != nil {
 		t.Fatalf("AddChannel after remove: %v", err)
 	}
 }
@@ -88,10 +92,12 @@ func TestIngestManager_List_ReflectsLiveSetPolicyNotStaleConfig(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()
 
-	if err := m.AddChannel(testChannelConfig(1, "disk0")); err != nil {
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
-	if err := m.SetPolicy(1, PolicyEvent, PolicyParams{Prerecord: 5, Postrecord: 10}); err != nil {
+	err = m.SetPolicy(1, PolicyEvent, PolicyParams{Prerecord: 5, Postrecord: 10})
+	if err != nil {
 		t.Fatalf("SetPolicy: %v", err)
 	}
 
@@ -116,7 +122,8 @@ func TestIngestManager_StartRecording_WrongPolicyTypeErrors(t *testing.T) {
 
 	cfg := testChannelConfig(1, "disk0")
 	cfg.PolicyType = PolicyEvent
-	if err := m.AddChannel(cfg); err != nil {
+	err := m.AddChannel(cfg)
+	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
 
@@ -140,7 +147,8 @@ func TestIngestManager_StopRecording_WrongPolicyTypeErrors(t *testing.T) {
 
 	cfg := testChannelConfig(1, "disk0")
 	cfg.PolicyType = PolicyEvent
-	if err := m.AddChannel(cfg); err != nil {
+	err := m.AddChannel(cfg)
+	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
 
@@ -154,7 +162,8 @@ func TestIngestManager_StartThenAddChannel_BothPresent(t *testing.T) {
 	defer m.Stop()
 
 	m.Start([]ChannelConfig{testChannelConfig(1, "disk0")})
-	if err := m.AddChannel(testChannelConfig(2, "disk0")); err != nil {
+	err := m.AddChannel(testChannelConfig(2, "disk0"))
+	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
 

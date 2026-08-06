@@ -121,7 +121,8 @@ func watchDisconnect(conn *websocket.Conn) <-chan struct{} {
 	go func() {
 		defer close(closed)
 		for {
-			if _, _, err := conn.NextReader(); err != nil {
+			_, _, err := conn.NextReader()
+			if err != nil {
 				return
 			}
 		}
@@ -138,10 +139,11 @@ func (p *EventPushServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return // Upgrade already wrote the HTTP error response
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var sub subscribeMessage
-	if err := conn.ReadJSON(&sub); err != nil {
+	err = conn.ReadJSON(&sub)
+	if err != nil {
 		return
 	}
 
@@ -180,7 +182,8 @@ func (p *EventPushServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if ev.UUID != ([16]byte{}) {
 				msg.UUID = hex.EncodeToString(ev.UUID[:])
 			}
-			if err := conn.WriteJSON(msg); err != nil {
+			err := conn.WriteJSON(msg)
+			if err != nil {
 				return
 			}
 		}
@@ -222,7 +225,8 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 				Type: "event", Name: ev.Name, Channel: ev.Channel, Storage: ev.Storage,
 				Index: ev.Index, UUID: ev.UUID, Severity: ev.Severity, Reason: ev.Reason,
 			}
-			if err := conn.WriteJSON(msg); err != nil {
+			err := conn.WriteJSON(msg)
+			if err != nil {
 				return
 			}
 		}

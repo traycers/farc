@@ -122,11 +122,13 @@ func BuildMedia(ctx context.Context, client *hlsclient.Client, rec tocindex.Reco
 		samples := make([]*fmp4.Sample, len(videoFrames))
 		for i, f := range videoFrames {
 			var au h264.AnnexB
-			if err := au.Unmarshal(bufs[pos]); err != nil {
+			err = au.Unmarshal(bufs[pos])
+			if err != nil {
 				return nil, fmt.Errorf("segment: parse Annex-B video frame at t=%d: %w", f.Time, err)
 			}
 			sample := &fmp4.Sample{}
-			if err := sample.FillH264(0, au); err != nil {
+			err = sample.FillH264(0, au)
+			if err != nil {
 				return nil, fmt.Errorf("segment: encode AVCC video frame at t=%d: %w", f.Time, err)
 			}
 			sample.Duration = sampleDuration(videoFrames, i, segEnd)
@@ -146,7 +148,8 @@ func BuildMedia(ctx context.Context, client *hlsclient.Client, rec tocindex.Reco
 
 	part := fmp4.Part{SequenceNumber: 1, Tracks: tracks}
 	var buf seekablebuffer.Buffer
-	if err := part.Marshal(&buf); err != nil {
+	err = part.Marshal(&buf)
+	if err != nil {
 		return nil, fmt.Errorf("segment: marshal media segment: %w", err)
 	}
 	return buf.Bytes(), nil

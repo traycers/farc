@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,6 +10,11 @@ import (
 	"traycers/farc/internal/ioengine"
 	"traycers/farc/internal/storage"
 )
+
+// errIDAndPathRequired is handleCreateStorage's 400 response for its two
+// hand-validated required fields (everything else in createStorageRequest
+// is either optional or validated downstream by storage.Init).
+var errIDAndPathRequired = errors.New("api: id and path are required")
 
 // createStorageRequest is POST /storages' body. Geometry/Params mirror
 // storage.Geometry/fblock.Params field-for-field — no separate wire schema,
@@ -34,12 +40,13 @@ type createStorageRequest struct {
 // only fblock 0 is actually written) and registers the resulting open Unit.
 func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Request) {
 	var req createStorageRequest
-	if err := decodeJSON(r, &req); err != nil {
+	err := decodeJSON(r, &req)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.ID == "" || req.Path == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("api: id and path are required"))
+		writeError(w, http.StatusBadRequest, errIDAndPathRequired)
 		return
 	}
 	if _, exists := s.reg.Get(req.ID); exists {
@@ -48,7 +55,8 @@ func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Reque
 	}
 
 	size := int64(req.Geometry.FblockSize) * int64(req.Geometry.N)
-	if err := storage.CreateSizedFile(req.Path, size, 0o600); err != nil {
+	err = storage.CreateSizedFile(req.Path, size, 0o600)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -68,7 +76,8 @@ func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Reque
 		CatalogPath: req.CatalogPath,
 		Tuning:      tuning,
 	}
-	if err := storage.Init(backend, initCfg); err != nil {
+	err = storage.Init(backend, initCfg)
+	if err != nil {
 		_ = backend.Close()
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -81,13 +90,15 @@ func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := s.reg.Register(req.ID, unit, req.Path, req.Name); err != nil {
+	err = s.reg.Register(req.ID, unit, req.Path, req.Name)
+	if err != nil {
 		_ = unit.Close()
 		writeError(w, http.StatusConflict, err)
 		return
 	}
 
-	if err := s.onStorageCreated(req.ID, req.Path, req.CatalogPath, req.Name); err != nil {
+	err = s.onStorageCreated(req.ID, req.Path, req.CatalogPath, req.Name)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q: %w", req.ID, err))
 		return
 	}
@@ -117,7 +128,8 @@ func (s *HttpApiServer) handlePatchStorage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req patchStorageRequest
-	if err := decodeJSON(r, &req); err != nil {
+	err := decodeJSON(r, &req)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -129,7 +141,8 @@ func (s *HttpApiServer) handlePatchStorage(w http.ResponseWriter, r *http.Reques
 	}
 	if req.Name != nil {
 		s.reg.SetName(id, *req.Name)
-		if err := s.onStorageUpdated(id, *req.Name); err != nil {
+		err := s.onStorageUpdated(id, *req.Name)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q rename: %w", id, err))
 			return
 		}

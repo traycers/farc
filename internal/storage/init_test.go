@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +22,8 @@ func testParams() fblock.Params {
 
 func openStandard(t *testing.T, path string, size int64) ioengine.Backend {
 	t.Helper()
-	if err := CreateSizedFile(path, size, 0o644); err != nil {
+	err := CreateSizedFile(path, size, 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	b, err := ioengine.OpenStandard(path, os.O_RDWR, 0o644)
@@ -106,14 +108,16 @@ func TestInit_RefusesAlreadyInitializedWithoutForce(t *testing.T) {
 	backend := openStandard(t, path, int64(geo.FblockSize)*int64(geo.N))
 
 	cfg := InitConfig{Geometry: geo, Params: testParams(), Now: 1}
-	if err := Init(backend, cfg); err != nil {
+	err := Init(backend, cfg)
+	if err != nil {
 		t.Fatalf("first Init: %v", err)
 	}
-	if err := Init(backend, cfg); err != ErrAlreadyInitialized {
+	if err := Init(backend, cfg); !errors.Is(err, ErrAlreadyInitialized) {
 		t.Fatalf("second Init = %v, want ErrAlreadyInitialized", err)
 	}
 	cfg.Force = true
-	if err := Init(backend, cfg); err != nil {
+	err = Init(backend, cfg)
+	if err != nil {
 		t.Fatalf("forced re-Init: %v", err)
 	}
 }

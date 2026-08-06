@@ -49,12 +49,13 @@ func TestCheckMinContainerShare(t *testing.T) {
 	maxAllowedOverhead := fblockSize - 112 - int64(share*fblockSize) // overhead budget before violating the share
 
 	okCatalogSize := uint32(maxAllowedOverhead) // max == share*fblockSize exactly
-	if err := CheckMinContainerShare(fblockSize, 0, okCatalogSize, share); err != nil {
+	err := CheckMinContainerShare(fblockSize, 0, okCatalogSize, share)
+	if err != nil {
 		t.Errorf("expected boundary case to pass, got %v", err)
 	}
 
 	tooMuchOverhead := okCatalogSize + 1
-	err := CheckMinContainerShare(fblockSize, 0, tooMuchOverhead, share)
+	err = CheckMinContainerShare(fblockSize, 0, tooMuchOverhead, share)
 	if !errors.Is(err, ErrContainerShareTooSmall) {
 		t.Errorf("expected ErrContainerShareTooSmall just past the boundary, got %v", err)
 	}
@@ -66,7 +67,8 @@ func TestCheckMinContainerShareRealisticInitCase(t *testing.T) {
 	const c = 256
 	const n = 4096
 	catalogSize := CatalogSize(c, n)
-	if err := CheckMinContainerShare(fblockSize, 200, catalogSize, DefaultMinContainerShare); err != nil {
+	err := CheckMinContainerShare(fblockSize, 200, catalogSize, DefaultMinContainerShare)
+	if err != nil {
 		t.Errorf("realistic small-storage geometry should satisfy default share: %v", err)
 	}
 }

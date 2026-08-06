@@ -10,7 +10,8 @@ import (
 // physical index).
 func newUUIDv4() ([16]byte, error) {
 	var u [16]byte
-	if _, err := rand.Read(u[:]); err != nil {
+	_, err := rand.Read(u[:])
+	if err != nil {
 		return u, fmt.Errorf("storage: generate UUIDv4: %w", err)
 	}
 	u[6] = (u[6] & 0x0f) | 0x40 // version 4

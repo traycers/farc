@@ -105,14 +105,16 @@ func DecodeHeader(buf []byte) (h Header, diag HeaderDiagnosis, err error) {
 		return h, diag, nil
 	}
 	if diag.ParamsValid {
-		if p, perr := DecodeParams(paramsBuf); perr == nil {
+		p, perr := DecodeParams(paramsBuf)
+		if perr == nil {
 			h.Params = p
 		} else {
 			diag.ParamsValid = false
 		}
 	}
 	if diag.CatalogValid {
-		if c, cerr := DecodeCatalog(catalogBuf, prolog.MaxChannels, prolog.CatalogEntryCount); cerr == nil {
+		c, cerr := DecodeCatalog(catalogBuf, prolog.MaxChannels, prolog.CatalogEntryCount)
+		if cerr == nil {
 			h.Catalog = c
 		} else {
 			diag.CatalogValid = false

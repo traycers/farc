@@ -3,7 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,7 +66,8 @@ func TestHandleCreateStorage_InitsOpensAndRegisters(t *testing.T) {
 	}
 
 	var info StorageInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	err := json.NewDecoder(resp.Body).Decode(&info)
+	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if info.ID != "s1" || info.Path != imgPath {
@@ -123,7 +124,7 @@ func TestHandleCreateStorage_OnStorageCreatedErrorFailsRequestButKeepsRegistrati
 	reg := NewStorageRegistry()
 	s := NewHttpApiServer(reg, nil, nil)
 	s.SetOnStorageCreated(func(id, path, catalogPath, name string) error {
-		return fmt.Errorf("disk full")
+		return errors.New("disk full")
 	})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
@@ -175,7 +176,8 @@ func TestHandleCreateStorage_DuplicateIDConflicts(t *testing.T) {
 func TestHandleListStorages(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("a", u, "/x/a.img", ""); err != nil {
+	err := reg.Register("a", u, "/x/a.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	s := NewHttpApiServer(reg, nil, nil)
@@ -188,7 +190,8 @@ func TestHandleListStorages(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var list []StorageInfo
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+	err = json.NewDecoder(resp.Body).Decode(&list)
+	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(list) != 1 || list[0].ID != "a" {
@@ -199,7 +202,8 @@ func TestHandleListStorages(t *testing.T) {
 func TestHandlePatchStorage_RetentionDays(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("a", u, "a.img", ""); err != nil {
+	err := reg.Register("a", u, "a.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	s := NewHttpApiServer(reg, nil, nil)

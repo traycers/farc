@@ -2,7 +2,10 @@
 
 package ioengine
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Open opens path with the backend selected by opts (default: standard —
 // `direct` is Linux-only, ADR-010).
@@ -12,7 +15,7 @@ func Open(path string, opts Options) (Backend, error) {
 	case "", "standard":
 		return OpenStandard(path, flag, perm)
 	case "direct":
-		return nil, fmt.Errorf("ioengine: direct backend not supported on this platform")
+		return nil, errors.New("ioengine: direct backend not supported on this platform")
 	default:
 		return nil, fmt.Errorf("ioengine: unknown backend %q", opts.Backend)
 	}

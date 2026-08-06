@@ -2,8 +2,123 @@
 # Golangci-lint is a fast linters runner for Go
 # https://golangci-lint.run/
 #
+# govet/ineffassign/staticcheck/unused are v2's own default set and stay on
+# even without listing them here. Deliberately NOT enabled: purely stylistic
+# linters with no bug-catching value for this codebase (lll, wsl_v5,
+# nlreturn, varnamelen, tagalign, exhaustruct, funlen/gocyclo/gocognit/
+# cyclop/nestif/maintidx) -- this project's functions and doc comments run
+# long by design, and enforcing a line/complexity budget would fight the
+# style rather than catch bugs.
 version: "2"
+# Defaults are max-issues-per-linter: 50, max-same-issues: 3 -- meant to
+# keep a first-time run's terminal output short, but they silently truncate
+# real findings past those caps, which is the wrong tradeoff for a lint
+# gate a CI pipeline treats as a pass/fail signal.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
 linters:
   enable:
     - noinlineerr
     - errcheck
+    - bodyclose # unclosed *http.Response.Body -- internal/hlsclient talks to farcd over HTTP
+    - contextcheck # context.Context not propagated from its originating call
+    - copyloopvar
+    - durationcheck # two time.Duration values multiplied together
+    - errname
+    - errorlint # errors.Is/As/%w consistency
+    - exhaustive # switch over a named enum (PolicyType, StreamKind, NodeType, ...) missing a case
+    - gocritic
+    - godox # keep the zero-TODO/FIXME state CLAUDE.md documents
+    - gosec
+    - makezero
+    - misspell
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx # net/http calls without a context.Context
+    - perfsprint
+    - prealloc
+    - predeclared
+    - reassign
+    - recvcheck # mixed pointer/value receivers on the same type
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
+  settings:
+    recvcheck:
+      # internal/config and internal/hlsconfig's Duration types pair a
+      # value-receiver Duration()/MarshalJSON with a pointer-receiver
+      # UnmarshalJSON -- the pointer receiver there isn't a style choice,
+      # json.Unmarshaler requires it. recvcheck's builtin exclusions cover
+      # Marshal*/GobEncode but not UnmarshalJSON/UnmarshalText/UnmarshalYAML/
+      # UnmarshalXML, so those need listing explicitly.
+      exclusions:
+        - "*.UnmarshalJSON"
+        - "*.UnmarshalText"
+        - "*.UnmarshalYAML"
+        - "*.UnmarshalXML"
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).SetReadDeadline
+        - (net.Conn).SetWriteDeadline
+        - fmt.Fprintf
+        - fmt.Fprintln
+    gosec:
+      excludes:
+        # G115 (int/uint size-conversion overflow): this is a binary-format
+        # library (fblock/toc/mediatree/index/segment) that casts between
+        # differently-sized integer types constantly, by design, against
+        # values already bounded by domain invariants (channel counts fit
+        # uint16, block/params/catalog sizes fit uint32, etc) -- gosec has no
+        # way to see those invariants, so every one of these casts reads as
+        # a false positive. Scoped nolint comments at 20+ sites would add
+        # noise without adding safety.
+        - G115
+        # G304 (file inclusion via variable): every os.ReadFile(path) this
+        # flags is a process reading its own --config flag value
+        # (internal/config, internal/hlsconfig) -- operator input, not
+        # attacker input.
+        - G304
+        # G705 (XSS via taint analysis): false positive on every
+        # w.Write(buf)-style raw-bytes HTTP response (fMP4 segments, HLS
+        # playlists) -- there's no HTML/JS output anywhere in this API for
+        # taint to reach.
+        - G705
+        # G104 (errors unhandled): gosec's own weaker duplicate of errcheck,
+        # which already covers this (see the errcheck settings above and
+        # the per-file exclusions below for tests) with the project's actual
+        # exceptions; enforcing both just double-reports the same lines.
+        - G104
+  exclusions:
+    rules:
+      # Cleanup-only Close()/goroutine-launch error returns in tests aren't
+      # actionable (the test either already asserted the thing that matters
+      # or is tearing down) -- checking every one adds noise, not safety.
+      # gosec's G107/G306/G301/G302 findings in tests are the same "it's a
+      # local test server/tempdir, not attacker input" story as the G304/
+      # G705 excludes above, just not worth a blanket rule-wide exclude
+      # since they're real findings in production code. unparam's "this
+      # helper's parameter always receives the same value" is expected for
+      # test helpers kept general on purpose. nilnil's "don't return (nil,
+      # nil)" doesn't apply to interface fakes whose return value the test
+      # never inspects. noctx's context-plumbing requirement is for
+      # production call sites talking to real, possibly slow/remote
+      # servers -- every noctx hit in this codebase turned out to be a test
+      # dialing its own local httptest server or an ephemeral net.Listen.
+      # noinlineerr's rationale (an inline-declared err can hide shadowing
+      # bugs across nontrivial branching) doesn't apply to the single most
+      # common Go test idiom, `if err := doThing(); err != nil { t.Fatalf
+      # (...) }` -- production code still follows the rule.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - unparam
+          - nilnil
+          - noctx
+          - noinlineerr

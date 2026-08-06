@@ -49,6 +49,12 @@ const rtspTimeout = 10 * time.Second
 // in-flight requests before Run returns anyway.
 const shutdownTimeout = 10 * time.Second
 
+// readHeaderTimeout bounds how long each http.Server waits for a client to
+// finish sending request headers, closing the connection past that point
+// (mitigates Slowloris-style slow-header-write attacks; net/http.Server has
+// no timeout by default).
+const readHeaderTimeout = 10 * time.Second
+
 // Farcd is one running farcd process: every open Storage, the
 // IngestManager driving all configured channels, and the three servers
 // (docs/docs/archive/11-service-composition.md §5.1.2-5.1.4).
@@ -114,7 +120,8 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 			return nil, fmt.Errorf("farcd: open storage %q: %w", sc.ID, err)
 		}
 		f.units = append(f.units, unit)
-		if err := f.registry.Register(sc.ID, unit, sc.Path, sc.Name); err != nil {
+		err = f.registry.Register(sc.ID, unit, sc.Path, sc.Name)
+		if err != nil {
 			f.closeUnits()
 			return nil, fmt.Errorf("farcd: register storage %q: %w", sc.ID, err)
 		}
@@ -151,9 +158,9 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	apiServer.SetOnChannelUpdated(f.persistUpdatedChannel)
 	apiServer.SetOnChannelRemoved(f.persistRemovedChannel)
 
-	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler()}
-	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: push}
-	f.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: apiServer.MetricsHandler()}
+	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler(), ReadHeaderTimeout: readHeaderTimeout}
+	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: push, ReadHeaderTimeout: readHeaderTimeout}
+	f.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: apiServer.MetricsHandler(), ReadHeaderTimeout: readHeaderTimeout}
 
 	return f, nil
 }
@@ -252,7 +259,8 @@ func (f *Farcd) persistNewStorage(id, path, catalogPath, name string) error {
 		}
 	}
 	f.cfg.Storages = append(f.cfg.Storages, config.Storage{ID: id, Path: path, CatalogPath: catalogPath, Name: name})
-	if err := config.Save(f.configPath, f.cfg); err != nil {
+	err := config.Save(f.configPath, f.cfg)
+	if err != nil {
 		f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
 		return fmt.Errorf("farcd: persist storage %q to %s: %w", id, f.configPath, err)
 	}
@@ -282,7 +290,8 @@ func (f *Farcd) persistUpdatedStorage(id, name string) error {
 	}
 	old := f.cfg.Storages[idx].Name
 	f.cfg.Storages[idx].Name = name
-	if err := config.Save(f.configPath, f.cfg); err != nil {
+	err := config.Save(f.configPath, f.cfg)
+	if err != nil {
 		f.cfg.Storages[idx].Name = old
 		return fmt.Errorf("farcd: persist storage %q rename to %s: %w", id, f.configPath, err)
 	}
@@ -326,7 +335,8 @@ func (f *Farcd) persistNewChannel(spec api.ChannelSpec) error {
 		}
 	}
 	f.cfg.Channels = append(f.cfg.Channels, specToConfigChannel(spec))
-	if err := config.Save(f.configPath, f.cfg); err != nil {
+	err := config.Save(f.configPath, f.cfg)
+	if err != nil {
 		f.cfg.Channels = f.cfg.Channels[:len(f.cfg.Channels)-1]
 		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
 	}
@@ -358,7 +368,8 @@ func (f *Farcd) persistUpdatedChannel(spec api.ChannelSpec) error {
 	}
 	old := f.cfg.Channels[idx]
 	f.cfg.Channels[idx] = specToConfigChannel(spec)
-	if err := config.Save(f.configPath, f.cfg); err != nil {
+	err := config.Save(f.configPath, f.cfg)
+	if err != nil {
 		f.cfg.Channels[idx] = old
 		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
 	}
@@ -388,7 +399,8 @@ func (f *Farcd) persistRemovedChannel(id uint16) error {
 	}
 	removed := f.cfg.Channels[idx]
 	f.cfg.Channels = append(f.cfg.Channels[:idx], f.cfg.Channels[idx+1:]...)
-	if err := config.Save(f.configPath, f.cfg); err != nil {
+	err := config.Save(f.configPath, f.cfg)
+	if err != nil {
 		restored := make([]config.Channel, 0, len(f.cfg.Channels)+1)
 		restored = append(restored, f.cfg.Channels[:idx]...)
 		restored = append(restored, removed)
@@ -468,11 +480,12 @@ func (f *Farcd) closeUnits() {
 // returns. A listener failing to start (e.g. port already in use) also
 // triggers shutdown and is returned as this call's error.
 func (f *Farcd) Run(ctx context.Context) error {
-	f.ing.Start(f.channels)
+	f.ing.Start(f.channels) //nolint:contextcheck // IngestManager owns its own goroutine lifecycle via Start/Stop, not ctx propagation -- Stop() is what f.shutdown() calls below
 
 	errCh := make(chan error, 3)
 	serve := func(name string, srv *http.Server) {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		err := srv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("farcd: %s server: %w", name, err)
 			return
 		}
@@ -488,7 +501,7 @@ func (f *Farcd) Run(ctx context.Context) error {
 	case runErr = <-errCh:
 	}
 
-	f.shutdown()
+	f.shutdown() //nolint:contextcheck // deliberate: ctx is already Done() here, so shutdown builds its own fresh timeout context rather than reusing a cancelled one
 	return runErr
 }
 
@@ -498,7 +511,8 @@ func (f *Farcd) shutdown() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	for _, srv := range []*http.Server{f.httpSrv, f.wsSrv, f.metricsSrv} {
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		err := srv.Shutdown(shutdownCtx)
+		if err != nil {
 			f.logf("farcd: server shutdown: %v", err)
 		}
 	}

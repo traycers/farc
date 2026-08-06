@@ -1,6 +1,9 @@
 package fblock
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // FixedOverheadBytes is the total fixed-size overhead per fblock outside of
 // params/catalog/TOC: 56 (fixed prolog) + 8 (magic_catalog) + 12 (header
@@ -66,17 +69,17 @@ func MaxContainerSize(fblockSize uint64, paramsSize, catalogSize uint32) int64 {
 
 // ErrContainerShareTooSmall is returned when the computed max fcontainer
 // size falls below min_container_share * fblock_size (ADR-013).
-var ErrContainerShareTooSmall = fmt.Errorf("fblock: max fcontainer size below min_container_share")
+var ErrContainerShareTooSmall = errors.New("fblock: max fcontainer size below min_container_share")
 
 // CheckMinContainerShare validates the ADR-013 geometry invariant, run at
 // Storage init and at every expand/shrink (docs/docs/archive/
 // 03-storage-format.md §8.3).
 func CheckMinContainerShare(fblockSize uint64, paramsSize, catalogSize uint32, minShare float64) error {
-	max := MaxContainerSize(fblockSize, paramsSize, catalogSize)
-	min := minShare * float64(fblockSize)
-	if float64(max) < min {
+	maxSize := MaxContainerSize(fblockSize, paramsSize, catalogSize)
+	minSize := minShare * float64(fblockSize)
+	if float64(maxSize) < minSize {
 		return fmt.Errorf("%w: max=%d bytes, required>=%.0f bytes (share=%v, fblock_size=%d)",
-			ErrContainerShareTooSmall, max, min, minShare, fblockSize)
+			ErrContainerShareTooSmall, maxSize, minSize, minShare, fblockSize)
 	}
 	return nil
 }

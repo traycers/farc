@@ -66,7 +66,8 @@ func New(dir string, quotaBytes int64) (*Cache, error) {
 		entries:  make(map[Key]*list.Element),
 		order:    list.New(),
 	}
-	if err := c.loadExisting(db); err != nil {
+	err = c.loadExisting(db)
+	if err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
@@ -126,7 +127,8 @@ func (c *Cache) Put(k Key, data []byte) error {
 		return c.backend.put(k, data)
 	}
 
-	if err := c.backend.put(k, data); err != nil {
+	err := c.backend.put(k, data)
+	if err != nil {
 		return err
 	}
 

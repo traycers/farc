@@ -34,7 +34,8 @@ func TestHeaderRoundTrip(t *testing.T) {
 	// Pad with a fake epilog-sized tail so DecodeHeader's bounds check
 	// (which only needs to reach the checksums, well before any content)
 	// has a realistic buffer to work with.
-	full := append(buf, make([]byte, 64)...)
+	full := make([]byte, len(buf)+64)
+	copy(full, buf)
 
 	got, diag, err := DecodeHeader(full)
 	if err != nil {

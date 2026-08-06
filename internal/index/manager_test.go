@@ -127,7 +127,8 @@ func TestBeginWriteCompleteWriteMarkBad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectNextIndex: %v", err)
 	}
-	if err := m.BeginWrite(idx); err != nil {
+	err = m.BeginWrite(idx)
+	if err != nil {
 		t.Fatalf("BeginWrite: %v", err)
 	}
 	if cat.State(idx) != fblock.InProgress {
@@ -139,14 +140,16 @@ func TestBeginWriteCompleteWriteMarkBad(t *testing.T) {
 
 	var uuid [16]byte
 	uuid[0] = 7
-	if err := m.CompleteWrite(idx, uuid, 100, 200); err != nil {
+	err = m.CompleteWrite(idx, uuid, 100, 200)
+	if err != nil {
 		t.Fatalf("CompleteWrite: %v", err)
 	}
 	if got, ok := m.ResolveUUID(uuid); !ok || got != idx {
 		t.Fatalf("ResolveUUID after CompleteWrite = %d,%v, want %d,true", got, ok, idx)
 	}
 
-	if err := m.MarkBad(idx); err != nil {
+	err = m.MarkBad(idx)
+	if err != nil {
 		t.Fatalf("MarkBad: %v", err)
 	}
 	if cat.State(idx) != fblock.Bad {
@@ -164,7 +167,8 @@ func TestSetProtectedRequiresReady(t *testing.T) {
 		t.Fatalf("SetProtected on non-ready = %v, want ErrProtectedRequiresReady", err)
 	}
 	cat.SetState(0, fblock.Ready)
-	if err := m.SetProtected(0, true); err != nil {
+	err := m.SetProtected(0, true)
+	if err != nil {
 		t.Fatalf("SetProtected on ready: %v", err)
 	}
 	if !cat.Protected(0) {
@@ -194,7 +198,8 @@ func TestSnapshotIsIndependentDeepCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectNextIndex: %v", err)
 	}
-	if err := m.BeginWrite(idx); err != nil {
+	err = m.BeginWrite(idx)
+	if err != nil {
 		t.Fatalf("BeginWrite: %v", err)
 	}
 
@@ -219,7 +224,8 @@ func TestSnapshotIsIndependentDeepCopy(t *testing.T) {
 		t.Fatalf("mutating the snapshot leaked into the live catalog's channel_bitmap")
 	}
 
-	if err := m.CompleteWrite(idx, uuid, 111, 222); err != nil {
+	err = m.CompleteWrite(idx, uuid, 111, 222)
+	if err != nil {
 		t.Fatalf("CompleteWrite: %v", err)
 	}
 	snap2 := m.Snapshot()

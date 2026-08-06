@@ -15,7 +15,8 @@ func fblockOffset(geo Geometry, idx uint32) uint64 {
 // paying for a full header read.
 func readFixedProlog(backend ioengine.Backend, geo Geometry, idx uint32) (fblock.FixedProlog, error) {
 	buf := make([]byte, fblock.FixedPrologSize)
-	if _, err := backend.ReadAt(buf, int64(fblockOffset(geo, idx))); err != nil {
+	_, err := backend.ReadAt(buf, int64(fblockOffset(geo, idx)))
+	if err != nil {
 		return fblock.FixedProlog{}, err
 	}
 	return fblock.DecodeFixedProlog(buf)
@@ -31,7 +32,8 @@ func readHeader(backend ioengine.Backend, geo Geometry, idx uint32) (fblock.Head
 	offs := fblock.ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize)
 	total := offs.ChecksumsOffset + uint64(fblock.HeaderChecksumsSize)
 	buf := make([]byte, total)
-	if _, err := backend.ReadAt(buf, int64(fblockOffset(geo, idx))); err != nil {
+	_, err = backend.ReadAt(buf, int64(fblockOffset(geo, idx)))
+	if err != nil {
 		return fblock.Header{}, fblock.HeaderDiagnosis{}, err
 	}
 	return fblock.DecodeHeader(buf)
@@ -42,7 +44,8 @@ func readHeader(backend ioengine.Backend, geo Geometry, idx uint32) (fblock.Head
 func readEpilog(backend ioengine.Backend, geo Geometry, idx uint32) (fblock.Epilog, error) {
 	buf := make([]byte, fblock.EpilogSize)
 	off := int64(fblockOffset(geo, idx)) + int64(geo.FblockSize) - int64(fblock.EpilogSize)
-	if _, err := backend.ReadAt(buf, off); err != nil {
+	_, err := backend.ReadAt(buf, off)
+	if err != nil {
 		return fblock.Epilog{}, err
 	}
 	return fblock.DecodeEpilog(buf)

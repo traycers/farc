@@ -126,7 +126,8 @@ func (s *HttpApiServer) handleSetProtected(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req setProtectedRequest
-	if err := decodeJSON(r, &req); err != nil {
+	err := decodeJSON(r, &req)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -135,7 +136,8 @@ func (s *HttpApiServer) handleSetProtected(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, fmt.Errorf("api: fcontainer %x not found (not Ready)", uuid))
 		return
 	}
-	if err := unit.Index().SetProtected(idx, req.Value); err != nil {
+	err = unit.Index().SetProtected(idx, req.Value)
+	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}

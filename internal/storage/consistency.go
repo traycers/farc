@@ -49,7 +49,8 @@ func ConsistencyCheck(backend ioengine.Backend, geo Geometry, mgr *index.Manager
 		}
 		for _, idx := range inProgress {
 			if idx != candidate {
-				if err := mgr.MarkBad(idx); err != nil {
+				err := mgr.MarkBad(idx)
+				if err != nil {
 					return fmt.Errorf("storage: consistency check: mark fblock %d bad: %w", idx, err)
 				}
 			}
@@ -81,7 +82,7 @@ func verifyWriteCompletion(backend ioengine.Backend, geo Geometry, idx uint32) (
 
 	epilog, err := readEpilog(backend, geo, idx)
 	if err != nil {
-		return false, nil // ErrIncompleteWrite (or a short read) -> Bad
+		return false, nil //nolint:nilerr // ErrIncompleteWrite (or a short read) IS this function's "Bad" determination, not a fault in the check itself
 	}
 
 	contentSize := fblock.ContentSize(h.Prolog.FblockSize, h.Prolog.ParamsSize, h.Prolog.CatalogSize, epilog.TOCSize)
@@ -92,13 +93,15 @@ func verifyWriteCompletion(backend ioengine.Backend, geo Geometry, idx uint32) (
 	offs := fblock.ComputeOffsets(h.Prolog.ParamsSize, h.Prolog.CatalogSize)
 
 	contentBuf := make([]byte, contentSize)
-	if _, err := backend.ReadAt(contentBuf, base+int64(offs.ContentOffset)); err != nil {
+	_, err = backend.ReadAt(contentBuf, base+int64(offs.ContentOffset))
+	if err != nil {
 		return false, fmt.Errorf("read content: %w", err)
 	}
 	tocBuf := make([]byte, epilog.TOCSize)
 	if epilog.TOCSize > 0 {
 		tocStart := base + int64(geo.FblockSize) - int64(fblock.TOCOffsetFromEnd(epilog.TOCSize))
-		if _, err := backend.ReadAt(tocBuf, tocStart); err != nil {
+		_, err = backend.ReadAt(tocBuf, tocStart)
+		if err != nil {
 			return false, fmt.Errorf("read toc: %w", err)
 		}
 	}

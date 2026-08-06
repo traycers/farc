@@ -2,6 +2,7 @@ package fblock
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -36,7 +37,7 @@ func HasValidMagicEpilog(epilogBuf []byte) bool {
 // ErrIncompleteWrite indicates the epilogue's magic is absent — the write
 // never reached its final stage, i.e. the fblock is in_progress from an
 // interrupted write (docs/docs/archive/03-storage-format.md §9.1).
-var ErrIncompleteWrite = fmt.Errorf("fblock: incomplete write (no valid magic_epilog)")
+var ErrIncompleteWrite = errors.New("fblock: incomplete write (no valid magic_epilog)")
 
 // DecodeEpilog parses the epilogue from a EpilogSize-byte buffer (typically
 // the last 20 bytes of a fblock). Returns ErrIncompleteWrite if magic_epilog

@@ -2,6 +2,7 @@ package storageengine
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -142,10 +143,7 @@ func TestQuota_GrantsReadsEveryMWriteChunksInNormalMode(t *testing.T) {
 	// and there are exactly enough reads (3) to be granted at each of the
 	// 3 quota windows produced by 6 writes.
 	want := "WWRWWRWWR"
-	joined := ""
-	for _, k := range kinds {
-		joined += k
-	}
+	joined := strings.Join(kinds, "")
 	if joined != want {
 		t.Fatalf("step order = %q, want %q", joined, want)
 	}

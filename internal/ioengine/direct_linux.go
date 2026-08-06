@@ -41,7 +41,8 @@ func OpenDirect(path string, flag int, perm os.FileMode) (*DirectBackend, error)
 
 func probeAlignment(fd int) (int, error) {
 	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
+	err := unix.Fstat(fd, &st)
+	if err != nil {
 		return 0, err
 	}
 	if st.Mode&unix.S_IFMT == unix.S_IFBLK {
@@ -112,7 +113,7 @@ func alignedBuffer(size, align int) []byte {
 		return make([]byte, size)
 	}
 	buf := make([]byte, size+align-1)
-	addr := uintptr(unsafe.Pointer(&buf[0]))
+	addr := uintptr(unsafe.Pointer(&buf[0])) //nolint:gosec // audited: only used to compute alignment padding, never dereferenced or retained past this line; O_DIRECT has no alignment API that avoids unsafe.Pointer
 	pad := (align - int(addr%uintptr(align))) % align
 	return buf[pad : pad+size]
 }

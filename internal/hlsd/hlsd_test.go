@@ -30,7 +30,8 @@ import (
 func hlsConfigPath(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "hls_server.config.json")
-	if err := hlsconfig.EnsureExists(path); err != nil {
+	err := hlsconfig.EnsureExists(path)
+	if err != nil {
 		t.Fatalf("hlsconfig.EnsureExists(%s): %v", path, err)
 	}
 	return path
@@ -89,7 +90,8 @@ func TestRun_FullStack(t *testing.T) {
 		}
 		if strings.HasSuffix(uri, "init.mp4") {
 			var parsed fmp4.Init
-			if err := parsed.Unmarshal(bytes.NewReader(data)); err != nil {
+			err := parsed.Unmarshal(bytes.NewReader(data))
+			if err != nil {
 				t.Fatalf("fmp4.Init.Unmarshal(%s): %v", uri, err)
 			}
 			if len(parsed.Tracks) != 1 {
@@ -101,7 +103,8 @@ func TestRun_FullStack(t *testing.T) {
 	}
 
 	var parts fmp4.Parts
-	if err := parts.Unmarshal(mediaData); err != nil {
+	err = parts.Unmarshal(mediaData)
+	if err != nil {
 		t.Fatalf("fmp4.Parts.Unmarshal: %v", err)
 	}
 	if len(parts) != 1 || len(parts[0].Tracks) != 1 || len(parts[0].Tracks[0].Samples) != 2 {
@@ -219,7 +222,8 @@ func TestRun_ChannelMovedToDifferentStorage_ReindexesFromNewStorage(t *testing.T
 	}, 0, 1_000_000, 2000)
 
 	farcd := newFarcdTestServer(t, unitS1, 1) // channel 1 starts on s1
-	if err := farcd.reg.Register("s2", unitS2, "/dev/null", ""); err != nil {
+	err := farcd.reg.Register("s2", unitS2, "/dev/null", "")
+	if err != nil {
 		t.Fatalf("Register s2: %v", err)
 	}
 
@@ -428,7 +432,8 @@ func readPersistedChannels(t *testing.T, path string) []hlsconfig.Channel {
 	var wire struct {
 		Channels []hlsconfig.Channel `json:"channels"`
 	}
-	if err := json.Unmarshal(buf, &wire); err != nil {
+	err = json.Unmarshal(buf, &wire)
+	if err != nil {
 		t.Fatalf("unmarshal %s: %v", path, err)
 	}
 	return wire.Channels

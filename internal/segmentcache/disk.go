@@ -19,7 +19,8 @@ type diskBackend struct {
 }
 
 func newDiskBackend(dir string) (*diskBackend, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	err := os.MkdirAll(dir, 0o750)
+	if err != nil {
 		return nil, fmt.Errorf("segmentcache: create cache dir: %w", err)
 	}
 	return &diskBackend{dir: dir}, nil
@@ -35,10 +36,12 @@ func (b *diskBackend) get(k Key) ([]byte, bool) {
 
 func (b *diskBackend) put(k Key, data []byte) error {
 	path := b.pathFor(k)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	err := os.MkdirAll(filepath.Dir(path), 0o750)
+	if err != nil {
 		return fmt.Errorf("segmentcache: create entry dir: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	err = os.WriteFile(path, data, 0o600)
+	if err != nil {
 		return fmt.Errorf("segmentcache: write entry: %w", err)
 	}
 	return nil
@@ -113,7 +116,7 @@ func (b *diskBackend) walk() ([]foundFile, error) {
 		}
 		rel, err := filepath.Rel(b.dir, path)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // WalkDir semantics: nil means "skip this entry, keep walking", not "no error occurred"
 		}
 		key, ok := parseKeyFromRelPath(rel)
 		if !ok {
@@ -121,7 +124,7 @@ func (b *diskBackend) walk() ([]foundFile, error) {
 		}
 		info, err := d.Info()
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // WalkDir semantics: nil means "skip this entry, keep walking", not "no error occurred"
 		}
 		files = append(files, found{key: key, size: info.Size(), modTime: info.ModTime().UnixNano()})
 		return nil

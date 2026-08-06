@@ -36,7 +36,8 @@ func (s *onPacketOnlySource) OnPacketRTP(medi *description.Media, forma format.F
 func TestChannelIngest_SkipFramesWhileBackpressureSignalTrue(t *testing.T) {
 	rec := &fakeRecorder{}
 	policy := NewCapturePolicy(1, rec, uint64(1000), PolicyContinuous, PolicyParams{})
-	if err := policy.StartRecording(0, nil); err != nil {
+	err := policy.StartRecording(0, nil)
+	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
 	ci := NewChannelIngest(1, policy)
@@ -54,7 +55,8 @@ func TestChannelIngest_SkipFramesWhileBackpressureSignalTrue(t *testing.T) {
 	skip = false
 	src.cb(&rtp.Packet{Payload: []byte{7, 8, 9}})
 
-	if err := policy.Close(2000); err != nil {
+	err = policy.Close(2000)
+	if err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if len(rec.writes) != 1 {

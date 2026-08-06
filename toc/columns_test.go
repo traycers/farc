@@ -55,7 +55,8 @@ func TestEncodeDecodeEmptyColumns(t *testing.T) {
 }
 
 func TestDecodeTooShort(t *testing.T) {
-	if _, err := Decode(make([]byte, 10)); err == nil {
+	_, err := Decode(make([]byte, 10))
+	if err == nil {
 		t.Fatal("expected error for buffer shorter than header")
 	}
 }

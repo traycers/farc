@@ -18,6 +18,23 @@ import (
 // reasoning as farcd's copy: a fixed v1 default, not an undocumented knob.
 const channelTimeout = 10 * time.Second
 
+// errNoIngestManager is every channel-mutating/command handler's response
+// when this HttpApiServer was built without one (api.go's own doc comment
+// on why that's a valid, supported configuration) -- shared rather than
+// re-allocated per handler since the message is identical everywhere.
+var errNoIngestManager = errors.New("api: no IngestManager wired into this server")
+
+// errScheduleNotImplemented is parsePolicyType's response for the one
+// documented-but-unbuilt capture-policy type (10-capture-policy.md §5.3 is
+// deferred past v1 -- see internal/ingest's package doc).
+var errScheduleNotImplemented = errors.New("ingest: schedule CapturePolicy is not implemented in v1")
+
+// errChannelIDReserved and errRTSPURLRequired are create/update channel's
+// 400 responses for their two hand-validated required fields (everything
+// else is either optional or validated downstream by IngestManager).
+var errChannelIDReserved = errors.New("api: channel id 0 is reserved (ADR-014), channel ids start at 1")
+var errRTSPURLRequired = errors.New("api: rtsp_url is required")
+
 func parseChannelID(r *http.Request) (uint16, error) {
 	ch, err := strconv.ParseUint(r.PathValue("id"), 10, 16)
 	if err != nil {
@@ -36,7 +53,7 @@ func parsePolicyType(w http.ResponseWriter, s string) (ingest.PolicyType, bool) 
 	case "event":
 		return ingest.PolicyEvent, true
 	case "schedule":
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("ingest: schedule CapturePolicy is not implemented in v1"))
+		writeError(w, http.StatusNotImplemented, errScheduleNotImplemented)
 		return 0, false
 	default:
 		writeError(w, http.StatusBadRequest, fmt.Errorf("api: unknown capture-policy type %q", s))
@@ -54,7 +71,7 @@ type setCapturePolicyRequest struct {
 
 func (s *HttpApiServer) handleSetCapturePolicy(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		writeError(w, http.StatusNotImplemented, errNoIngestManager)
 		return
 	}
 	channel, err := parseChannelID(r)
@@ -63,7 +80,8 @@ func (s *HttpApiServer) handleSetCapturePolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var req setCapturePolicyRequest
-	if err := decodeJSON(r, &req); err != nil {
+	err = decodeJSON(r, &req)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -73,10 +91,11 @@ func (s *HttpApiServer) handleSetCapturePolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := s.ing.SetPolicy(channel, policyType, ingest.PolicyParams{
+	err = s.ing.SetPolicy(channel, policyType, ingest.PolicyParams{
 		Prerecord:  req.Params.PrerecordNS,
 		Postrecord: req.Params.PostrecordNS,
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
@@ -89,7 +108,7 @@ type triggerEventRequest struct {
 
 func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		writeError(w, http.StatusNotImplemented, errNoIngestManager)
 		return
 	}
 	channel, err := parseChannelID(r)
@@ -99,7 +118,8 @@ func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Reques
 	}
 	var req triggerEventRequest
 	if r.ContentLength != 0 {
-		if err := decodeJSON(r, &req); err != nil {
+		err := decodeJSON(r, &req)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -109,7 +129,8 @@ func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Reques
 	if req.T != nil {
 		eventTime = *req.T
 	}
-	if err := s.ing.TriggerEvent(channel, now, eventTime); err != nil {
+	err = s.ing.TriggerEvent(channel, now, eventTime)
+	if err != nil {
 		status := http.StatusNotFound
 		if errors.Is(err, ingest.ErrWrongPolicyType) {
 			status = http.StatusConflict
@@ -129,7 +150,7 @@ type startRecordingRequest struct {
 
 func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		writeError(w, http.StatusNotImplemented, errNoIngestManager)
 		return
 	}
 	channel, err := parseChannelID(r)
@@ -139,13 +160,15 @@ func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Requ
 	}
 	var req startRecordingRequest
 	if r.ContentLength != 0 {
-		if err := decodeJSON(r, &req); err != nil {
+		err := decodeJSON(r, &req)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 	}
 	now := uint64(time.Now().UnixNano())
-	if err := s.ing.StartRecording(channel, now, req.FromTimeNS); err != nil {
+	err = s.ing.StartRecording(channel, now, req.FromTimeNS)
+	if err != nil {
 		status := http.StatusNotFound
 		if errors.Is(err, ingest.ErrWrongPolicyType) {
 			status = http.StatusConflict
@@ -161,7 +184,7 @@ func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Requ
 
 func (s *HttpApiServer) handleStopRecording(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		writeError(w, http.StatusNotImplemented, errNoIngestManager)
 		return
 	}
 	channel, err := parseChannelID(r)
@@ -170,7 +193,8 @@ func (s *HttpApiServer) handleStopRecording(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	now := uint64(time.Now().UnixNano())
-	if err := s.ing.StopRecording(channel, now); err != nil {
+	err = s.ing.StopRecording(channel, now)
+	if err != nil {
 		status := http.StatusNotFound
 		if errors.Is(err, ingest.ErrWrongPolicyType) {
 			status = http.StatusConflict
@@ -272,20 +296,21 @@ type createChannelRequest struct {
 
 func (s *HttpApiServer) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		writeError(w, http.StatusNotImplemented, errNoIngestManager)
 		return
 	}
 	var req createChannelRequest
-	if err := decodeJSON(r, &req); err != nil {
+	err := decodeJSON(r, &req)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.ID == 0 {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("api: channel id 0 is reserved (ADR-014), channel ids start at 1"))
+		writeError(w, http.StatusBadRequest, errChannelIDReserved)
 		return
 	}
 	if req.RTSPURL == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("api: rtsp_url is required"))
+		writeError(w, http.StatusBadRequest, errRTSPURLRequired)
 		return
 	}
 	unit, ok := s.reg.Get(req.Storage)
@@ -313,13 +338,15 @@ func (s *HttpApiServer) handleCreateChannel(w http.ResponseWriter, r *http.Reque
 		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
 		Name:               req.Name,
 	}
-	if err := s.ing.AddChannel(cfg); err != nil {
+	err = s.ing.AddChannel(cfg)
+	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
 
 	spec := specFromRequest(req.ID, req.RTSPURL, req.Storage, req.CapturePolicy, req.Name)
-	if err := s.onChannelCreated(spec); err != nil {
+	err = s.onChannelCreated(spec)
+	if err != nil {
 		_, _ = s.ing.RemoveChannel(req.ID)
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist channel %d: %w", req.ID, err))
 		return
@@ -347,7 +374,7 @@ type updateChannelRequest struct {
 // channel stopped.
 func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		writeError(w, http.StatusNotImplemented, errNoIngestManager)
 		return
 	}
 	channel, err := parseChannelID(r)
@@ -356,12 +383,13 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req updateChannelRequest
-	if err := decodeJSON(r, &req); err != nil {
+	err = decodeJSON(r, &req)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.RTSPURL == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("api: rtsp_url is required"))
+		writeError(w, http.StatusBadRequest, errRTSPURLRequired)
 		return
 	}
 	unit, ok := s.reg.Get(req.Storage)
@@ -395,7 +423,8 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
 		Name:               req.Name,
 	}
-	if err := s.ing.AddChannel(cfg); err != nil {
+	err = s.ing.AddChannel(cfg)
+	if err != nil {
 		// Only plausible if another request raced to (re-)create the same
 		// id between our Remove and Add above -- restore what we had.
 		_ = s.ing.AddChannel(old)
@@ -404,7 +433,8 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	}
 
 	spec := specFromRequest(channel, req.RTSPURL, req.Storage, req.CapturePolicy, req.Name)
-	if err := s.onChannelUpdated(spec); err != nil {
+	err = s.onChannelUpdated(spec)
+	if err != nil {
 		_, _ = s.ing.RemoveChannel(channel)
 		_ = s.ing.AddChannel(old)
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist channel %d: %w", channel, err))
@@ -419,7 +449,7 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 
 func (s *HttpApiServer) handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, fmt.Errorf("api: no IngestManager wired into this server"))
+		writeError(w, http.StatusNotImplemented, errNoIngestManager)
 		return
 	}
 	channel, err := parseChannelID(r)
@@ -432,7 +462,8 @@ func (s *HttpApiServer) handleRemoveChannel(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	if err := s.onChannelRemoved(channel); err != nil {
+	err = s.onChannelRemoved(channel)
+	if err != nil {
 		_ = s.ing.AddChannel(old)
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist removal of channel %d: %w", channel, err))
 		return

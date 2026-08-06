@@ -32,7 +32,8 @@ func TestHandleReadTOC(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -75,7 +76,8 @@ func TestHandleReadContent_WholeExport(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -114,7 +116,8 @@ func TestHandleReadContent_Ranges(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -154,7 +157,8 @@ func TestHandleSetProtected(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -177,7 +181,8 @@ func TestHandleSetProtected(t *testing.T) {
 func TestHandleSetProtected_UnknownUUID(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)

@@ -35,18 +35,21 @@ func smallParams() fblock.Params {
 func initAndOpen(t *testing.T, dir string, geo Geometry, catalogPath string) *Unit {
 	t.Helper()
 	imgPath := filepath.Join(dir, "storage.img")
-	if err := CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644); err != nil {
+	err := CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	if err := Init(b, InitConfig{Geometry: geo, Params: smallParams(), Now: 1, CatalogPath: catalogPath}); err != nil {
+	err = Init(b, InitConfig{Geometry: geo, Params: smallParams(), Now: 1, CatalogPath: catalogPath})
+	if err != nil {
 		b.Close()
 		t.Fatalf("Init: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	err = b.Close()
+	if err != nil {
 		t.Fatalf("close after init: %v", err)
 	}
 
@@ -167,7 +170,8 @@ func TestOpen_SSDCatalogPathMatchesFallbackScanPath(t *testing.T) {
 	if _, err := u.WriteFcontainer([]uint16{2, 3}, 300, 400, videoFiller(t, 2, "frame-b", 300), 2000); err != nil {
 		t.Fatalf("write 2: %v", err)
 	}
-	if err := u.Close(); err != nil {
+	err := u.Close()
+	if err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
@@ -175,11 +179,13 @@ func TestOpen_SSDCatalogPathMatchesFallbackScanPath(t *testing.T) {
 	u2 := openExisting(t, imgPath, catalogPath)
 	cat2 := u2.Index().Snapshot()
 	cursor2 := u2.Index().Cursor()
-	if err := u2.Close(); err != nil {
+	err = u2.Close()
+	if err != nil {
 		t.Fatalf("close u2: %v", err)
 	}
 
-	if err := os.Remove(catalogPath); err != nil {
+	err = os.Remove(catalogPath)
+	if err != nil {
 		t.Fatalf("remove catalog: %v", err)
 	}
 
@@ -243,17 +249,20 @@ func writeRawFblockAt(t *testing.T, eng *storageengine.Engine, geo Geometry, par
 func initRawImage(t *testing.T, dir string, geo Geometry, params fblock.Params) string {
 	t.Helper()
 	imgPath := filepath.Join(dir, "storage.img")
-	if err := CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644); err != nil {
+	err := CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	if err := Init(b, InitConfig{Geometry: geo, Params: params, Now: 1}); err != nil {
+	err = Init(b, InitConfig{Geometry: geo, Params: params, Now: 1})
+	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	err = b.Close()
+	if err != nil {
 		t.Fatalf("close after init: %v", err)
 	}
 	return imgPath
@@ -273,7 +282,8 @@ func TestConsistencyCheck_ProperlyFinishedInProgressBecomesReady(t *testing.T) {
 	var uuid [16]byte
 	uuid[0] = 9
 	cat := writeRawFblockAt(t, eng, geo, params, 1, 2, uuid, 100, 200, []byte("payload"))
-	if err := eng.Close(); err != nil {
+	err = eng.Close()
+	if err != nil {
 		t.Fatalf("eng.Close: %v", err)
 	}
 
@@ -285,7 +295,8 @@ func TestConsistencyCheck_ProperlyFinishedInProgressBecomesReady(t *testing.T) {
 	}
 	defer b2.Close()
 	mgr := index.New(cat, 1, params.WriteMode, params.Retention.Days)
-	if err := ConsistencyCheck(b2, geo, mgr); err != nil {
+	err = ConsistencyCheck(b2, geo, mgr)
+	if err != nil {
 		t.Fatalf("ConsistencyCheck: %v", err)
 	}
 	snap := mgr.Snapshot()
@@ -311,7 +322,8 @@ func TestConsistencyCheck_TruncatedEpilogueBecomesBad(t *testing.T) {
 	var uuid [16]byte
 	uuid[0] = 7
 	cat := writeRawFblockAt(t, eng, geo, params, 1, 2, uuid, 100, 200, []byte("payload"))
-	if err := eng.Close(); err != nil {
+	err = eng.Close()
+	if err != nil {
 		t.Fatalf("eng.Close: %v", err)
 	}
 
@@ -320,7 +332,8 @@ func TestConsistencyCheck_TruncatedEpilogueBecomesBad(t *testing.T) {
 	// not the last fblock in the file, so truncating relative to the
 	// *file's* end would miss it entirely).
 	truncateAt := int64(fblockOffset(geo, 1)) + int64(geo.FblockSize) - 5
-	if err := os.Truncate(imgPath, truncateAt); err != nil {
+	err = os.Truncate(imgPath, truncateAt)
+	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -330,7 +343,8 @@ func TestConsistencyCheck_TruncatedEpilogueBecomesBad(t *testing.T) {
 	}
 	defer b2.Close()
 	mgr := index.New(cat, 1, params.WriteMode, params.Retention.Days)
-	if err := ConsistencyCheck(b2, geo, mgr); err != nil {
+	err = ConsistencyCheck(b2, geo, mgr)
+	if err != nil {
 		t.Fatalf("ConsistencyCheck: %v", err)
 	}
 	if got := mgr.Snapshot().State(1); got != fblock.Bad {
@@ -360,17 +374,20 @@ func TestWriteFcontainer_MidFchunkFailureRetriesOnNewIndex(t *testing.T) {
 	dir := t.TempDir()
 	geo := smallGeometry() // FblockSize 8192, FchunkSize 1024 -> 8 chunks/fblock
 	imgPath := filepath.Join(dir, "storage.img")
-	if err := CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644); err != nil {
+	err := CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	plain, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	if err := Init(plain, InitConfig{Geometry: geo, Params: smallParams(), Now: 1}); err != nil {
+	err = Init(plain, InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
+	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := plain.Close(); err != nil {
+	err = plain.Close()
+	if err != nil {
 		t.Fatalf("close: %v", err)
 	}
 

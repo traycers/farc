@@ -13,7 +13,8 @@ func TestHandleMetrics(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	s := NewHttpApiServer(reg, nil, nil)

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
@@ -13,7 +14,7 @@ import (
 // docs/docs/archive/04-storage-operations.md §4.2.1/§4.2.3's "Storage
 // считается полностью повреждённым, требуется восстановление через
 // CLI-утилиту". Recovering from this is out of v1 scope.
-var ErrStorageCorrupted = fmt.Errorf("storage: deeply corrupted, needs recovery CLI")
+var ErrStorageCorrupted = errors.New("storage: deeply corrupted, needs recovery CLI")
 
 // probeGeometry reads fblock 0's fixed prolog to learn the Storage's fixed
 // geometry (docs/docs/archive/04-storage-operations.md §4.2.1 step 1).
@@ -21,12 +22,13 @@ var ErrStorageCorrupted = fmt.Errorf("storage: deeply corrupted, needs recovery 
 // fblock 0 — always present after Init — is as good a source as any.
 func probeGeometry(backend ioengine.Backend) (Geometry, error) {
 	buf := make([]byte, fblock.FixedPrologSize)
-	if _, err := backend.ReadAt(buf, 0); err != nil {
+	_, err := backend.ReadAt(buf, 0)
+	if err != nil {
 		return Geometry{}, fmt.Errorf("storage: probe geometry: %w", err)
 	}
 	prolog, err := fblock.DecodeFixedProlog(buf)
 	if err != nil {
-		return Geometry{}, fmt.Errorf("%w: fblock 0 unreadable: %v", ErrStorageCorrupted, err)
+		return Geometry{}, fmt.Errorf("%w: fblock 0 unreadable: %w", ErrStorageCorrupted, err)
 	}
 	return Geometry{
 		FblockSize:  prolog.FblockSize,
@@ -95,7 +97,8 @@ func Open(cfg OpenConfig) (*Unit, error) {
 	usedPath1 := false
 
 	if cfg.CatalogPath != "" {
-		if c, meta, err := LoadSSDCatalog(cfg.CatalogPath, geo.MaxChannels, geo.N); err == nil {
+		c, meta, err := LoadSSDCatalog(cfg.CatalogPath, geo.MaxChannels, geo.N)
+		if err == nil {
 			cat, cursor, usedPath1 = c, meta.Cursor, true
 		}
 	}
@@ -121,12 +124,14 @@ func Open(cfg OpenConfig) (*Unit, error) {
 
 	mgr := index.New(cat, cursor, params.WriteMode, params.Retention.Days)
 
-	if err := ConsistencyCheck(cfg.Backend, geo, mgr); err != nil {
+	err = ConsistencyCheck(cfg.Backend, geo, mgr)
+	if err != nil {
 		return nil, fmt.Errorf("storage: open: %w", err)
 	}
 
 	if cfg.CatalogPath != "" {
-		if err := syncSSDCatalog(cfg.CatalogPath, mgr, hCursor.Prolog); err != nil {
+		err := syncSSDCatalog(cfg.CatalogPath, mgr, hCursor.Prolog)
+		if err != nil {
 			return nil, fmt.Errorf("storage: open: rebuild SSD catalog: %w", err)
 		}
 	}

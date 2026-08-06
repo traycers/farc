@@ -69,33 +69,36 @@ type wirePushMessage struct {
 // internal/tocindex.EventSubscriber's job (ADR-018: reconnect triggers a
 // bootstrap resolve, not a resend).
 func (c *Client) Subscribe(ctx context.Context, storageID string, want []string, channels []uint16) (<-chan Event, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.wsBase+"/events/ws", nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.wsBase+"/events/ws", nil) //nolint:bodyclose // gorilla/websocket's own doc comment: the handshake response body needs no closing
 	if err != nil {
 		return nil, fmt.Errorf("hlsclient: subscribe: dial: %w", err)
 	}
 
 	sub := wireSubscribeMessage{Storage: storageID, Want: want, Channels: channels}
-	if err := conn.WriteJSON(sub); err != nil {
-		conn.Close()
+	err = conn.WriteJSON(sub)
+	if err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("hlsclient: subscribe: send subscribe message: %w", err)
 	}
 
 	events := make(chan Event, 64)
 	go func() {
 		defer close(events)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		go func() {
 			<-ctx.Done()
-			conn.Close()
+			_ = conn.Close()
 		}()
 		for {
 			var msg wirePushMessage
-			if err := conn.ReadJSON(&msg); err != nil {
+			err := conn.ReadJSON(&msg)
+			if err != nil {
 				return
 			}
 			ev := Event{Type: msg.Type, Name: msg.Name, Index: msg.Index, Severity: msg.Severity, Reason: msg.Reason, Channel: msg.Channel, Storage: msg.Storage}
 			if msg.UUID != "" {
-				if uuid, err := decodeHexUUID(msg.UUID); err == nil {
+				uuid, err := decodeHexUUID(msg.UUID)
+				if err == nil {
 					ev.UUID = uuid
 					ev.HasUUID = true
 				}

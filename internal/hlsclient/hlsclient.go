@@ -108,7 +108,8 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(body, out); err != nil {
+	err = json.Unmarshal(body, out)
+	if err != nil {
 		return fmt.Errorf("hlsclient: GET %s: decode response: %w", path, err)
 	}
 	return nil
@@ -135,7 +136,8 @@ type Candidate struct {
 func (c *Client) Candidates(ctx context.Context, storageID string, channel uint16, t1, t2 uint64) ([]Candidate, error) {
 	path := fmt.Sprintf("/storages/%s/candidates?channel=%d&t1=%d&t2=%d", url.PathEscape(storageID), channel, t1, t2)
 	var wire []wireCandidate
-	if err := c.getJSON(ctx, path, &wire); err != nil {
+	err := c.getJSON(ctx, path, &wire)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]Candidate, len(wire))
@@ -171,7 +173,8 @@ type ResolvedFrame struct {
 func (c *Client) Resolve(ctx context.Context, storageID string, channel uint16, t1, t2 uint64) ([]ResolvedFrame, error) {
 	path := fmt.Sprintf("/storages/%s/resolve?channel=%d&t1=%d&t2=%d", url.PathEscape(storageID), channel, t1, t2)
 	var wire []wireResolvedFrame
-	if err := c.getJSON(ctx, path, &wire); err != nil {
+	err := c.getJSON(ctx, path, &wire)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]ResolvedFrame, len(wire))
@@ -225,12 +228,13 @@ type ChannelInfo struct {
 // every reconnect to the channel-lifecycle event stream (ADR-021).
 func (c *Client) ListChannels(ctx context.Context) ([]ChannelInfo, error) {
 	var wire []wireChannelInfo
-	if err := c.getJSON(ctx, "/channels", &wire); err != nil {
+	err := c.getJSON(ctx, "/channels", &wire)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]ChannelInfo, len(wire))
 	for i, w := range wire {
-		out[i] = ChannelInfo{Channel: w.Channel, Storage: w.Storage}
+		out[i] = ChannelInfo(w)
 	}
 	return out, nil
 }

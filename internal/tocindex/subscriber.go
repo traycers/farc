@@ -68,9 +68,10 @@ func (s *EventSubscriber) SetLogger(logf func(format string, args ...any)) {
 // closing). It only returns once ctx is done.
 func (s *EventSubscriber) Run(ctx context.Context) error {
 	for {
-		if err := s.bootstrap(ctx); err != nil {
+		err := s.bootstrap(ctx)
+		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return nil //nolint:nilerr // a cancelled context is normal shutdown, not a failure to report
 			}
 			s.logf("tocindex: bootstrap failed for storage %s, retrying: %v", s.storageID, err)
 			if !sleepCtx(ctx, reconnectDelay) {
@@ -82,7 +83,7 @@ func (s *EventSubscriber) Run(ctx context.Context) error {
 		events, err := s.client.Subscribe(ctx, s.storageID, []string{EventWriteCompleted, EventDeleted}, s.channels)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return nil //nolint:nilerr // a cancelled context is normal shutdown, not a failure to report
 			}
 			s.logf("tocindex: subscribe failed for storage %s, retrying: %v", s.storageID, err)
 			if !sleepCtx(ctx, reconnectDelay) {
@@ -93,7 +94,7 @@ func (s *EventSubscriber) Run(ctx context.Context) error {
 
 		s.follow(ctx, events)
 		if ctx.Err() != nil {
-			return nil
+			return nil //nolint:nilerr // a cancelled context is normal shutdown, not a failure to report
 		}
 		// events closed (server disconnect) -- loop back to bootstrap+resubscribe.
 	}

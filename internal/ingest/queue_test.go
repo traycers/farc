@@ -38,7 +38,7 @@ func TestFrameQueue_VideoGOPAtomicEviction(t *testing.T) {
 	// which is >= cutoff, so GOP2 must survive whole.
 	q.Push(100, QueuedFrame{Stream: 0, Kind: fcontainer.KindVideo, Frame: vf(60, mediatree.FrameKindP)})
 	got = q.Since(0)
-	var times []uint64
+	times := make([]uint64, 0, len(got))
 	for _, f := range got {
 		times = append(times, f.Frame.Time)
 	}

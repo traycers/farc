@@ -94,7 +94,8 @@ func TestBuildInlineValuesRoundTrip(t *testing.T) {
 }
 
 func TestBuildEmptyTree(t *testing.T) {
-	if _, err := Build(nil, nil); err == nil {
+	_, err := Build(nil, nil)
+	if err == nil {
 		t.Fatal("expected error building TOC for empty tree")
 	}
 }

@@ -23,8 +23,9 @@ func CreateSizedFile(path string, size int64, perm os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("storage: create %s: %w", path, err)
 	}
-	defer f.Close()
-	if err := f.Truncate(size); err != nil {
+	defer func() { _ = f.Close() }()
+	err = f.Truncate(size)
+	if err != nil {
 		return fmt.Errorf("storage: truncate %s to %d: %w", path, size, err)
 	}
 	return nil

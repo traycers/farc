@@ -14,7 +14,8 @@ func TestCache_PutGetRoundTrip(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	key := segmentcache.InitKey(1, "s1", [16]byte{1})
-	if err := c.Put(key, []byte("hello")); err != nil {
+	err = c.Put(key, []byte("hello"))
+	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	got, ok := c.Get(key)
@@ -85,7 +86,8 @@ func TestCache_SameKeyFromDifferentWindowsHitsSameEntry(t *testing.T) {
 		t.Fatalf("keys from two windows over the same fcontainer differ: %+v != %+v", keyFromWindowA, keyFromWindowB)
 	}
 
-	if err := c.Put(keyFromWindowA, []byte("segment-bytes")); err != nil {
+	err = c.Put(keyFromWindowA, []byte("segment-bytes"))
+	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	got, ok := c.Get(keyFromWindowB)
@@ -106,14 +108,16 @@ func TestCache_DifferentChannelsSameUUIDDoNotCollide(t *testing.T) {
 	channelA := segmentcache.InitKey(1, "s1", uuid)
 	channelB := segmentcache.InitKey(2, "s1", uuid)
 
-	if err := c.Put(channelA, []byte("channel-1-init")); err != nil {
+	err = c.Put(channelA, []byte("channel-1-init"))
+	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if _, ok := c.Get(channelB); ok {
 		t.Fatalf("Get(channelB) = hit, want miss (channel 1's cached init segment must not be served for channel 2)")
 	}
 
-	if err := c.Put(channelB, []byte("channel-2-init")); err != nil {
+	err = c.Put(channelB, []byte("channel-2-init"))
+	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	gotA, ok := c.Get(channelA)
@@ -133,7 +137,8 @@ func TestCache_ReloadsExistingFilesFromDisk(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	key := segmentcache.InitKey(1, "s1", [16]byte{4})
-	if err := c1.Put(key, []byte("persisted")); err != nil {
+	err = c1.Put(key, []byte("persisted"))
+	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -176,7 +181,8 @@ func TestCache_ReopenEvictsDownToLoweredQuota(t *testing.T) {
 
 func mustPut(t *testing.T, c *segmentcache.Cache, key segmentcache.Key, size int) {
 	t.Helper()
-	if err := c.Put(key, bytes.Repeat([]byte{0xAB}, size)); err != nil {
+	err := c.Put(key, bytes.Repeat([]byte{0xAB}, size))
+	if err != nil {
 		t.Fatalf("Put(%+v): %v", key, err)
 	}
 }

@@ -4,6 +4,7 @@ package ioengine
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,7 +43,8 @@ func TestDirectBackendRoundTripAligned(t *testing.T) {
 	if _, err := b.WriteAt(data, 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
-	if err := b.Sync(); err != nil {
+	err := b.Sync()
+	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -69,7 +71,8 @@ func TestDirectBackendReadAtArbitraryUnalignedRange(t *testing.T) {
 	if _, err := b.WriteAt(full, 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
-	if err := b.Sync(); err != nil {
+	err := b.Sync()
+	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -91,10 +94,10 @@ func TestDirectBackendWriteAtRejectsMisaligned(t *testing.T) {
 	b := openDirectOrSkip(t, path)
 	defer b.Close()
 
-	if _, err := b.WriteAt(make([]byte, b.Alignment()), 1); err != ErrMisaligned {
+	if _, err := b.WriteAt(make([]byte, b.Alignment()), 1); !errors.Is(err, ErrMisaligned) {
 		t.Errorf("WriteAt with misaligned offset = %v, want ErrMisaligned", err)
 	}
-	if _, err := b.WriteAt(make([]byte, b.Alignment()-1), 0); err != ErrMisaligned {
+	if _, err := b.WriteAt(make([]byte, b.Alignment()-1), 0); !errors.Is(err, ErrMisaligned) {
 		t.Errorf("WriteAt with misaligned length = %v, want ErrMisaligned", err)
 	}
 }

@@ -46,7 +46,8 @@ func (f *fakeS3) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...
 func TestS3Cache_PutGetRoundTrip(t *testing.T) {
 	c := segmentcache.NewS3(newFakeS3(), "test-bucket")
 	key := segmentcache.InitKey(1, "s1", [16]byte{1})
-	if err := c.Put(key, []byte("hello")); err != nil {
+	err := c.Put(key, []byte("hello"))
+	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	got, ok := c.Get(key)
@@ -72,7 +73,8 @@ func TestS3Cache_NeverEvicts(t *testing.T) {
 	keys := make([]segmentcache.Key, 50)
 	for i := range keys {
 		keys[i] = segmentcache.MediaKey(1, "s1", [16]byte{byte(i)}, 0)
-		if err := c.Put(keys[i], bytes.Repeat([]byte{0xAB}, 1024)); err != nil {
+		err := c.Put(keys[i], bytes.Repeat([]byte{0xAB}, 1024))
+		if err != nil {
 			t.Fatalf("Put(%d): %v", i, err)
 		}
 	}
@@ -89,7 +91,8 @@ func TestS3Cache_DifferentChannelsSameUUIDDoNotCollide(t *testing.T) {
 	channelA := segmentcache.InitKey(1, "s1", uuid)
 	channelB := segmentcache.InitKey(2, "s1", uuid)
 
-	if err := c.Put(channelA, []byte("channel-1-init")); err != nil {
+	err := c.Put(channelA, []byte("channel-1-init"))
+	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if _, ok := c.Get(channelB); ok {

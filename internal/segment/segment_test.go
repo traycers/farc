@@ -51,7 +51,8 @@ func TestBuildInit_RoundTrips(t *testing.T) {
 	}
 
 	var parsed fmp4.Init
-	if err := parsed.Unmarshal(bytes.NewReader(initBytes)); err != nil {
+	err = parsed.Unmarshal(bytes.NewReader(initBytes))
+	if err != nil {
 		t.Fatalf("fmp4.Init.Unmarshal: %v", err)
 	}
 	if len(parsed.Tracks) != 2 {
@@ -96,7 +97,8 @@ func TestBuildMedia_FullWindow_RoundTrips(t *testing.T) {
 	}
 
 	var parts fmp4.Parts
-	if err := parts.Unmarshal(mediaBytes); err != nil {
+	err = parts.Unmarshal(mediaBytes)
+	if err != nil {
 		t.Fatalf("fmp4.Parts.Unmarshal: %v", err)
 	}
 	if len(parts) != 1 || len(parts[0].Tracks) != 2 {
@@ -161,7 +163,8 @@ func TestBuildMedia_PartitionsAcrossTwoSegmentsWithNoOverlap(t *testing.T) {
 		t.Fatalf("BuildMedia (first): %v", err)
 	}
 	var firstParts fmp4.Parts
-	if err := firstParts.Unmarshal(firstBytes); err != nil {
+	err = firstParts.Unmarshal(firstBytes)
+	if err != nil {
 		t.Fatalf("Unmarshal (first): %v", err)
 	}
 	firstVideo := trackByID(t, firstParts[0].Tracks, 1)
@@ -177,7 +180,8 @@ func TestBuildMedia_PartitionsAcrossTwoSegmentsWithNoOverlap(t *testing.T) {
 		t.Fatalf("BuildMedia (second): %v", err)
 	}
 	var secondParts fmp4.Parts
-	if err := secondParts.Unmarshal(secondBytes); err != nil {
+	err = secondParts.Unmarshal(secondBytes)
+	if err != nil {
 		t.Fatalf("Unmarshal (second): %v", err)
 	}
 	secondVideo := trackByID(t, secondParts[0].Tracks, 1)

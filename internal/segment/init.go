@@ -130,9 +130,9 @@ func BuildInit(ctx context.Context, client *hlsclient.Client, rec tocindex.Recor
 	}
 	if hasAudio {
 		asc := bufs[pos]
-		pos++
 		var ascCfg mpeg4audio.AudioSpecificConfig
-		if err := ascCfg.Unmarshal(asc); err != nil {
+		err = ascCfg.Unmarshal(asc)
+		if err != nil {
 			return nil, fmt.Errorf("segment: parse AAC AudioSpecificConfig: %w", err)
 		}
 		tracks = append(tracks, &fmp4.InitTrack{ID: audioTrackID, TimeScale: timeScale, Codec: &codecs.MPEG4Audio{Config: ascCfg}})
@@ -140,7 +140,8 @@ func BuildInit(ctx context.Context, client *hlsclient.Client, rec tocindex.Recor
 
 	init := fmp4.Init{Tracks: tracks}
 	var buf seekablebuffer.Buffer
-	if err := init.Marshal(&buf); err != nil {
+	err = init.Marshal(&buf)
+	if err != nil {
 		return nil, fmt.Errorf("segment: marshal init: %w", err)
 	}
 	return buf.Bytes(), nil

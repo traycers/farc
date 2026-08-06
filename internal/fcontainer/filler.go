@@ -137,7 +137,8 @@ func configsRole(kind StreamKind) mediatree.Role {
 // config node's id, to be passed to every AddFrames call for frames
 // captured under these parameters.
 func (f *Filler) AddStreamParams(channel, stream uint32, kind StreamKind, params StreamParams) (uint32, error) {
-	if err := params.Validate(kind); err != nil {
+	err := params.Validate(kind)
+	if err != nil {
 		return 0, err
 	}
 

@@ -15,7 +15,7 @@ import (
 func dialWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
 	t.Helper()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/events/ws"
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil) //nolint:bodyclose // gorilla/websocket's own doc comment: the handshake response body needs no closing
 	if err != nil {
 		t.Fatalf("dial %s: %v", url, err)
 	}
@@ -26,7 +26,8 @@ func dialWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
 func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := NewEventPushServer(reg)
@@ -35,7 +36,8 @@ func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	if err := conn.WriteJSON(subscribeMessage{Storage: "s1"}); err != nil {
+	err = conn.WriteJSON(subscribeMessage{Storage: "s1"})
+	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 
@@ -48,7 +50,8 @@ func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
-	if err := conn.ReadJSON(&msg); err != nil {
+	err = conn.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("read push: %v", err)
 	}
 	if msg.Type != "event" || msg.Name != storage.EventFblockWriteCompleted || msg.Index != 3 {
@@ -59,7 +62,8 @@ func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 func TestEventPushServer_FiltersByWant(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := NewEventPushServer(reg)
@@ -68,7 +72,8 @@ func TestEventPushServer_FiltersByWant(t *testing.T) {
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	if err := conn.WriteJSON(subscribeMessage{Storage: "s1", Want: []string{storage.EventStorageAlert}}); err != nil {
+	err = conn.WriteJSON(subscribeMessage{Storage: "s1", Want: []string{storage.EventStorageAlert}})
+	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -78,7 +83,8 @@ func TestEventPushServer_FiltersByWant(t *testing.T) {
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
-	if err := conn.ReadJSON(&msg); err != nil {
+	err = conn.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("read push: %v", err)
 	}
 	if msg.Name != storage.EventStorageAlert || msg.Reason != storage.AlertNoFreeFblocks {
@@ -99,7 +105,8 @@ func TestEventPushServer_FiltersByChannel(t *testing.T) {
 	if !ok {
 		t.Fatalf("ResolveUUID: not found")
 	}
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := NewEventPushServer(reg)
@@ -108,11 +115,13 @@ func TestEventPushServer_FiltersByChannel(t *testing.T) {
 	defer srv.Close()
 
 	connMatch := dialWS(t, srv)
-	if err := connMatch.WriteJSON(subscribeMessage{Storage: "s1", Channels: []uint16{1}}); err != nil {
+	err = connMatch.WriteJSON(subscribeMessage{Storage: "s1", Channels: []uint16{1}})
+	if err != nil {
 		t.Fatalf("write subscribe (match): %v", err)
 	}
 	connNoMatch := dialWS(t, srv)
-	if err := connNoMatch.WriteJSON(subscribeMessage{Storage: "s1", Channels: []uint16{2}}); err != nil {
+	err = connNoMatch.WriteJSON(subscribeMessage{Storage: "s1", Channels: []uint16{2}})
+	if err != nil {
 		t.Fatalf("write subscribe (no match): %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -121,7 +130,8 @@ func TestEventPushServer_FiltersByChannel(t *testing.T) {
 
 	connMatch.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
-	if err := connMatch.ReadJSON(&msg); err != nil {
+	err = connMatch.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("channel-1 subscriber: read push: %v", err)
 	}
 	if msg.Index != idx {
@@ -142,12 +152,14 @@ func TestEventPushServer_UnknownStorage(t *testing.T) {
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	if err := conn.WriteJSON(subscribeMessage{Storage: "nope"}); err != nil {
+	err := conn.WriteJSON(subscribeMessage{Storage: "nope"})
+	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg map[string]string
-	if err := conn.ReadJSON(&msg); err != nil {
+	err = conn.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("read error message: %v", err)
 	}
 	if msg["error"] == "" {
@@ -167,7 +179,8 @@ func TestEventPushServer_ServesGlobalSubscription(t *testing.T) {
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	if err := conn.WriteJSON(subscribeMessage{Storage: ""}); err != nil {
+	err := conn.WriteJSON(subscribeMessage{Storage: ""})
+	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -176,7 +189,8 @@ func TestEventPushServer_ServesGlobalSubscription(t *testing.T) {
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
-	if err := conn.ReadJSON(&msg); err != nil {
+	err = conn.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("read push: %v", err)
 	}
 	if msg.Type != "event" || msg.Name != EventChannelCreated || msg.Channel != 7 || msg.Storage != "disk0" {
@@ -194,7 +208,8 @@ func TestEventPushServer_GlobalFiltersByWant(t *testing.T) {
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	if err := conn.WriteJSON(subscribeMessage{Storage: "", Want: []string{EventChannelRemoved}}); err != nil {
+	err := conn.WriteJSON(subscribeMessage{Storage: "", Want: []string{EventChannelRemoved}})
+	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -204,7 +219,8 @@ func TestEventPushServer_GlobalFiltersByWant(t *testing.T) {
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
-	if err := conn.ReadJSON(&msg); err != nil {
+	err = conn.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("read push: %v", err)
 	}
 	if msg.Name != EventChannelRemoved || msg.Channel != 2 {
@@ -229,7 +245,8 @@ func TestEventPushServer_GlobalDropsWhenSubscriberBufferFull(t *testing.T) {
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	if err := conn.WriteJSON(subscribeMessage{Storage: ""}); err != nil {
+	err := conn.WriteJSON(subscribeMessage{Storage: ""})
+	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -253,14 +270,16 @@ func TestEventPushServer_GlobalDropsWhenSubscriberBufferFull(t *testing.T) {
 	// The server as a whole must still work: a fresh connection sees a
 	// fresh publish.
 	conn2 := dialWS(t, srv)
-	if err := conn2.WriteJSON(subscribeMessage{Storage: ""}); err != nil {
+	err = conn2.WriteJSON(subscribeMessage{Storage: ""})
+	if err != nil {
 		t.Fatalf("write subscribe (second conn): %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
 	push.Publish(JournalEvent{Name: EventChannelRemoved, Channel: 999, Storage: "disk0"})
 	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg pushMessage
-	if err := conn2.ReadJSON(&msg); err != nil {
+	err = conn2.ReadJSON(&msg)
+	if err != nil {
 		t.Fatalf("server unusable after overflowing an earlier subscriber: %v", err)
 	}
 	if msg.Channel != 999 {

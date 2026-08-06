@@ -41,18 +41,21 @@ func newTestUnit(t *testing.T) *storage.Unit {
 	imgPath := filepath.Join(dir, "storage.img")
 	geo := smallGeometry()
 
-	if err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644); err != nil {
+	err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	if err := storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1}); err != nil {
+	err = storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
+	if err != nil {
 		b.Close()
 		t.Fatalf("Init: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	err = b.Close()
+	if err != nil {
 		t.Fatalf("close after init: %v", err)
 	}
 
@@ -115,7 +118,8 @@ func writeVideoFcontainer(t *testing.T, unit *storage.Unit, channel uint32, fram
 	for i, fr := range frames {
 		fcFrames[i] = fcontainer.Frame{Data: annexB(fr.NAL), Time: fr.Time, Kind: fr.Kind}
 	}
-	if err := f.AddFrames(configID, fcFrames); err != nil {
+	err = f.AddFrames(configID, fcFrames)
+	if err != nil {
 		t.Fatalf("AddFrames: %v", err)
 	}
 	uuid, err := unit.WriteFcontainer([]uint16{uint16(channel)}, begin, end, f, now)
@@ -147,7 +151,8 @@ type farcdTestServer struct {
 func newFarcdTestServer(t *testing.T, unit *storage.Unit, channels ...uint16) *farcdTestServer {
 	t.Helper()
 	reg := api.NewStorageRegistry()
-	if err := reg.Register("s1", unit, "/dev/null", ""); err != nil {
+	err := reg.Register("s1", unit, "/dev/null", "")
+	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	ing := ingest.NewIngestManager()
@@ -181,7 +186,8 @@ func addChannel(t *testing.T, farcd *farcdTestServer, id uint16, storageID strin
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
-	if err := farcd.ing.AddChannel(cfg); err != nil {
+	err := farcd.ing.AddChannel(cfg)
+	if err != nil {
 		t.Fatalf("AddChannel(%d): %v", id, err)
 	}
 	t.Cleanup(func() { _, _ = farcd.ing.RemoveChannel(id) })

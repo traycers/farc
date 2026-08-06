@@ -2,6 +2,7 @@ package fblock
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -42,7 +43,7 @@ func EncodeFixedProlog(p FixedProlog) []byte {
 
 // ErrUninitialized indicates the fblock has no valid magic_prolog — it was
 // never written (ADR-006), not corrupted.
-var ErrUninitialized = fmt.Errorf("fblock: uninitialized (no valid magic_prolog)")
+var ErrUninitialized = errors.New("fblock: uninitialized (no valid magic_prolog)")
 
 // HasValidMagicProlog reports whether buf starts with a valid magic_prolog.
 // buf must be at least 8 bytes.

@@ -40,7 +40,8 @@ func buildColumns(t *testing.T, channel uint32, sps, pps []byte, frames []frameS
 	for i, fr := range frames {
 		fcFrames[i] = fcontainer.Frame{Data: []byte(fr.Data), Time: fr.Time, Kind: fr.Kind}
 	}
-	if err := f.AddFrames(configID, fcFrames); err != nil {
+	err = f.AddFrames(configID, fcFrames)
+	if err != nil {
 		t.Fatalf("AddFrames: %v", err)
 	}
 

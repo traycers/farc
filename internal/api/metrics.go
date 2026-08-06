@@ -66,6 +66,8 @@ func writeUnitMetrics(w io.Writer, id string, unit *storage.Unit) {
 	level := unit.EngineLevel()
 	queueStatus := 0
 	switch level {
+	case storageengine.LevelNormal:
+		queueStatus = 0
 	case storageengine.LevelWarning:
 		queueStatus = 1
 	case storageengine.LevelBackpressure:

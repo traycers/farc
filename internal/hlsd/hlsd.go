@@ -33,6 +33,12 @@ import (
 // own constant.
 const shutdownTimeout = 10 * time.Second
 
+// readHeaderTimeout bounds how long the http.Server waits for a client to
+// finish sending request headers (mitigates Slowloris-style slow-header
+// attacks; net/http.Server has no timeout by default) — matches
+// internal/farcd's own constant.
+const readHeaderTimeout = 10 * time.Second
+
 // reconcileRetryDelay bounds how soon reconcile retries after a failed
 // GET /channels call or a dropped channel-lifecycle WS connection —
 // matches tocindex.EventSubscriber's own fixed retry backoff.
@@ -98,7 +104,7 @@ func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 		initial[cc.ID] = true
 	}
 	h.apiServer = hlsapi.New(h.index, h.client, initial, h.cache, cfg.TargetSegmentDuration.Duration())
-	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: h.apiServer.Handler()}
+	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: h.apiServer.Handler(), ReadHeaderTimeout: readHeaderTimeout}
 
 	return h, nil
 }
@@ -167,7 +173,8 @@ func (h *Hlsd) Run(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := h.httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		err := h.httpSrv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("hlsd: http server: %w", err)
 			return
 		}
@@ -180,14 +187,15 @@ func (h *Hlsd) Run(ctx context.Context) error {
 	case runErr = <-errCh:
 	}
 
-	h.shutdown()
+	h.shutdown() //nolint:contextcheck // deliberate: ctx is already Done() here, so shutdown builds its own fresh timeout context rather than reusing a cancelled one
 	return runErr
 }
 
 func (h *Hlsd) shutdown() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := h.httpSrv.Shutdown(shutdownCtx); err != nil {
+	err := h.httpSrv.Shutdown(shutdownCtx)
+	if err != nil {
 		h.logf("hlsd: server shutdown: %v", err)
 	}
 }
@@ -208,7 +216,8 @@ func (h *Hlsd) reconcile(ctx context.Context) {
 	}
 
 	for {
-		if err := h.reconcileOnce(ctx, tracked); err != nil {
+		err := h.reconcileOnce(ctx, tracked)
+		if err != nil {
 			h.logf("hlsd: channel reconciliation: %v", err)
 		}
 		if ctx.Err() != nil {
@@ -234,7 +243,8 @@ func (h *Hlsd) reconcile(ctx context.Context) {
 // self-healing either way — startChannel/stopChannel are idempotent
 // against tracked's current state.
 func (h *Hlsd) reconcileOnce(ctx context.Context, tracked map[uint16]*trackedSub) error {
-	if err := h.applyRemoteList(ctx, tracked); err != nil {
+	err := h.applyRemoteList(ctx, tracked)
+	if err != nil {
 		return fmt.Errorf("initial channel list: %w", err)
 	}
 
@@ -251,7 +261,8 @@ func (h *Hlsd) reconcileOnce(ctx context.Context, tracked map[uint16]*trackedSub
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := h.applyRemoteList(ctx, tracked); err != nil {
+			err := h.applyRemoteList(ctx, tracked)
+			if err != nil {
 				h.logf("hlsd: periodic channel list recheck: %v", err)
 			}
 		case ev, ok := <-events:
@@ -316,7 +327,8 @@ func (h *Hlsd) startChannel(ctx context.Context, tracked map[uint16]*trackedSub,
 	h.persist(tracked)
 
 	go func() {
-		if err := sub.Run(subCtx); err != nil {
+		err := sub.Run(subCtx)
+		if err != nil {
 			h.logf("hlsd: event subscriber for channel %d: %v", id, err)
 		}
 	}()
@@ -355,7 +367,8 @@ func (h *Hlsd) persist(tracked map[uint16]*trackedSub) {
 		channels = append(channels, hlsconfig.Channel{ID: id, Storage: sub.storage})
 	}
 	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
-	if err := hlsconfig.Save(h.configPath, &hlsconfig.Config{Channels: channels}); err != nil {
+	err := hlsconfig.Save(h.configPath, &hlsconfig.Config{Channels: channels})
+	if err != nil {
 		h.logf("hlsd: persist channel list to %s: %v", h.configPath, err)
 	}
 }

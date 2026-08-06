@@ -91,7 +91,8 @@ func (ci *ChannelIngest) Run(ctx context.Context, rtspURL string, readTimeout, w
 // tests can supply a fake, or (the one real end-to-end test) a real
 // *gortsplib.Client pointed at an in-process loopback server.
 func (ci *ChannelIngest) run(ctx context.Context, c rtspSource, u *base.URL) error {
-	if err := c.Start(); err != nil {
+	err := c.Start()
+	if err != nil {
 		return fmt.Errorf("ingest: channel %d: start: %w", ci.channel, err)
 	}
 	defer c.Close()
@@ -107,7 +108,8 @@ func (ci *ChannelIngest) run(ctx context.Context, c rtspSource, u *base.URL) err
 		if medi.IsBackChannel {
 			continue
 		}
-		if _, err := c.Setup(desc.BaseURL, medi, 0, 0); err != nil {
+		_, err = c.Setup(desc.BaseURL, medi, 0, 0)
+		if err != nil {
 			return fmt.Errorf("ingest: channel %d: setup: %w", ci.channel, err)
 		}
 		ci.setupMedia(c, medi, streamNum)
@@ -118,7 +120,8 @@ func (ci *ChannelIngest) run(ctx context.Context, c rtspSource, u *base.URL) err
 		return fmt.Errorf("ingest: channel %d: no usable media in RTSP description", ci.channel)
 	}
 
-	if _, err := c.Play(nil); err != nil {
+	_, err = c.Play(nil)
+	if err != nil {
 		return fmt.Errorf("ingest: channel %d: play: %w", ci.channel, err)
 	}
 
@@ -136,7 +139,8 @@ func (ci *ChannelIngest) run(ctx context.Context, c rtspSource, u *base.URL) err
 		case err := <-readErr:
 			return err
 		case <-ticker.C:
-			if err := ci.policy.Tick(ci.nowNS()); err != nil {
+			err := ci.policy.Tick(ci.nowNS())
+			if err != nil {
 				ci.logf("ingest: channel %d: tick: %v", ci.channel, err)
 			}
 		case <-ctx.Done():
