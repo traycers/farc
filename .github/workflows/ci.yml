@@ -32,9 +32,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.3"
-      # .golangci.yaml is a "version: 2" config -- pin a v2.x golangci-lint,
-      # not the action's own default, or the schema won't match.
-      - uses: golangci/golangci-lint-action@v6
+      # .golangci.yaml is a "version: 2" config -- v6 of this action only
+      # supports golangci-lint v1, so a v2.x binary needs v7 of the action.
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
 

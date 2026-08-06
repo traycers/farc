@@ -112,7 +112,7 @@ func writeVideoFcontainer(t *testing.T, unit *storage.Unit, channel uint32, fram
 	for i, fr := range frames {
 		fcFrames[i] = fcontainer.Frame{Data: annexB(fr.NAL), Time: fr.Time, Kind: fr.Kind}
 	}
-	err := f.AddFrames(configID, fcFrames)
+	err = f.AddFrames(configID, fcFrames)
 	if err != nil {
 		t.Fatalf("AddFrames: %v", err)
 	}
@@ -139,12 +139,12 @@ func prepareStorageImage(t *testing.T) (imgPath string, begin, end uint64, video
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
 	}
-	err := storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
+	err = storage.Init(b, storage.InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
 	if err != nil {
 		b.Close()
 		t.Fatalf("Init: %v", err)
 	}
-	err := b.Close()
+	err = b.Close()
 	if err != nil {
 		t.Fatalf("close after init: %v", err)
 	}
@@ -166,7 +166,7 @@ func prepareStorageImage(t *testing.T) (imgPath string, begin, end uint64, video
 		{Time: 500_000, Kind: mediatree.FrameKindP, NAL: []byte{0x41, 0x11}},
 	}, begin, end, 1000)
 
-	err := unit.Close()
+	err = unit.Close()
 	if err != nil {
 		t.Fatalf("close storage after writing fixture: %v", err)
 	}
@@ -211,7 +211,7 @@ func writeFarcConfig(t *testing.T, imgPath string, channelsJSON string) string {
   "channels": %s
 }`, imgJSON, channelsJSON)
 	path := filepath.Join(t.TempDir(), "farc.config.json")
-	err := os.WriteFile(path, []byte(doc), 0o644)
+	err = os.WriteFile(path, []byte(doc), 0o644)
 	if err != nil {
 		t.Fatalf("write farc config: %v", err)
 	}
@@ -594,7 +594,7 @@ func readHlsConfigChannels(t *testing.T, path string) []hlsconfig.Channel {
 	var wire struct {
 		Channels []hlsconfig.Channel `json:"channels"`
 	}
-	err := json.Unmarshal(buf, &wire)
+	err = json.Unmarshal(buf, &wire)
 	if err != nil {
 		t.Fatalf("unmarshal %s: %v", path, err)
 	}
