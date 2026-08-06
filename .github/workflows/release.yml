@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  # Needed to create the GitHub Release and upload its asset with the
+  # default GITHUB_TOKEN -- that token is read-only otherwise.
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tags keep the "v" (v1.2.3); Docker tags conventionally don't.
+      - name: Derive version
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Self-contained guard rather than reaching into ci.yml's run via
+      # workflow_run -- cheap enough to just re-run before packaging a
+      # release, and this workflow triggers on a tag push, which ci.yml
+      # (branch/PR-triggered) never sees on its own.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+      - name: Build service images
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          docker build -f Dockerfile.farc -t farc:"$VERSION" .
+          docker build -f Dockerfile.hls_server -t hls_server:"$VERSION" .
+          docker build -t web:"$VERSION" ./web
+
+      - name: Package release bundle
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          docker save -o images.tar farc:"$VERSION" hls_server:"$VERSION" web:"$VERSION"
+          sed "s/__VERSION__/$VERSION/g" deploy/docker-compose.release.yaml > docker-compose.yaml
+          tar -cf farc-"$VERSION".tar images.tar docker-compose.yaml
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: gh release create "$GITHUB_REF_NAME" farc-"$VERSION".tar --generate-notes

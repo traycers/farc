@@ -1,0 +1,78 @@
+# Release deployment template -- mirrors the root docker-compose.yaml
+# (dev/build-from-source) exactly except each service builds from a
+# pre-built image instead of `build:`, since a release deployment has no
+# source checkout to build from.
+#
+# __VERSION__ is substituted by .github/workflows/release.yml with the
+# release's version (the pushed tag, minus its leading "v") before this
+# file is bundled into the release's *.tar alongside images.tar. Operators
+# get the already-rendered file inside the tar and should not need to edit
+# it by hand -- extract, `docker load -i images.tar`, `docker compose up -d`.
+services:
+  farc:
+    image: farc:__VERSION__
+    environment:
+      FARC_HTTP_IP: "0.0.0.0"
+      FARC_HTTP_PORT: "8080"
+      FARC_WS_IP: "0.0.0.0"
+      FARC_WS_PORT: "8081"
+      FARC_WS_MAX_CONNECTIONS: "100"
+      FARC_METRICS_IP: "0.0.0.0"
+      FARC_METRICS_PORT: "9090"
+    volumes:
+      - farc_config:/etc/farc
+      - farc_data:/data
+    restart: unless-stopped
+
+  hls_server:
+    image: hls_server:__VERSION__
+    environment:
+      HLS_SERVER_HTTP_IP: "0.0.0.0"
+      HLS_SERVER_HTTP_PORT: "8090"
+      HLS_SERVER_FARC_HTTP: "http://farc:8080"
+      HLS_SERVER_FARC_WS: "ws://farc:8081"
+      HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
+      HLS_SERVER_CACHE_BACKEND: "disk"
+      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
+      HLS_SERVER_CACHE_QUOTA_BYTES: "10737418240"
+      HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
+      HLS_SERVER_S3_BUCKET: "hls-segments"
+      HLS_SERVER_S3_ACCESS_KEY: "hls_server"
+      HLS_SERVER_S3_SECRET_KEY: "changeme"
+      HLS_SERVER_S3_USE_SSL: "false"
+    volumes:
+      - hls_config:/etc/hls_server
+      - hls_cache:/var/cache/hls_server
+    depends_on:
+      - farc
+    restart: unless-stopped
+
+  # Same opt-in profile as the root compose file: `docker compose up -d`
+  # leaves this out; `docker compose --profile s3 up -d` brings it in,
+  # alongside switching hls_server's HLS_SERVER_CACHE_BACKEND above to "s3".
+  # References only a public upstream image, so there's nothing to
+  # template here.
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: server -s3 -s3.port=8333 -dir=/data
+    profiles:
+      - s3
+    volumes:
+      - seaweedfs_data:/data
+    restart: unless-stopped
+
+  web:
+    image: web:__VERSION__
+    ports:
+      - "80:80"
+    depends_on:
+      - farc
+      - hls_server
+    restart: unless-stopped
+
+volumes:
+  farc_config:
+  farc_data:
+  hls_config:
+  hls_cache:
+  seaweedfs_data:

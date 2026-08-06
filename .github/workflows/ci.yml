@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel a still-running run for the same PR/branch once a newer push
+# supersedes it -- no point finishing a lint/test run against code that's
+# already been replaced.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+      # .golangci.yaml is a "version: 2" config -- pin a v2.x golangci-lint,
+      # not the action's own default, or the schema won't match.
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
+
+  # go test -tags e2e ./tests/... runs `farc`/`hls_server` as two real OS
+  # processes but seeds fcontainer data directly (see that file's own doc
+  # comment), so -- unlike e2e/'s Playwright+Docker-compose suite, which
+  # needs a user-supplied e2e/media/sample.mp4 that .gitignore deliberately
+  # never commits -- it needs no external media and is safe to run here.
+  e2e-real-process:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+      - run: go build -o farc ./cmd/farc
+      - run: go build -o hls_server ./cmd/hls_server
+      - run: go test -tags e2e ./tests/... -v
+
+  web-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  # Sanity-checks the three Dockerfiles still build -- no push, no tags
+  # beyond Docker's own default, purely to catch a broken Dockerfile before
+  # a release tag does (release.yml rebuilds these for real, with a version
+  # tag, once a tag is pushed).
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f Dockerfile.farc .
+      - run: docker build -f Dockerfile.hls_server .
+      - run: docker build ./web
