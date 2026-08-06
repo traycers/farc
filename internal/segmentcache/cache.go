@@ -1,34 +1,46 @@
-// Package segmentcache is hls_server's disk-backed cache of already-built
-// segments (per the earlier design discussion: disk-only, no in-memory
-// cache), quota-bounded with LRU eviction. It never talks to farcd or
-// rebuilds a segment itself — internal/hlsapi's job is to check Get, fall
-// back to internal/segment on a miss, and Put the result.
+// Package segmentcache is hls_server's cache of already-built segments. A
+// disk-backed Cache (New) is quota-bounded with LRU eviction, one process
+// per directory. An object-storage-backed Cache (NewS3) has no local disk to
+// bound and no per-process state at all — every hls_server replica reads and
+// writes the same bucket, so there's nothing to evict or warm-start; space
+// bounding for that backend is a store-side lifecycle policy, not this
+// package's job. Either way, this package never talks to farcd or rebuilds a
+// segment itself — internal/hlsapi's job is to check Get, fall back to
+// internal/segment on a miss, and Put the result.
 package segmentcache
 
 import (
 	"container/list"
-	"encoding/hex"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 	"sync"
 )
 
+// backend is the low-level byte store a Cache delegates actual reads/writes
+// to. diskBackend (this package) is today's plain local-filesystem store;
+// s3Backend (s3.go) talks to an S3-compatible object store instead — the Go
+// code only depends on the S3 API, not on any specific product, so which
+// server actually backs it (SeaweedFS, MinIO, AWS S3, Ceph RGW, ...) is a
+// pure deployment choice.
+type backend interface {
+	get(k Key) ([]byte, bool)
+	put(k Key, data []byte) error
+	delete(k Key)
+}
+
 type entry struct {
 	key  Key
-	path string
 	size int64
 }
 
-// Cache is a quota-bounded, LRU-evicted disk cache of segment bytes, keyed
-// by Key. Safe for concurrent use.
+// Cache is a cache of segment bytes, keyed by Key. Safe for concurrent use.
 type Cache struct {
-	dir   string
-	quota int64 // <= 0 means unbounded (no eviction)
+	backend backend
+
+	// trackLRU is true only for a disk-backed Cache (New): object storage
+	// (NewS3) skips this bookkeeping entirely rather than accumulating an
+	// ever-growing, never-evicted entries map for a backend that has no
+	// local disk to bound in the first place.
+	trackLRU bool
+	quota    int64 // <= 0 means unbounded (no eviction); meaningful only when trackLRU
 
 	mu      sync.Mutex
 	entries map[Key]*list.Element // -> *entry, list.Front() == most recently used
@@ -43,16 +55,18 @@ type Cache struct {
 // holds more than quotaBytes (e.g. quotaBytes was lowered since the last
 // run).
 func New(dir string, quotaBytes int64) (*Cache, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("segmentcache: create cache dir: %w", err)
+	db, err := newDiskBackend(dir)
+	if err != nil {
+		return nil, err
 	}
 	c := &Cache{
-		dir:     dir,
-		quota:   quotaBytes,
-		entries: make(map[Key]*list.Element),
-		order:   list.New(),
+		backend:  db,
+		trackLRU: true,
+		quota:    quotaBytes,
+		entries:  make(map[Key]*list.Element),
+		order:    list.New(),
 	}
-	if err := c.loadExisting(); err != nil {
+	if err := c.loadExisting(db); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
@@ -61,7 +75,17 @@ func New(dir string, quotaBytes int64) (*Cache, error) {
 	return c, nil
 }
 
-// Size returns the cache's current total size in bytes.
+// NewS3 creates an object-storage-backed Cache against client/bucket. Unlike
+// New, there is no local warm-start (the bucket already holds everything
+// every replica needs) and no quota/eviction (space bounding is the
+// bucket's own lifecycle policy).
+func NewS3(client s3API, bucket string) *Cache {
+	return &Cache{backend: newS3Backend(client, bucket)}
+}
+
+// Size returns the cache's current total size in bytes. Only meaningful for
+// a disk-backed Cache (New) — an object-storage-backed Cache (NewS3) never
+// tracks this and always reports 0.
 func (c *Cache) Size() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -69,9 +93,13 @@ func (c *Cache) Size() int64 {
 }
 
 // Get returns k's cached bytes, if present, marking it most recently used.
-// A file that vanished from disk outside the cache's own control is treated
-// as a miss and its stale entry is dropped.
+// A file that vanished outside the cache's own control is treated as a miss
+// and its stale entry is dropped.
 func (c *Cache) Get(k Key) ([]byte, bool) {
+	if !c.trackLRU {
+		return c.backend.get(k)
+	}
+
 	c.mu.Lock()
 	el, ok := c.entries[k]
 	if !ok {
@@ -79,11 +107,10 @@ func (c *Cache) Get(k Key) ([]byte, bool) {
 		return nil, false
 	}
 	c.order.MoveToFront(el)
-	path := el.Value.(*entry).path
 	c.mu.Unlock()
 
-	data, err := os.ReadFile(path)
-	if err != nil {
+	data, ok := c.backend.get(k)
+	if !ok {
 		c.mu.Lock()
 		c.removeEntryLocked(k)
 		c.mu.Unlock()
@@ -95,12 +122,12 @@ func (c *Cache) Get(k Key) ([]byte, bool) {
 // Put writes data under k, evicting least-recently-used entries afterward
 // if the cache is now over quota.
 func (c *Cache) Put(k Key, data []byte) error {
-	path := c.pathFor(k)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("segmentcache: create entry dir: %w", err)
+	if !c.trackLRU {
+		return c.backend.put(k, data)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("segmentcache: write entry: %w", err)
+
+	if err := c.backend.put(k, data); err != nil {
+		return err
 	}
 
 	c.mu.Lock()
@@ -111,7 +138,7 @@ func (c *Cache) Put(k Key, data []byte) error {
 		e.size = int64(len(data))
 		c.order.MoveToFront(el)
 	} else {
-		e := &entry{key: k, path: path, size: int64(len(data))}
+		e := &entry{key: k, size: int64(len(data))}
 		c.entries[k] = c.order.PushFront(e)
 		c.size += e.size
 	}
@@ -145,91 +172,21 @@ func (c *Cache) evictToQuotaLocked() {
 		c.order.Remove(back)
 		delete(c.entries, e.key)
 		c.size -= e.size
-		_ = os.Remove(e.path)
+		c.backend.delete(e.key)
 	}
-}
-
-// pathFor maps a Key to its on-disk path: dir/channel/storageID/uuidHex/name.
-func (c *Cache) pathFor(k Key) string {
-	return filepath.Join(c.dir, strconv.Itoa(int(k.Channel)), k.StorageID, hex.EncodeToString(k.UUID[:]), fileName(k))
-}
-
-func fileName(k Key) string {
-	if k.IsInit() {
-		return "init.mp4"
-	}
-	return strconv.Itoa(k.SegIndex) + ".m4s"
-}
-
-// parseKeyFromRelPath is pathFor's inverse, given a path relative to dir.
-func parseKeyFromRelPath(rel string) (Key, bool) {
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) != 4 {
-		return Key{}, false
-	}
-	channel, err := strconv.ParseUint(parts[0], 10, 16)
-	if err != nil {
-		return Key{}, false
-	}
-	uuidBytes, err := hex.DecodeString(parts[2])
-	if err != nil || len(uuidBytes) != 16 {
-		return Key{}, false
-	}
-	var uuid [16]byte
-	copy(uuid[:], uuidBytes)
-
-	if parts[3] == "init.mp4" {
-		return InitKey(uint16(channel), parts[1], uuid), true
-	}
-	n, err := strconv.Atoi(strings.TrimSuffix(parts[3], ".m4s"))
-	if err != nil {
-		return Key{}, false
-	}
-	return MediaKey(uint16(channel), parts[1], uuid, n), true
 }
 
 // loadExisting rebuilds the in-memory index from whatever's already on disk
-// under c.dir, ordered oldest-mtime-first so evictToQuotaLocked (if the
+// under db, ordered oldest-mtime-first so evictToQuotaLocked (if the
 // directory already exceeds quota) drops the actual least-recently-written
 // files first.
-func (c *Cache) loadExisting() error {
-	type found struct {
-		key     Key
-		path    string
-		size    int64
-		modTime int64
-	}
-	var files []found
-
-	err := filepath.WalkDir(c.dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(c.dir, path)
-		if err != nil {
-			return nil
-		}
-		key, ok := parseKeyFromRelPath(rel)
-		if !ok {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		files = append(files, found{key: key, path: path, size: info.Size(), modTime: info.ModTime().UnixNano()})
-		return nil
-	})
+func (c *Cache) loadExisting(db *diskBackend) error {
+	files, err := db.walk()
 	if err != nil {
-		return fmt.Errorf("segmentcache: scan existing cache dir: %w", err)
+		return err
 	}
-
-	sort.Slice(files, func(i, j int) bool { return files[i].modTime < files[j].modTime })
 	for _, f := range files {
-		e := &entry{key: f.key, path: f.path, size: f.size}
+		e := &entry{key: f.key, size: f.size}
 		c.entries[f.key] = c.order.PushFront(e)
 		c.size += f.size
 	}

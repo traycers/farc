@@ -2,7 +2,10 @@
 // same way internal/config splits farcd's (see that package's doc comment):
 // server/tuning parameters come from environment variables (HLS_SERVER_
 // HTTP_IP/PORT, HLS_SERVER_FARC_HTTP/WS, HLS_SERVER_TARGET_SEGMENT_DURATION,
-// HLS_SERVER_CACHE_DIR, HLS_SERVER_CACHE_QUOTA_BYTES) so a working
+// HLS_SERVER_CACHE_BACKEND ("disk" or "s3"), HLS_SERVER_CACHE_DIR/
+// HLS_SERVER_CACHE_QUOTA_BYTES (disk backend), HLS_SERVER_S3_ENDPOINT/
+// HLS_SERVER_S3_BUCKET/HLS_SERVER_S3_ACCESS_KEY/HLS_SERVER_S3_SECRET_KEY/
+// HLS_SERVER_S3_USE_SSL (s3 backend)) so a working
 // deployment's env can be committed to git, while the JSON file
 // (docs/docs/archive/12-hls-server.md §7) keeps only the site-specific
 // data: the channel -> farcd-side storage id mapping. The one farcd
@@ -81,10 +84,25 @@ type Config struct {
 	Channels []Channel `json:"channels"`
 
 	TargetSegmentDuration Duration `json:"-"`
-	CacheDir              string   `json:"-"`
-	// CacheQuotaBytes <= 0 means unbounded (internal/segmentcache's own
-	// convention).
-	CacheQuotaBytes int64 `json:"-"`
+
+	// CacheBackend selects internal/segmentcache's storage: "disk" (default)
+	// for a local quota-bounded LRU cache, or "s3" for an S3-compatible
+	// object store (SeaweedFS, MinIO, AWS S3, Ceph RGW, ...) shared across
+	// every hls_server replica -- see internal/segmentcache's package doc.
+	CacheBackend string `json:"-"`
+
+	// CacheDir/CacheQuotaBytes are only used/required when CacheBackend is
+	// "disk". CacheQuotaBytes <= 0 means unbounded (internal/segmentcache's
+	// own convention).
+	CacheDir        string `json:"-"`
+	CacheQuotaBytes int64  `json:"-"`
+
+	// S3* are only used/required when CacheBackend is "s3".
+	S3Endpoint  string `json:"-"`
+	S3Bucket    string `json:"-"`
+	S3AccessKey string `json:"-"`
+	S3SecretKey string `json:"-"`
+	S3UseSSL    bool   `json:"-"`
 }
 
 // Load reads HTTP/Farcd/TargetSegmentDuration/CacheDir/CacheQuotaBytes from
@@ -173,13 +191,20 @@ func loadEnv(cfg *Config) error {
 		cfg.TargetSegmentDuration = Duration(d)
 	}
 
-	cfg.CacheDir = os.Getenv("HLS_SERVER_CACHE_DIR")
+	cfg.CacheBackend = envOr("HLS_SERVER_CACHE_BACKEND", "disk")
 
+	cfg.CacheDir = os.Getenv("HLS_SERVER_CACHE_DIR")
 	quota, err := envInt64("HLS_SERVER_CACHE_QUOTA_BYTES")
 	if err != nil {
 		return err
 	}
 	cfg.CacheQuotaBytes = quota
+
+	cfg.S3Endpoint = os.Getenv("HLS_SERVER_S3_ENDPOINT")
+	cfg.S3Bucket = os.Getenv("HLS_SERVER_S3_BUCKET")
+	cfg.S3AccessKey = os.Getenv("HLS_SERVER_S3_ACCESS_KEY")
+	cfg.S3SecretKey = os.Getenv("HLS_SERVER_S3_SECRET_KEY")
+	cfg.S3UseSSL = os.Getenv("HLS_SERVER_S3_USE_SSL") == "true"
 
 	return nil
 }
@@ -246,8 +271,21 @@ func (cfg *Config) validate() error {
 	if cfg.TargetSegmentDuration.Duration() <= 0 {
 		return fmt.Errorf("target_segment_duration must be a positive duration")
 	}
-	if cfg.CacheDir == "" {
-		return fmt.Errorf("cache_dir is required")
+
+	switch cfg.CacheBackend {
+	case "disk":
+		if cfg.CacheDir == "" {
+			return fmt.Errorf("cache_dir is required")
+		}
+	case "s3":
+		if cfg.S3Endpoint == "" {
+			return fmt.Errorf("s3_endpoint is required when cache_backend is \"s3\"")
+		}
+		if cfg.S3Bucket == "" {
+			return fmt.Errorf("s3_bucket is required when cache_backend is \"s3\"")
+		}
+	default:
+		return fmt.Errorf("cache_backend must be \"disk\" or \"s3\", got %q", cfg.CacheBackend)
 	}
 	return nil
 }

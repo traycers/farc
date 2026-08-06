@@ -80,14 +80,41 @@ services:
       HLS_SERVER_FARC_HTTP: "http://farc:8080"
       HLS_SERVER_FARC_WS: "ws://farc:8081"
       HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
-      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
-      HLS_SERVER_CACHE_QUOTA_BYTES: "1073741824"
+      # s3 (not the disk default) so this stack actually exercises
+      # internal/segmentcache's S3 backend end to end -- the existing
+      # two-channel-playback.spec.ts already drives real cache-miss-then-hit
+      # playback, so it covers the new backend with no test changes needed.
+      HLS_SERVER_CACHE_BACKEND: "s3"
+      HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
+      HLS_SERVER_S3_BUCKET: "hls-segments"
+      HLS_SERVER_S3_ACCESS_KEY: "hls_server"
+      HLS_SERVER_S3_SECRET_KEY: "changeme"
+      HLS_SERVER_S3_USE_SSL: "false"
     volumes:
       - hls_config:/etc/hls_server
-      - hls_cache:/var/cache/hls_server
     depends_on:
       - farc
+      - seaweedfs
     restart: unless-stopped
+
+  # All-in-one SeaweedFS (master+volume+filer+S3 gateway) backing
+  # hls_server's segment cache in s3 mode above -- see docker-compose.yaml's
+  # own seaweedfs service comment for why this one process is enough here.
+  # SeaweedFS doesn't auto-create buckets, so bucket-create runs once before
+  # hls_server starts serving (hls_server itself never creates its bucket).
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: server -s3 -s3.port=8333 -dir=/data
+    restart: unless-stopped
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:latest
+    entrypoint: []
+    command: >
+      sh -c "sleep 3 && echo 's3.bucket.create -name hls-segments' | weed shell -master=seaweedfs:9333"
+    depends_on:
+      - seaweedfs
+    restart: "no"
 
   web:
     build:
@@ -103,4 +130,3 @@ volumes:
   farc_config:
   farc_data:
   hls_config:
-  hls_cache:

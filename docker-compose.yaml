@@ -43,8 +43,20 @@ services:
       HLS_SERVER_FARC_HTTP: "http://farc:8080"
       HLS_SERVER_FARC_WS: "ws://farc:8081"
       HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
+      # CACHE_BACKEND defaults to "disk" (internal/hlsconfig.loadEnv) --
+      # single-instance deployments can leave this as-is. Running more than
+      # one hls_server replica behind a load balancer needs a shared cache
+      # instead: switch this to "s3" and point HLS_SERVER_S3_* below at the
+      # seaweedfs service (already wired up here so that's a same-file
+      # change, not a new one) -- see internal/segmentcache's package doc.
+      HLS_SERVER_CACHE_BACKEND: "disk"
       HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
       HLS_SERVER_CACHE_QUOTA_BYTES: "10737418240"
+      HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
+      HLS_SERVER_S3_BUCKET: "hls-segments"
+      HLS_SERVER_S3_ACCESS_KEY: "hls_server"
+      HLS_SERVER_S3_SECRET_KEY: "changeme"
+      HLS_SERVER_S3_USE_SSL: "false"
     volumes:
       # hls_config holds hls_server.config.json itself -- no repo file
       # bind-mount (nothing site-specific belongs in git). The volume starts
@@ -58,6 +70,27 @@ services:
       - hls_cache:/var/cache/hls_server
     depends_on:
       - farc
+    restart: unless-stopped
+
+  # S3-compatible object store for hls_server's segment cache
+  # (internal/segmentcache) when HLS_SERVER_CACHE_BACKEND=s3 -- lets more
+  # than one hls_server replica share the same already-built segments
+  # instead of each keeping its own local-disk cache. "weed server -s3" runs
+  # master+volume+filer+the S3 gateway in one process, which is enough for a
+  # single-node deployment; a real multi-node SeaweedFS cluster would split
+  # these apart, but that's an ops decision, not a code one (hls_server only
+  # ever talks to the S3 gateway).
+  #
+  # profiles: only starts with `docker compose --profile s3 up` -- a plain
+  # `docker compose up` stays exactly as before (disk backend, no extra
+  # container) for anyone who hasn't opted into the s3 backend above.
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: server -s3 -s3.port=8333 -dir=/data
+    profiles:
+      - s3
+    volumes:
+      - seaweedfs_data:/data
     restart: unless-stopped
 
   web:
@@ -75,3 +108,4 @@ volumes:
   farc_data:
   hls_config:
   hls_cache:
+  seaweedfs_data:

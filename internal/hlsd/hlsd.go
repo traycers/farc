@@ -17,6 +17,10 @@ import (
 	"sort"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+
 	"traycers/farc/internal/hlsapi"
 	"traycers/farc/internal/hlsclient"
 	"traycers/farc/internal/hlsconfig"
@@ -83,7 +87,7 @@ func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 		logf:       func(string, ...any) {},
 	}
 
-	cache, err := segmentcache.New(cfg.CacheDir, cfg.CacheQuotaBytes)
+	cache, err := newCache(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("hlsd: %w", err)
 	}
@@ -97,6 +101,46 @@ func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: h.apiServer.Handler()}
 
 	return h, nil
+}
+
+// newCache builds cfg.CacheBackend's segmentcache.Cache -- "disk" (the
+// quota-bounded local LRU) or "s3" (object storage shared across every
+// hls_server replica, see internal/segmentcache's package doc). cfg is
+// assumed already validated by hlsconfig.Load, so CacheBackend is one of
+// these two values and the fields each one needs are non-empty.
+func newCache(cfg *hlsconfig.Config) (*segmentcache.Cache, error) {
+	if cfg.CacheBackend == "s3" {
+		client, err := newS3Client(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("build s3 client: %w", err)
+		}
+		return segmentcache.NewS3(client, cfg.S3Bucket), nil
+	}
+	return segmentcache.New(cfg.CacheDir, cfg.CacheQuotaBytes)
+}
+
+// newS3Client builds an S3 client against cfg.S3Endpoint -- any
+// S3-compatible server (SeaweedFS's S3 gateway, MinIO, AWS S3, Ceph RGW,
+// ...), never a specific product. UsePathStyle is required by most
+// non-AWS S3-compatible servers (virtual-hosted-style bucket addressing
+// needs per-bucket DNS, which self-hosted deployments don't have).
+func newS3Client(cfg *hlsconfig.Config) (*s3.Client, error) {
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+		awsconfig.WithRegion("us-east-1"), // required by the SDK, unused by S3-compatible servers
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.S3AccessKey, cfg.S3SecretKey, "")),
+	)
+	if err != nil {
+		return nil, err
+	}
+	scheme := "http"
+	if cfg.S3UseSSL {
+		scheme = "https"
+	}
+	endpoint := scheme + "://" + cfg.S3Endpoint
+	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = &endpoint
+		o.UsePathStyle = true
+	}), nil
 }
 
 // SetLogger sets a callback for non-fatal diagnostics, used by this
