@@ -231,26 +231,35 @@ func (h *Hlsd) reconcile(ctx context.Context) {
 	}
 }
 
-// reconcileOnce does a full GET /channels diff (the startup/reconnect
-// catch-up — run every time a connection to the channel-lifecycle stream
-// is (re)established, mirroring tocindex.EventSubscriber's own
-// bootstrap-on-reconnect convention, ADR-016), then subscribes to
-// channel.created/channel.removed (ADR-021) and processes them until the
-// connection drops, periodically re-listing in the meantime to bound how
-// stale a dropped event (EventPushServer.PublishChannelEvent's
-// drop-if-full policy) can leave this process. A periodic re-list landing
-// a moment before or after a live event for the same channel is benign and
-// self-healing either way — startChannel/stopChannel are idempotent
-// against tracked's current state.
+// reconcileOnce subscribes to channel.created/channel.removed (ADR-021)
+// *before* doing the full GET /channels diff (the startup/reconnect catch-up
+// — run every time a connection to the channel-lifecycle stream is
+// (re)established, mirroring tocindex.EventSubscriber's own
+// bootstrap-on-reconnect convention, ADR-016), then processes events until
+// the connection drops, periodically re-listing in the meantime to bound
+// how stale a dropped event (EventPushServer.PublishChannelEvent's
+// drop-if-full policy) can leave this process.
+//
+// The subscribe-then-list order matters, not just style: a channel created
+// on farcd between the list snapshot and the subscribe taking effect would
+// otherwise be invisible until the next channelRecheckInterval tick (30s) —
+// found via a real CI flake where a test's own 3s poll deadline was well
+// inside that window. Subscribing first closes the gap: any event
+// published from the moment the subscription is registered onward is
+// captured, so the only remaining race is the list snapshot possibly
+// racing an event for the *same* channel, which is harmless —
+// startChannel/stopChannel are idempotent against tracked's current state,
+// so processing the same channel twice (once from each source) is a no-op
+// the second time.
 func (h *Hlsd) reconcileOnce(ctx context.Context, tracked map[uint16]*trackedSub) error {
-	err := h.applyRemoteList(ctx, tracked)
-	if err != nil {
-		return fmt.Errorf("initial channel list: %w", err)
-	}
-
 	events, err := h.client.Subscribe(ctx, "", []string{hlsclient.EventChannelCreated, hlsclient.EventChannelRemoved}, nil)
 	if err != nil {
 		return fmt.Errorf("subscribe to channel events: %w", err)
+	}
+
+	err = h.applyRemoteList(ctx, tracked)
+	if err != nil {
+		return fmt.Errorf("initial channel list: %w", err)
 	}
 
 	ticker := time.NewTicker(channelRecheckInterval)
