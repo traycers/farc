@@ -66,7 +66,7 @@ type IngestManager struct {
 	mu                sync.Mutex
 	channels          map[uint16]*channelEntry
 	logf              func(format string, args ...any)
-	onRecordingChange func(channel uint16, recording bool)
+	onRecordingChange func(channel uint16, recording bool, t uint64)
 }
 
 // NewIngestManager creates an empty IngestManager.
@@ -74,7 +74,7 @@ func NewIngestManager() *IngestManager {
 	return &IngestManager{
 		channels:          make(map[uint16]*channelEntry),
 		logf:              func(string, ...any) {},
-		onRecordingChange: func(uint16, bool) {},
+		onRecordingChange: func(uint16, bool, uint64) {},
 	}
 }
 
@@ -92,9 +92,9 @@ func (m *IngestManager) SetLogger(logf func(format string, args ...any)) {
 // before Start/AddChannel, as internal/farcd does). See
 // CapturePolicy.SetOnRecordingChange for when it fires. A nil fn resets to
 // a no-op.
-func (m *IngestManager) SetOnRecordingChange(fn func(channel uint16, recording bool)) {
+func (m *IngestManager) SetOnRecordingChange(fn func(channel uint16, recording bool, t uint64)) {
 	if fn == nil {
-		fn = func(uint16, bool) {}
+		fn = func(uint16, bool, uint64) {}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -153,6 +153,23 @@ func (m *IngestManager) List() []ChannelInfo {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Channel < out[j].Channel })
 	return out
+}
+
+// StorageOf returns the storage id channel is currently assigned to -- a
+// deliberately lightweight lookup (e.cfg.StorageID only, no
+// e.ingest.policy.Policy() call) safe to call from within a CapturePolicy
+// callback such as onRecordingChange, which fires with that very channel's
+// own policy mutex already held: List's Policy() call would self-deadlock
+// in that case (same *sync.Mutex, non-reentrant), while this only ever
+// takes IngestManager's own m.mu.
+func (m *IngestManager) StorageOf(channel uint16) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.channels[channel]
+	if !ok {
+		return "", false
+	}
+	return e.cfg.StorageID, true
 }
 
 // AddChannel starts a single new channel while others may already be

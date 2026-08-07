@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/hex"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"traycers/farc/internal/storage"
+	"traycers/farc/toc"
 )
 
 func dialWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
@@ -337,4 +339,108 @@ func TestEventPushServer_ConcurrentPublishAndConnect(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	close(stop)
 	wg.Wait()
+}
+
+// TestEventPushServer_GlobalIncludeTOC exercises A2's TOC-over-WS push: a
+// global subscriber that sets IncludeTOC gets a "toc" frame right after an
+// EventFblockReady "event" frame, carrying the real TOC bytes for the fblock
+// that was actually written (not synthetic data) -- the mechanism msm_server
+// relies on to compute vaa-blocks without polling GET .../toc.
+func TestEventPushServer_GlobalIncludeTOC(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err = conn.WriteJSON(subscribeMessage{Storage: "", IncludeTOC: true})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "framedata", 150, 1000)
+	idx, ok := u.ResolveUUID(uuid)
+	if !ok {
+		t.Fatal("ResolveUUID: fblock just written not found")
+	}
+	push.Publish(JournalEvent{
+		Name: EventFblockReady, Storage: "s1", Index: idx, UUID: hex.EncodeToString(uuid[:]),
+		Begin: 100, End: 200,
+	})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var evMsg pushMessage
+	err = conn.ReadJSON(&evMsg)
+	if err != nil {
+		t.Fatalf("read event frame: %v", err)
+	}
+	if evMsg.Type != "event" || evMsg.Name != EventFblockReady || evMsg.Storage != "s1" || evMsg.Begin != 100 || evMsg.End != 200 {
+		t.Fatalf("event frame = %+v", evMsg)
+	}
+
+	var tocMsg tocPushMessage
+	err = conn.ReadJSON(&tocMsg)
+	if err != nil {
+		t.Fatalf("read toc frame: %v", err)
+	}
+	if tocMsg.Type != "toc" || tocMsg.Storage != "s1" || tocMsg.Index != idx || tocMsg.UUID != evMsg.UUID {
+		t.Fatalf("toc frame = %+v", tocMsg)
+	}
+	if len(tocMsg.TOC) == 0 {
+		t.Fatal("toc frame carries no bytes")
+	}
+	columns, err := toc.Decode(tocMsg.TOC)
+	if err != nil {
+		t.Fatalf("decode pushed toc: %v", err)
+	}
+	if columns.N == 0 {
+		t.Fatal("decoded toc has no rows")
+	}
+}
+
+// TestEventPushServer_GlobalWithoutIncludeTOC verifies IncludeTOC's default
+// (false) still suppresses the "toc" frame -- ordinary Journal/UI clients
+// must never pay for a payload they didn't ask for.
+func TestEventPushServer_GlobalWithoutIncludeTOC(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err = conn.WriteJSON(subscribeMessage{Storage: ""})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "framedata", 150, 1000)
+	idx, _ := u.ResolveUUID(uuid)
+	push.Publish(JournalEvent{Name: EventFblockReady, Storage: "s1", Index: idx, UUID: hex.EncodeToString(uuid[:])})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var evMsg pushMessage
+	if err := conn.ReadJSON(&evMsg); err != nil {
+		t.Fatalf("read event frame: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var extra pushMessage
+	err = conn.ReadJSON(&extra)
+	if err == nil {
+		t.Fatalf("unexpected second frame without IncludeTOC: %+v", extra)
+	}
 }

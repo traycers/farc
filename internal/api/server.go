@@ -18,6 +18,7 @@ type HttpApiServer struct {
 
 	onStorageCreated func(id, path, catalogPath, name string) error
 	onStorageUpdated func(id, name string) error
+	onStorageRemoved func(id string) error
 	onChannelCreated func(spec ChannelSpec) error
 	onChannelUpdated func(spec ChannelSpec) error
 	onChannelRemoved func(id uint16) error
@@ -31,6 +32,7 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
 		onStorageCreated: func(string, string, string, string) error { return nil },
 		onStorageUpdated: func(string, string) error { return nil },
+		onStorageRemoved: func(string) error { return nil },
 		onChannelCreated: func(ChannelSpec) error { return nil },
 		onChannelUpdated: func(ChannelSpec) error { return nil },
 		onChannelRemoved: func(uint16) error { return nil },
@@ -65,6 +67,20 @@ func (s *HttpApiServer) SetOnStorageUpdated(fn func(id, name string) error) {
 		fn = func(string, string) error { return nil }
 	}
 	s.onStorageUpdated = fn
+}
+
+// SetOnStorageRemoved installs a hook run synchronously by
+// archives.go's archives_detach, before the Storage is actually unregistered
+// and closed -- internal/farcd uses this to stop that Storage's fblock-event
+// bridge goroutine and remove its config-file entry (and those of its
+// channels), so a failure to persist the removal leaves the Storage fully
+// intact and running rather than half-torn-down. A nil fn restores the
+// default no-op.
+func (s *HttpApiServer) SetOnStorageRemoved(fn func(id string) error) {
+	if fn == nil {
+		fn = func(string) error { return nil }
+	}
+	s.onStorageRemoved = fn
 }
 
 // SetOnChannelCreated/SetOnChannelUpdated/SetOnChannelRemoved install hooks
@@ -136,6 +152,15 @@ func (s *HttpApiServer) routes() {
 	s.mux.HandleFunc("POST /channels/{id}/recording/stop", s.handleStopRecording)
 
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
+
+	s.mux.HandleFunc("PUT /api/v1/archives/", s.handleArchiveSetup)
+	s.mux.HandleFunc("DELETE /api/v1/archives/", s.handleArchiveDetach)
+	s.mux.HandleFunc("POST /api/v1/archives/{aid}/channels/", s.handleArchiveChannelsAdd)
+	s.mux.HandleFunc("DELETE /api/v1/archives/{aid}/channels/", s.handleArchiveChannelsDel)
+	s.mux.HandleFunc("PATCH /api/v1/archives/{aid}/channels/config/", s.handleArchiveChannelsConfigUpdate)
+	s.mux.HandleFunc("POST /api/v1/archives/{aid}/recording/start", s.handleArchiveRecordingStart)
+	s.mux.HandleFunc("POST /api/v1/archives/{aid}/recording/stop", s.handleArchiveRecordingStop)
+	s.mux.HandleFunc("PUT /api/v1/archives/{aid}/ttl/", s.handleArchiveTTLSet)
 
 	if s.push != nil {
 		s.mux.HandleFunc("GET /events/ws", s.push.ServeHTTP)

@@ -79,8 +79,13 @@ type CapturePolicy struct {
 	// expiry, Trigger's auto-start) caused it -- distinct from the admin
 	// command itself, which internal/api publishes separately. Defaults to
 	// a no-op so existing callers/tests that never call
-	// SetOnRecordingChange are unaffected.
-	onRecordingChange func(channel uint16, recording bool)
+	// SetOnRecordingChange are unaffected. t is the segment's intended
+	// begin time on a start (openSegmentLocked's replayFrom -- the earliest
+	// time this segment's content is meant to cover, including any
+	// prerecord/queue replay) or its actual stop time on a stop
+	// (closeSegmentLocked's now) -- not derived from the frames actually
+	// written, which msm's started_add/finished_add don't ask for either.
+	onRecordingChange func(channel uint16, recording bool, t uint64)
 }
 
 // NewCapturePolicy creates a CapturePolicy for channel, initially idle.
@@ -97,18 +102,18 @@ func NewCapturePolicy(channel uint16, recorder Recorder, queueDepth uint64, poli
 		cachedParams:      make(map[StreamID]*fcontainer.StreamParams),
 		configIDs:         make(map[StreamID]uint32),
 		configVers:        make(map[StreamID]*fcontainer.StreamParams),
-		onRecordingChange: func(uint16, bool) {},
+		onRecordingChange: func(uint16, bool, uint64) {},
 	}
 }
 
 // SetOnRecordingChange installs a hook fired every time p.recording actually
 // flips, called with p's own mutex held (so the hook must not call back into
 // p). A nil fn resets to a no-op.
-func (p *CapturePolicy) SetOnRecordingChange(fn func(channel uint16, recording bool)) {
+func (p *CapturePolicy) SetOnRecordingChange(fn func(channel uint16, recording bool, t uint64)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if fn == nil {
-		fn = func(uint16, bool) {}
+		fn = func(uint16, bool, uint64) {}
 	}
 	p.onRecordingChange = fn
 }
@@ -198,7 +203,7 @@ func (p *CapturePolicy) openSegmentLocked(replayFrom uint64) error {
 	p.configVers = make(map[StreamID]*fcontainer.StreamParams)
 	p.haveFrame = false
 	p.recording = true
-	p.onRecordingChange(p.channel, true)
+	p.onRecordingChange(p.channel, true, replayFrom)
 
 	for _, qf := range p.queue.Since(replayFrom) {
 		id := StreamID{qf.Stream, qf.Kind}
@@ -224,7 +229,7 @@ func (p *CapturePolicy) closeSegmentLocked(now uint64) error {
 		return nil
 	}
 	p.recording = false
-	p.onRecordingChange(p.channel, false)
+	p.onRecordingChange(p.channel, false, now)
 	p.stopAtSet = false
 	filler := p.filler
 	begin, end, wrote := p.begin, p.end, p.haveFrame

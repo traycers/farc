@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -15,6 +16,32 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+// apiError pairs an error with the HTTP status it should produce. Handlers
+// that call into a shared non-HTTP helper (createStorage/createChannel/
+// removeChannel and archives.go's batch operations built on top of them)
+// use this so the helper can request a specific status (400/404/409) instead
+// of every caller hard-coding the same default.
+type apiError struct {
+	status int
+	err    error
+}
+
+func (e *apiError) Error() string { return e.err.Error() }
+func (e *apiError) Unwrap() error { return e.err }
+
+func apiErr(status int, err error) error { return &apiError{status: status, err: err} }
+
+// writeAPIError writes err in this package's usual {"error":"..."} shape,
+// using the status apiErr wrapped it with if any, else defaultStatus.
+func writeAPIError(w http.ResponseWriter, err error, defaultStatus int) {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		writeError(w, ae.status, ae.err)
+		return
+	}
+	writeError(w, defaultStatus, err)
 }
 
 func decodeJSON(r *http.Request, v any) error {

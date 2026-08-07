@@ -93,6 +93,26 @@ services:
       - seaweedfs_data:/data
     restart: unless-stopped
 
+  # Relays farcd's WS event feed to an external msm ("media services
+  # manager") service (temp/msm/openapi.yaml) -- fblock/recording lifecycle,
+  # stream params, and vaa-blocks. Opt-in (profiles: msm) since msm itself
+  # isn't part of this stack: a plain `docker compose up` stays unchanged;
+  # `docker compose --profile msm up` also starts this, once
+  # MSM_SERVER_MSM_URL below is pointed at a real msm deployment.
+  msm_server:
+    build:
+      context: .
+      dockerfile: Dockerfile.msm_server
+    profiles:
+      - msm
+    environment:
+      MSM_SERVER_FARC_HTTP: "http://farc:8080"
+      MSM_SERVER_FARC_WS: "ws://farc:8081"
+      MSM_SERVER_MSM_URL: "http://msm:9000"
+    depends_on:
+      - farc
+    restart: unless-stopped
+
   web:
     build:
       context: ./web

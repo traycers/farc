@@ -36,35 +36,29 @@ type createStorageRequest struct {
 	Name string `json:"name,omitempty"`
 }
 
-// handleCreateStorage runs Initializer inline (ADR-006 makes this cheap —
-// only fblock 0 is actually written) and registers the resulting open Unit.
-func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Request) {
-	var req createStorageRequest
-	err := decodeJSON(r, &req)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
+// createStorage is handleCreateStorage's HTTP-free core: Init+Open+Register
+// a new Storage and persist it via onStorageCreated. Shared with
+// archives.go's archives_setup, which runs the exact same sequence before
+// going on to add channels/set ttl in the same request. A returned error may
+// be an *apiError requesting a specific status (400/409); callers should
+// render it through writeAPIError with 500 as the default.
+func (s *HttpApiServer) createStorage(req createStorageRequest) (StorageInfo, error) {
 	if req.ID == "" || req.Path == "" {
-		writeError(w, http.StatusBadRequest, errIDAndPathRequired)
-		return
+		return StorageInfo{}, apiErr(http.StatusBadRequest, errIDAndPathRequired)
 	}
 	if _, exists := s.reg.Get(req.ID); exists {
-		writeError(w, http.StatusConflict, fmt.Errorf("api: storage id %q already registered", req.ID))
-		return
+		return StorageInfo{}, apiErr(http.StatusConflict, fmt.Errorf("api: storage id %q already registered", req.ID))
 	}
 
 	size := int64(req.Geometry.FblockSize) * int64(req.Geometry.N)
-	err = storage.CreateSizedFile(req.Path, size, 0o600)
+	err := storage.CreateSizedFile(req.Path, size, 0o600)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return StorageInfo{}, err
 	}
 
 	backend, err := ioengine.Open(req.Path, ioengine.Options{Backend: req.Backend})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return StorageInfo{}, err
 	}
 
 	tuning := storage.DefaultEngineTuning()
@@ -79,31 +73,59 @@ func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Reque
 	err = storage.Init(backend, initCfg)
 	if err != nil {
 		_ = backend.Close()
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return StorageInfo{}, err
 	}
 
 	unit, err := storage.Open(storage.OpenConfig{Backend: backend, CatalogPath: req.CatalogPath, Tuning: tuning})
 	if err != nil {
 		_ = backend.Close()
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return StorageInfo{}, err
 	}
 
 	err = s.reg.Register(req.ID, unit, req.Path, req.Name)
 	if err != nil {
 		_ = unit.Close()
-		writeError(w, http.StatusConflict, err)
-		return
+		return StorageInfo{}, apiErr(http.StatusConflict, err)
 	}
 
 	err = s.onStorageCreated(req.ID, req.Path, req.CatalogPath, req.Name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q: %w", req.ID, err))
-		return
+		return StorageInfo{}, fmt.Errorf("api: persist storage %q: %w", req.ID, err)
 	}
 
-	writeJSON(w, http.StatusCreated, StorageInfo{ID: req.ID, Path: req.Path, Name: req.Name, Geometry: req.Geometry})
+	return StorageInfo{ID: req.ID, Path: req.Path, Name: req.Name, Geometry: req.Geometry}, nil
+}
+
+// handleCreateStorage runs Initializer inline (ADR-006 makes this cheap —
+// only fblock 0 is actually written) and registers the resulting open Unit.
+func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Request) {
+	var req createStorageRequest
+	err := decodeJSON(r, &req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	info, err := s.createStorage(req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, info)
+}
+
+// removeStorage tears down an already-registered Storage: unregisters it
+// from reg and closes the underlying Unit. It does not touch any channel or
+// config-file state -- callers (archives.go's archives_detach) are
+// responsible for removing the Storage's channels first and persisting the
+// removal via onStorageRemoved before calling this, mirroring how
+// handleRemoveChannel's caller ordering keeps IngestManager and the config
+// file from ever disagreeing about what exists.
+func (s *HttpApiServer) removeStorage(id string) error {
+	unit, ok := s.reg.Unregister(id)
+	if !ok {
+		return apiErr(http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))
+	}
+	return unit.Close()
 }
 
 func (s *HttpApiServer) handleListStorages(w http.ResponseWriter, r *http.Request) {

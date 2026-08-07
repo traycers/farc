@@ -8,24 +8,32 @@ import (
 	"github.com/gorilla/websocket"
 
 	"traycers/farc/internal/storage"
+	"traycers/farc/toc"
 )
 
 // subscribeMessage is the one message a client sends right after connecting
 // (the sketch's "one subscribe message on connect"). Want/Channels empty
 // means "no filter" (everything for that dimension). Storage == "" means a
 // "global" subscription — channel-lifecycle events only, not tied to any
-// one Storage's NotificationBus (see ServeHTTP/serveGlobal).
+// one Storage's NotificationBus (see ServeHTTP/serveGlobal). IncludeTOC
+// opts a global subscriber into a second "toc" frame (tocPushMessage) right
+// after every EventFblockReady it receives -- off by default so ordinary
+// Journal/UI clients never pay for a payload they don't use (msm_server is
+// the one subscriber that sets it, to compute vaa-blocks without polling
+// GET .../toc).
 type subscribeMessage struct {
-	Storage  string   `json:"storage"`
-	Want     []string `json:"want"`
-	Channels []uint16 `json:"channels"`
+	Storage    string   `json:"storage"`
+	Want       []string `json:"want"`
+	Channels   []uint16 `json:"channels"`
+	IncludeTOC bool     `json:"include_toc"`
 }
 
 // pushMessage is one WS frame pushed to a subscribed client — a compact,
 // JSON-friendly mirror of storage.Event, or (Channel/Storage set instead of
-// Index/UUID) a JournalEvent from a global subscription.
+// Index/UUID) a JournalEvent from a global subscription. Begin/End are only
+// meaningful for channel.recording.*/fblock.ready (see JournalEvent).
 type pushMessage struct {
-	Type     string `json:"type"` // always "event" in v1 (see api.go's package doc: no toc push type yet)
+	Type     string `json:"type"` // "event" or "toc" (see tocPushMessage)
 	Name     string `json:"name"`
 	Index    uint32 `json:"index,omitempty"`
 	UUID     string `json:"uuid,omitempty"`
@@ -33,6 +41,22 @@ type pushMessage struct {
 	Reason   string `json:"reason,omitempty"`
 	Channel  uint16 `json:"channel,omitempty"`
 	Storage  string `json:"storage,omitempty"`
+	Begin    uint64 `json:"begin,omitempty"`
+	End      uint64 `json:"end,omitempty"`
+}
+
+// tocPushMessage is the WS frame sent right after an EventFblockReady
+// pushMessage to a subscriber with IncludeTOC set — the raw TOC section
+// bytes for that fblock (the same bytes GET .../fcontainers/{uuid}/toc
+// serves, toc.Encode'd), base64'd via encoding/json's normal []byte
+// handling. Its own "type" is always "toc", so a client can tell the two
+// frames apart without guessing from field presence.
+type tocPushMessage struct {
+	Type    string `json:"type"`
+	Storage string `json:"storage"`
+	Index   uint32 `json:"index"`
+	UUID    string `json:"uuid"`
+	TOC     []byte `json:"toc"`
 }
 
 // EventChannelCreated/EventChannelRemoved are JournalEvent's Name values for
@@ -46,19 +70,27 @@ type pushMessage struct {
 // "Created" is write-start, including a cyclic reuse of an already-ready
 // block — there is no separate "first-ever init" signal in v1.
 //
+// EventFblockReady mirrors storage.EventFblockWriteCompleted -- the fblock
+// has finished writing and is now Ready, with a final [Begin,End] (from the
+// Storage's own index/catalog, not recomputed here) and a TOC a subscriber
+// can ask to have pushed alongside it (subscribeMessage.IncludeTOC).
+//
 // EventRecordingStarted/EventRecordingStopped fire on CapturePolicy's actual
 // recording-state transition (internal/ingest/policy.go's
 // openSegmentLocked/closeSegmentLocked), which can happen without a matching
 // command (event policy's Trigger/Tick) — hence these are distinct from
 // EventRecordingCommandStart/EventRecordingCommandStop, which fire when
 // POST /channels/{id}/recording/start|stop is received, regardless of
-// whether it actually changes recording state.
+// whether it actually changes recording state. Begin/End carry the segment's
+// intended start time / actual stop time (CapturePolicy.SetOnRecordingChange's
+// own doc comment) -- Begin is set for Started, End for Stopped, never both.
 //
 // EventTriggerFired fires when POST /channels/{id}/events is received.
 const (
 	EventChannelCreated        = "channel.created"
 	EventChannelRemoved        = "channel.removed"
 	EventFblockCreated         = "fblock.created"
+	EventFblockReady           = "fblock.ready"
 	EventFblockDeleted         = "fblock.deleted"
 	EventRecordingStarted      = "channel.recording.started"
 	EventRecordingStopped      = "channel.recording.stopped"
@@ -73,7 +105,8 @@ const (
 // NotificationBus the way per-storage fblock.* subscriptions are. Not every
 // field is set for every Name: Index/UUID/Severity/Reason are only
 // meaningful for fblock.* events, Channel only for channel/recording/trigger
-// events.
+// events, Begin/End only for channel.recording.*/fblock.ready (see the Event*
+// constants above).
 type JournalEvent struct {
 	Name     string
 	Channel  uint16
@@ -82,6 +115,8 @@ type JournalEvent struct {
 	UUID     string
 	Severity string
 	Reason   string
+	Begin    uint64
+	End      uint64
 }
 
 // EventPushServer is the WS half of Phase 10's minimal API: one endpoint,
@@ -224,13 +259,51 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 			msg := pushMessage{
 				Type: "event", Name: ev.Name, Channel: ev.Channel, Storage: ev.Storage,
 				Index: ev.Index, UUID: ev.UUID, Severity: ev.Severity, Reason: ev.Reason,
+				Begin: ev.Begin, End: ev.End,
 			}
 			err := conn.WriteJSON(msg)
 			if err != nil {
 				return
 			}
+			if sub.IncludeTOC && ev.Name == EventFblockReady {
+				tocMsg, ok := p.buildTOCPushMessage(ev)
+				if ok {
+					err := conn.WriteJSON(tocMsg)
+					if err != nil {
+						return
+					}
+				}
+			}
 		}
 	}
+}
+
+// buildTOCPushMessage reads ev's fblock's TOC section (the same bytes
+// GET .../fcontainers/{uuid}/toc serves) for a follow-up "toc" frame --
+// false if ev's Storage/UUID can't be resolved to a live fblock anymore
+// (e.g. it was already recycled past retention by the time the subscriber
+// caught up), in which case the caller just skips the TOC frame rather than
+// erroring the whole connection.
+func (p *EventPushServer) buildTOCPushMessage(ev JournalEvent) (tocPushMessage, bool) {
+	unit, ok := p.reg.Get(ev.Storage)
+	if !ok {
+		return tocPushMessage{}, false
+	}
+	uuidBytes, err := hex.DecodeString(ev.UUID)
+	if err != nil || len(uuidBytes) != 16 {
+		return tocPushMessage{}, false
+	}
+	var uuid [16]byte
+	copy(uuid[:], uuidBytes)
+	columns, err := unit.ReadTOC(uuid)
+	if err != nil {
+		return tocPushMessage{}, false
+	}
+	buf, err := toc.Encode(columns)
+	if err != nil {
+		return tocPushMessage{}, false
+	}
+	return tocPushMessage{Type: "toc", Storage: ev.Storage, Index: ev.Index, UUID: ev.UUID, TOC: buf}, true
 }
 
 // Publish fans evt out to every current global subscriber, non-blocking — a

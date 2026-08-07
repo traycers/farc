@@ -172,3 +172,57 @@ func TestIngestManager_StartThenAddChannel_BothPresent(t *testing.T) {
 		t.Fatalf("List = %+v, want 2 channels", list)
 	}
 }
+
+func TestIngestManager_StorageOf(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+
+	id, ok := m.StorageOf(1)
+	if !ok || id != "disk0" {
+		t.Fatalf("StorageOf(1) = %q, %v, want \"disk0\", true", id, ok)
+	}
+
+	_, ok = m.StorageOf(999)
+	if ok {
+		t.Fatal("StorageOf(999) unexpectedly found")
+	}
+}
+
+// TestIngestManager_OnRecordingChange_StorageOfDoesNotDeadlock guards
+// internal/farcd's own onRecordingChange hook, which calls StorageOf(channel)
+// from inside the callback -- fired by CapturePolicy with that channel's own
+// mutex already held (policy.go's openSegmentLocked/closeSegmentLocked). If
+// StorageOf ever grew a dependency on CapturePolicy's mutex (like List's
+// Policy() call does), this would deadlock instead of completing.
+func TestIngestManager_OnRecordingChange_StorageOfDoesNotDeadlock(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	var got string
+	m.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
+		got, _ = m.StorageOf(channel)
+	})
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = m.StartRecording(1, 1, nil)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartRecording did not return -- StorageOf likely deadlocked on CapturePolicy's own mutex")
+	}
+	if got != "disk0" {
+		t.Fatalf("onRecordingChange saw StorageOf = %q, want \"disk0\"", got)
+	}
+}

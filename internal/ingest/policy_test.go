@@ -77,6 +77,49 @@ func TestContinuous_StartWithoutFromTimeDoesNotReplay(t *testing.T) {
 	}
 }
 
+func TestOnRecordingChange_ReceivesStartAndStopTimes(t *testing.T) {
+	rec := &fakeRecorder{}
+	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+
+	type call struct {
+		channel   uint16
+		recording bool
+		t         uint64
+	}
+	var calls []call
+	p.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
+		calls = append(calls, call{channel, recording, t})
+	})
+
+	err := p.StartRecording(100, nil)
+	if err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+	fromTime := uint64(50)
+	err = p.StopRecording(200)
+	if err != nil {
+		t.Fatalf("StopRecording: %v", err)
+	}
+	err = p.StartRecording(300, &fromTime)
+	if err != nil {
+		t.Fatalf("StartRecording with fromTime: %v", err)
+	}
+
+	want := []call{
+		{1, true, 100},  // StartRecording(100, nil): begin = now = 100
+		{1, false, 200}, // StopRecording(200): end = now = 200
+		{1, true, 50},   // StartRecording(300, &50): begin = fromTime = 50, not now
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %+v, want %+v", calls, want)
+	}
+	for i, c := range calls {
+		if c != want[i] {
+			t.Fatalf("calls[%d] = %+v, want %+v", i, c, want[i])
+		}
+	}
+}
+
 func TestContinuous_StartWithFromTimeReplaysQueue(t *testing.T) {
 	rec := &fakeRecorder{}
 	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})

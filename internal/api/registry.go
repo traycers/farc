@@ -73,6 +73,22 @@ func (r *StorageRegistry) Get(id string) (*storage.Unit, bool) {
 	return e.unit, true
 }
 
+// Unregister removes id and returns its Unit for the caller to close --
+// false if id wasn't registered. The registry itself never closes a Unit
+// (mirroring Get/Register, which never open one either): lifecycle
+// ownership stays with whoever opened it (storages.go's createStorage /
+// removeStorage, or internal/farcd at startup/shutdown).
+func (r *StorageRegistry) Unregister(id string) (*storage.Unit, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.units[id]
+	if !ok {
+		return nil, false
+	}
+	delete(r.units, id)
+	return e.unit, true
+}
+
 // List returns every registered storage's info, sorted by id for a stable
 // response across calls.
 func (r *StorageRegistry) List() []StorageInfo {

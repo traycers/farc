@@ -83,9 +83,11 @@ type Farcd struct {
 
 	// bridgeStops cancels each bridgeFblockEvents goroutine (one per open
 	// Storage, forwarding its NotificationBus into push as fblock.created/
-	// fblock.deleted). bridgeMu guards appends from persistNewStorage,
-	// which can run concurrently with other requests.
-	bridgeStops []func()
+	// fblock.deleted), keyed by storage id so persistRemovedStorage can stop
+	// exactly one of them without touching the rest. bridgeMu guards
+	// inserts/deletes from persistNewStorage/persistRemovedStorage, which can
+	// run concurrently with other requests.
+	bridgeStops map[string]func()
 	bridgeMu    sync.Mutex
 
 	httpSrv    *http.Server
@@ -103,11 +105,12 @@ type Farcd struct {
 // later via POST /storages can be persisted back into it (persistNewStorage).
 func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	f := &Farcd{
-		registry:   api.NewStorageRegistry(),
-		ing:        ingest.NewIngestManager(),
-		cfg:        cfg,
-		configPath: configPath,
-		logf:       func(string, ...any) {},
+		registry:    api.NewStorageRegistry(),
+		ing:         ingest.NewIngestManager(),
+		cfg:         cfg,
+		configPath:  configPath,
+		bridgeStops: make(map[string]func()),
+		logf:        func(string, ...any) {},
 	}
 
 	push := api.NewEventPushServer(f.registry)
@@ -137,12 +140,17 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 		f.channels = append(f.channels, chCfg)
 	}
 
-	f.ing.SetOnRecordingChange(func(channel uint16, recording bool) {
-		name := api.EventRecordingStopped
+	f.ing.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
+		// StorageOf, not List: this fires with the channel's own
+		// CapturePolicy mutex already held, and List's Policy() call would
+		// self-deadlock on it (see StorageOf's own doc comment). msm_server
+		// needs Storage (its "archive id") to call started_add/finished_add.
+		storageID, _ := f.ing.StorageOf(channel)
 		if recording {
-			name = api.EventRecordingStarted
+			f.push.Publish(api.JournalEvent{Name: api.EventRecordingStarted, Channel: channel, Storage: storageID, Begin: t})
+			return
 		}
-		f.push.Publish(api.JournalEvent{Name: name, Channel: channel})
+		f.push.Publish(api.JournalEvent{Name: api.EventRecordingStopped, Channel: channel, Storage: storageID, End: t})
 	})
 
 	// push IS passed into NewHttpApiServer (unlike WS's own listener on
@@ -154,6 +162,7 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	apiServer := api.NewHttpApiServer(f.registry, f.ing, push)
 	apiServer.SetOnStorageCreated(f.persistNewStorage)
 	apiServer.SetOnStorageUpdated(f.persistUpdatedStorage)
+	apiServer.SetOnStorageRemoved(f.persistRemovedStorage)
 	apiServer.SetOnChannelCreated(f.persistNewChannel)
 	apiServer.SetOnChannelUpdated(f.persistUpdatedChannel)
 	apiServer.SetOnChannelRemoved(f.persistRemovedChannel)
@@ -298,6 +307,52 @@ func (f *Farcd) persistUpdatedStorage(id, name string) error {
 	return nil
 }
 
+// persistRemovedStorage removes a storage detached via archives.go's
+// archives_detach from farcd's own config file, wired into HttpApiServer via
+// SetOnStorageRemoved -- runs *before* the Storage is actually unregistered
+// and closed (api.HttpApiServer.SetOnStorageRemoved's own doc comment), so a
+// Save failure here leaves the archive fully intact rather than half torn
+// down. On success, stops id's fblock-event bridge goroutine and drops its
+// Unit from f.units, so shutdown's closeUnits doesn't later double-close a
+// Unit archives.go's handler is about to Close itself.
+func (f *Farcd) persistRemovedStorage(id string) error {
+	f.cfgMu.Lock()
+	defer f.cfgMu.Unlock()
+
+	idx := -1
+	for i, sc := range f.cfg.Storages {
+		if sc.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("farcd: persist archive %q detach: not present in config", id)
+	}
+	removed := f.cfg.Storages[idx]
+	f.cfg.Storages = append(f.cfg.Storages[:idx], f.cfg.Storages[idx+1:]...)
+	err := config.Save(f.configPath, f.cfg)
+	if err != nil {
+		restored := make([]config.Storage, 0, len(f.cfg.Storages)+1)
+		restored = append(restored, f.cfg.Storages[:idx]...)
+		restored = append(restored, removed)
+		restored = append(restored, f.cfg.Storages[idx:]...)
+		f.cfg.Storages = restored
+		return fmt.Errorf("farcd: persist archive %q detach to %s: %w", id, f.configPath, err)
+	}
+
+	f.stopBridge(id)
+	if unit, ok := f.registry.Get(id); ok {
+		for i, u := range f.units {
+			if u == unit {
+				f.units = append(f.units[:i], f.units[i+1:]...)
+				break
+			}
+		}
+	}
+	return nil
+}
+
 // specToConfigChannel translates api.ChannelSpec (the HTTP wire's ns-based
 // shape) into config.Channel/CapturePolicy (the config file's Go-duration-
 // string shape) -- the inverse of buildChannelConfig's job.
@@ -423,10 +478,10 @@ func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
 	stop := make(chan struct{})
 
 	f.bridgeMu.Lock()
-	f.bridgeStops = append(f.bridgeStops, func() {
+	f.bridgeStops[id] = func() {
 		close(stop)
 		unit.Notify().Unsubscribe(events)
-	})
+	}
 	f.bridgeMu.Unlock()
 
 	go func() {
@@ -442,6 +497,8 @@ func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
 				switch ev.Name {
 				case storage.EventFblockWriteStarted:
 					name = api.EventFblockCreated
+				case storage.EventFblockWriteCompleted:
+					name = api.EventFblockReady
 				case storage.EventFblockDeleted:
 					name = api.EventFblockDeleted
 				default:
@@ -451,10 +508,17 @@ func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
 				if ev.UUID != ([16]byte{}) {
 					uuid = hex.EncodeToString(ev.UUID[:])
 				}
-				f.push.Publish(api.JournalEvent{
+				journalEv := api.JournalEvent{
 					Name: name, Storage: id, Index: ev.Index, UUID: uuid,
 					Severity: ev.Severity, Reason: ev.Reason,
-				})
+				}
+				if name == api.EventFblockReady {
+					snap := unit.Index().Snapshot()
+					if ev.Index < snap.N {
+						journalEv.Begin, journalEv.End = snap.Begin[ev.Index], snap.End[ev.Index]
+					}
+				}
+				f.push.Publish(journalEv)
 			}
 		}
 	}()
@@ -463,7 +527,7 @@ func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
 func (f *Farcd) closeUnits() {
 	f.bridgeMu.Lock()
 	stops := f.bridgeStops
-	f.bridgeStops = nil
+	f.bridgeStops = make(map[string]func())
 	f.bridgeMu.Unlock()
 	for _, stop := range stops {
 		stop()
@@ -473,6 +537,21 @@ func (f *Farcd) closeUnits() {
 		_ = u.Close()
 	}
 	f.units = nil
+}
+
+// stopBridge stops and forgets id's fblock-event bridge goroutine, if any --
+// persistRemovedStorage's job on successful detach. A no-op if id has no
+// bridge (shouldn't happen for a registered Storage, but harmless either way).
+func (f *Farcd) stopBridge(id string) {
+	f.bridgeMu.Lock()
+	stop, ok := f.bridgeStops[id]
+	if ok {
+		delete(f.bridgeStops, id)
+	}
+	f.bridgeMu.Unlock()
+	if ok {
+		stop()
+	}
 }
 
 // Run starts IngestManager and all three servers, then blocks until ctx is
