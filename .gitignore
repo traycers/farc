@@ -17,8 +17,6 @@ tests_output.txt
 CLAUDE.md
 
 # e2e (Phase 17): user-supplied sample media + Playwright output, never committed
-/e2e/media/*
-!/e2e/media/.gitkeep
 /e2e/test-results/
 /e2e/playwright-report/
 __docs__.md
