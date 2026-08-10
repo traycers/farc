@@ -174,6 +174,117 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 	}
 }
 
+// TestChannelIngest_RepeatedSPSPPSDoesNotDuplicateConfig reproduces the real-
+// world pattern that used to duplicate config(video) nodes: a camera that
+// re-announces byte-identical SPS/PPS before every IDR frame (two GOPs here,
+// each led by the exact same sps/pps bytes) must still produce exactly one
+// config(video) version, not one per GOP.
+func TestChannelIngest_RepeatedSPSPPSDoesNotDuplicateConfig(t *testing.T) {
+	handler := &testServerHandler{}
+	server := &gortsplib.Server{
+		Handler:     handler,
+		RTSPAddress: "127.0.0.1:0",
+	}
+	err := server.Start()
+	if err != nil {
+		t.Fatalf("server.Start: %v", err)
+	}
+	defer server.Close()
+
+	desc := &description.Session{
+		Medias: []*description.Media{{
+			Type:    description.MediaTypeVideo,
+			Formats: []format.Format{&format.H264{PayloadTyp: 96, PacketizationMode: 1}},
+		}},
+	}
+	stream := &gortsplib.ServerStream{Server: server, Desc: desc}
+	err = stream.Initialize()
+	if err != nil {
+		t.Fatalf("stream.Initialize: %v", err)
+	}
+	defer stream.Close()
+	handler.stream = stream
+
+	rtpEnc, err := desc.Medias[0].Formats[0].(*format.H264).CreateEncoder()
+	if err != nil {
+		t.Fatalf("CreateEncoder: %v", err)
+	}
+
+	rec := &fakeRecorder{}
+	policy := NewCapturePolicy(1, rec, uint64(10*time.Second), PolicyContinuous, PolicyParams{})
+	err = policy.StartRecording(0, nil)
+	if err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+	ci := NewChannelIngest(1, policy)
+	ci.SetLogger(t.Logf)
+
+	addr := server.NetListener().Addr().String()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- ci.Run(ctx, fmt.Sprintf("rtsp://%s/test", addr), 2*time.Second, 2*time.Second)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Same sps/pps bytes re-sent before the second GOP's IDR -- exactly what
+	// many real cameras do, and what previously fooled ensureConfigLocked's
+	// pointer-identity check into opening a second config(video).
+	sps := []byte{0x67, 0x01, 0x02, 0x03}
+	pps := []byte{0x68, 0x04}
+	idr1 := []byte{0x65, 0xaa, 0xaa}
+	p1 := []byte{0x41, 0xbb}
+	idr2 := []byte{0x65, 0xdd, 0xdd}
+	p2 := []byte{0x41, 0xcc}
+	aus := [][][]byte{{sps, pps, idr1}, {p1}, {sps, pps, idr2}, {p2}}
+
+	var ts uint32
+	for _, au := range aus {
+		packets, err := rtpEnc.Encode(au)
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		for _, pkt := range packets {
+			pkt.Timestamp = ts
+			err := stream.WritePacketRTP(desc.Medias[0], pkt)
+			if err != nil {
+				t.Fatalf("WritePacketRTP: %v", err)
+			}
+		}
+		ts += 3000
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("ChannelIngest.Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ChannelIngest.Run did not return after cancel")
+	}
+
+	if len(rec.writes) != 1 {
+		t.Fatalf("writes = %d, want 1", len(rec.writes))
+	}
+	elems := rec.writes[0].filler.Elements()
+
+	configIDs := roleIDs(elems, mediatree.RoleConfigVideo)
+	if len(configIDs) != 1 {
+		t.Fatalf("config(video) count = %d, want 1 (repeated byte-identical SPS/PPS must not open a new version)", len(configIDs))
+	}
+
+	frameIDs := roleIDs(elems, mediatree.RoleFrameVideo)
+	if len(frameIDs) != 4 {
+		t.Fatalf("frame(video) count = %d, want 4", len(frameIDs))
+	}
+}
+
 func roleIDs(elems []mediatree.Element, role mediatree.Role) []uint32 {
 	var out []uint32
 	for i, e := range elems {

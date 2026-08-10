@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"traycers/farc/internal/fcontainer"
+	"traycers/farc/mediatree"
 )
 
 // PolicyType selects a CapturePolicy strategy (docs/docs/archive/
@@ -333,6 +334,22 @@ func (p *CapturePolicy) Policy() (PolicyType, PolicyParams) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.policyType, p.params
+}
+
+// LiveElementsSince reports the current segment's tree elements appended
+// since cursor n, for a live/streaming view of the fcontainer still being
+// built (the web UI's fblock-live page). contentBytes is the segment's
+// total encoded content size so far (Filler.ContentBytes), used by that
+// page's fill bar. ok is false when no segment is currently open
+// (p.recording == false) — n is meaningless in that case, and the caller
+// should drop its cursor rather than keep comparing against it.
+func (p *CapturePolicy) LiveElementsSince(n int) (elems []mediatree.Element, total int, contentBytes int, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.recording {
+		return nil, 0, 0, false
+	}
+	return p.filler.ElementsSince(n), p.filler.Len(), p.filler.ContentBytes(), true
 }
 
 // Close forces the current segment closed, if any, regardless of policy

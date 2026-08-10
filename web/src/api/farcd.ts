@@ -1,4 +1,4 @@
-import { parseCandidatesJSON, type Candidate } from './ns'
+import { parseCandidatesJSON, parseFblocksJSON, type Candidate, type FblockInfo } from './ns'
 
 const BASE = '/api/farcd'
 
@@ -85,6 +85,14 @@ export async function candidates(
   const url = `${BASE}/storages/${encodeURIComponent(storage)}/candidates?channel=${channel}&t1=${t1}&t2=${t2}${confirm ? '&confirm=true' : ''}`
   const text = await (await ok(await fetch(url))).text()
   return parseCandidatesJSON(text)
+}
+
+// listFblocks fetches every fblock in storage, regardless of channel --
+// GET /storages/{id}/fblocks, internal/api/fblocks.go -- for the
+// fblock-status page's browse-and-pick table.
+export async function listFblocks(storage: string): Promise<FblockInfo[]> {
+  const text = await (await ok(await fetch(`${BASE}/storages/${encodeURIComponent(storage)}/fblocks`))).text()
+  return parseFblocksJSON(text)
 }
 
 export async function setProtected(storage: string, uuid: string, value: boolean): Promise<void> {

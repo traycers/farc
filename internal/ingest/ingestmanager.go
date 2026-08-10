@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"traycers/farc/mediatree"
 )
 
 // ChannelConfig is one configured channel's ingest setup (docs/docs/archive/
@@ -233,6 +235,21 @@ func (m *IngestManager) TriggerEvent(channel uint16, now, eventTime uint64) erro
 		return fmt.Errorf("ingest: unknown channel %d", channel)
 	}
 	return e.ingest.policy.Trigger(now, eventTime)
+}
+
+// LiveElementsSince forwards to channel's CapturePolicy.LiveElementsSince --
+// the fblock-live page's polling/ticker entry point for a growing snapshot
+// of the segment currently being recorded. ok is false for an unknown
+// channel as well as for CapturePolicy.LiveElementsSince's own "not
+// recording" case, since both mean "nothing live to report".
+func (m *IngestManager) LiveElementsSince(channel uint16, n int) (elems []mediatree.Element, total int, contentBytes int, ok bool) {
+	m.mu.Lock()
+	e, exists := m.channels[channel]
+	m.mu.Unlock()
+	if !exists {
+		return nil, 0, 0, false
+	}
+	return e.ingest.policy.LiveElementsSince(n)
 }
 
 // StartRecording forwards continuous's "начать запись [with from_time]"

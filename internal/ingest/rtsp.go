@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -116,9 +117,19 @@ func (ci *ChannelIngest) setupH264(c rtspSource, medi *description.Media, f *for
 			case h264.NALUTypeIDR:
 				kind = mediatree.FrameKindI
 			case h264.NALUTypeSPS:
-				sps, changed = nalu, true
+				// Many cameras re-announce SPS/PPS before every IDR
+				// (resync convenience for a client that just joined) --
+				// only a genuine byte-level change should open a new
+				// config(video) version (ensureConfigLocked's pointer-
+				// identity check treats every SetStreamParams call as
+				// "genuinely new", policy.go:165-170).
+				if !bytes.Equal(sps, nalu) {
+					sps, changed = nalu, true
+				}
 			case h264.NALUTypePPS:
-				pps, changed = nalu, true
+				if !bytes.Equal(pps, nalu) {
+					pps, changed = nalu, true
+				}
 			}
 		}
 		if changed {
@@ -166,11 +177,19 @@ func (ci *ChannelIngest) setupH265(c rtspSource, medi *description.Media, f *for
 			}
 			switch h265.NALUType((nalu[0] >> 1) & 0b111111) { //nolint:exhaustive // only VPS/SPS/PPS carry information this loop needs; every other NALU type is a deliberate no-op
 			case h265.NALUType_VPS_NUT:
-				vps, changed = nalu, true
+				// See setupH264's identical guard: only a genuine
+				// byte-level change should open a new config(video).
+				if !bytes.Equal(vps, nalu) {
+					vps, changed = nalu, true
+				}
 			case h265.NALUType_SPS_NUT:
-				sps, changed = nalu, true
+				if !bytes.Equal(sps, nalu) {
+					sps, changed = nalu, true
+				}
 			case h265.NALUType_PPS_NUT:
-				pps, changed = nalu, true
+				if !bytes.Equal(pps, nalu) {
+					pps, changed = nalu, true
+				}
 			}
 		}
 		if changed {

@@ -87,6 +87,69 @@ func TestAddStreamParamsAndFramesVideo(t *testing.T) {
 	}
 }
 
+func TestElementsSince(t *testing.T) {
+	f := New()
+	configID, err := f.AddStreamParams(1, 0, KindVideo, videoParams())
+	if err != nil {
+		t.Fatalf("AddStreamParams: %v", err)
+	}
+	n0 := f.Len()
+
+	err = f.AddFrames(configID, []Frame{
+		{Data: []byte("keyframe"), Time: 100, Kind: mediatree.FrameKindI},
+	})
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	n1 := f.Len()
+
+	delta := f.ElementsSince(n0)
+	if len(delta) != n1-n0 {
+		t.Fatalf("ElementsSince(%d) len = %d, want %d", n0, len(delta), n1-n0)
+	}
+	full := f.Elements()
+	if len(delta) == 0 || full[n0].Role != delta[0].Role {
+		t.Fatalf("ElementsSince(%d)[0] = %+v, want elems[%d] = %+v", n0, delta[0], n0, full[n0])
+	}
+
+	if got := f.ElementsSince(n1); len(got) != 0 {
+		t.Fatalf("ElementsSince(%d) (cursor at Len()) = %d elements, want 0", n1, len(got))
+	}
+	if got := f.ElementsSince(0); len(got) != n1 {
+		t.Fatalf("ElementsSince(0) = %d elements, want %d", len(got), n1)
+	}
+}
+
+func TestContentBytes(t *testing.T) {
+	f := New()
+	if got := f.ContentBytes(); got != 0 {
+		t.Fatalf("ContentBytes() of an empty Filler = %d, want 0", got)
+	}
+
+	configID, err := f.AddStreamParams(1, 0, KindVideo, videoParams())
+	if err != nil {
+		t.Fatalf("AddStreamParams: %v", err)
+	}
+	afterParams := f.ContentBytes()
+	if afterParams != len(mediatree.EncodeContent(f.Elements())) {
+		t.Fatalf("ContentBytes() = %d, want %d (len of the real encoding)", afterParams, len(mediatree.EncodeContent(f.Elements())))
+	}
+
+	err = f.AddFrames(configID, []Frame{
+		{Data: []byte("keyframe-payload"), Time: 100, Kind: mediatree.FrameKindI},
+	})
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	afterFrame := f.ContentBytes()
+	if afterFrame <= afterParams {
+		t.Fatalf("ContentBytes() after a frame = %d, want > %d", afterFrame, afterParams)
+	}
+	if afterFrame != len(mediatree.EncodeContent(f.Elements())) {
+		t.Fatalf("ContentBytes() = %d, want %d (len of the real encoding)", afterFrame, len(mediatree.EncodeContent(f.Elements())))
+	}
+}
+
 func TestAddStreamParamsAndFramesAudio(t *testing.T) {
 	f := New()
 	configID, err := f.AddStreamParams(5, 2, KindAudio, audioParams())

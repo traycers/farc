@@ -136,9 +136,11 @@ func (s *HttpApiServer) routes() {
 	s.mux.HandleFunc("PATCH /storages/{id}", s.handlePatchStorage)
 
 	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/toc", s.handleReadTOC)
+	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/tree", s.handleReadTree)
 	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}", s.handleReadContent)
 	s.mux.HandleFunc("POST /storages/{id}/fcontainers/{uuid}/protected", s.handleSetProtected)
 
+	s.mux.HandleFunc("GET /storages/{id}/fblocks", s.handleListFblocks)
 	s.mux.HandleFunc("GET /storages/{id}/candidates", s.handleCandidates)
 	s.mux.HandleFunc("GET /storages/{id}/resolve", s.handleResolve)
 

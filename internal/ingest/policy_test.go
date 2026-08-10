@@ -77,6 +77,59 @@ func TestContinuous_StartWithoutFromTimeDoesNotReplay(t *testing.T) {
 	}
 }
 
+func TestLiveElementsSince(t *testing.T) {
+	rec := &fakeRecorder{}
+	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+
+	if _, _, _, ok := p.LiveElementsSince(0); ok {
+		t.Fatal("LiveElementsSince before recording starts: want ok=false")
+	}
+
+	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
+	err := p.StartRecording(100, nil)
+	if err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+
+	elems, total, contentBytes, ok := p.LiveElementsSince(0)
+	if !ok || len(elems) != total || contentBytes != 0 {
+		t.Fatalf("LiveElementsSince(0) right after open = elems=%d total=%d contentBytes=%d ok=%v, want an empty snapshot", len(elems), total, contentBytes, ok)
+	}
+	cursor := total
+
+	err = p.HandleFrame(0, fcontainer.KindVideo, vframe(110, mediatree.FrameKindI))
+	if err != nil {
+		t.Fatalf("HandleFrame: %v", err)
+	}
+	delta, total2, contentBytes2, ok := p.LiveElementsSince(cursor)
+	if !ok {
+		t.Fatal("LiveElementsSince while recording: want ok=true")
+	}
+	if len(delta) == 0 || total2 <= cursor {
+		t.Fatalf("LiveElementsSince(%d) after one frame = delta=%d total=%d, want new elements", cursor, len(delta), total2)
+	}
+	if contentBytes2 <= contentBytes {
+		t.Fatalf("contentBytes = %d, want > %d after a frame with real payload bytes", contentBytes2, contentBytes)
+	}
+	got := 0
+	for _, e := range delta {
+		if e.Role == mediatree.RoleFrameVideo {
+			got++
+		}
+	}
+	if got != 1 {
+		t.Fatalf("delta frame(video) count = %d, want 1", got)
+	}
+
+	err = p.StopRecording(200)
+	if err != nil {
+		t.Fatalf("StopRecording: %v", err)
+	}
+	if _, _, _, ok := p.LiveElementsSince(0); ok {
+		t.Fatal("LiveElementsSince after segment closes: want ok=false")
+	}
+}
+
 func TestOnRecordingChange_ReceivesStartAndStopTimes(t *testing.T) {
 	rec := &fakeRecorder{}
 	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})

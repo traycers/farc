@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +23,10 @@ import (
 	"traycers/farc/internal/ioengine"
 	"traycers/farc/internal/storage"
 )
+
+// unknownUUIDHex is a UUID guaranteed not to resolve (see internal/api's
+// identically-named test constant for why not all-zero).
+const unknownUUIDHex = "ffffffffffffffffffffffffffffffff"
 
 func smallGeometry() storage.Geometry {
 	return storage.Geometry{FblockSize: 8192, N: 4, MaxChannels: 8}
@@ -608,6 +614,142 @@ func TestRun_CreateChannelOverHTTP_PersistsToConfigFile(t *testing.T) {
 	defer f2.closeUnits()
 	if len(f2.channels) != 1 || f2.channels[0].Channel != 7 {
 		t.Fatalf("channels after restart = %+v", f2.channels)
+	}
+}
+
+// TestFarcd_LiveProgress_TracksRecordingChannelLifecycle exercises
+// SetOnRecordingChange's liveCursors bookkeeping and tickLiveProgress's
+// guard logic directly (white-box, no HTTP/WS needed) -- the actual tree
+// data these feed into fblock-live's WS push is unit-tested at the
+// ingest/api layers (CapturePolicy.LiveElementsSince, EventPushServer.
+// PublishLiveProgress); this test only checks farcd's own wiring between
+// them doesn't panic and tracks the right channel at the right times.
+func TestFarcd_LiveProgress_TracksRecordingChannelLifecycle(t *testing.T) {
+	cfg, path := testConfig(t, []config.Channel{
+		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
+	})
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer f.closeUnits()
+
+	f.ing.Start(f.channels)
+	defer f.ing.Stop()
+
+	if _, _, _, ok := f.ing.LiveElementsSince(7, 0); ok {
+		t.Fatal("LiveElementsSince before recording starts: want ok=false")
+	}
+
+	err = f.ing.StartRecording(7, 1000, nil)
+	if err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+	f.liveMu.Lock()
+	_, tracked := f.liveCursors[7]
+	f.liveMu.Unlock()
+	if !tracked {
+		t.Fatal("liveCursors has no entry for channel 7 right after recording starts")
+	}
+
+	// An empty segment (no frames yet) must tick without panicking and
+	// without publishing anything (tickLiveProgress skips zero-length
+	// deltas) -- there's no subscriber here, so a wrongly-attempted publish
+	// would just be silently dropped rather than failing this test, but a
+	// panic (e.g. a nil map deref) would not be.
+	f.tickLiveProgress()
+
+	err = f.ing.StopRecording(7, 2000)
+	if err != nil {
+		t.Fatalf("StopRecording: %v", err)
+	}
+	f.liveMu.Lock()
+	_, tracked = f.liveCursors[7]
+	f.liveMu.Unlock()
+	if tracked {
+		t.Fatal("liveCursors still has an entry for channel 7 after recording stops")
+	}
+	if _, _, _, ok := f.ing.LiveElementsSince(7, 0); ok {
+		t.Fatal("LiveElementsSince after recording stops: want ok=false")
+	}
+}
+
+// TestRun_ServesFblockTreeAndLiveProgress is an end-to-end smoke test
+// against a fully running Farcd (real net/http + gorilla/websocket servers,
+// not internal/api's httptest-only coverage): GET .../tree reaches the
+// actual HTTP route registered in server.go, and a WS client subscribed to
+// a recording channel's Channels stays connected across a live-progress
+// tick without the ticker goroutine panicking. It doesn't write a real
+// fblock through farcd's own (O_DIRECT) storage backend -- that write path
+// requires block-device-grade alignment this package's other tests never
+// exercise either, since they only ever read/administer "disk0" -- decoding
+// a finalized tree's actual content is already covered at the internal/api
+// layer (TestHandleReadTree_WalksVideoFrame) against a Storage opened via
+// the alignment-free "standard" backend.
+func TestRun_ServesFblockTreeAndLiveProgress(t *testing.T) {
+	cfg, path := testConfig(t, []config.Channel{
+		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
+	})
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+	waitForServer(t, cfg.WS.String())
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/storages/disk0/fcontainers/%s/tree", cfg.HTTP.String(), unknownUUIDHex))
+	if err != nil {
+		t.Fatalf("GET .../tree: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a uuid that was never written", resp.StatusCode)
+	}
+
+	wsURL := "ws://" + cfg.WS.String() + "/events/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil) //nolint:bodyclose // gorilla/websocket's own doc comment: the handshake response body needs no closing
+	if err != nil {
+		t.Fatalf("dial %s: %v", wsURL, err)
+	}
+	defer conn.Close()
+	err = conn.WriteJSON(map[string]any{"storage": "", "want": []string{}, "channels": []int{7}})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+
+	startResp, err := http.Post(fmt.Sprintf("http://%s/channels/7/recording/start", cfg.HTTP.String()), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST recording/start: %v", err)
+	}
+	startResp.Body.Close()
+
+	// Outlive at least one liveProgressInterval tick with the WS connection
+	// held open, then confirm it's still alive -- a panic in
+	// runLiveProgressTicker or PublishLiveProgress would have taken the
+	// whole process down well before this point. The server never sends a
+	// second message on a channel with no real frames (nothing to report),
+	// so a read here is expected to time out, not to return data or a
+	// close; anything else means the tick broke the connection.
+	time.Sleep(liveProgressInterval + 200*time.Millisecond)
+	err = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	var netErr net.Error
+	if err != nil && (!errors.As(err, &netErr) || !netErr.Timeout()) {
+		t.Fatalf("WS connection unexpectedly closed after a live-progress tick: %v", err)
+	}
+
+	select {
+	case err := <-runErr:
+		t.Fatalf("Run returned early: %v", err)
+	default:
 	}
 }
 

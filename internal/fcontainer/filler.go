@@ -22,9 +22,10 @@ import (
 // Freeze has returned — a Filler is single-use, matching the write-once
 // fcontainer model (docs/docs/archive/05-data-format.md §2).
 type Filler struct {
-	mu        sync.Mutex
-	elems     []mediatree.Element
-	lastChild map[uint32]uint32 // parent id -> most recently added child id
+	mu           sync.Mutex
+	elems        []mediatree.Element
+	contentBytes int               // running total of what EncodeContent(f.elems) would be, in bytes
+	lastChild    map[uint32]uint32 // parent id -> most recently added child id
 
 	rootID     uint32
 	channelsID uint32
@@ -74,6 +75,7 @@ func (f *Filler) append(parent uint32, typ mediatree.NodeType, role mediatree.Ro
 		sibling = lc
 	}
 	f.elems = append(f.elems, mediatree.Element{Type: typ, Role: role, Parent: parent, Sibling: sibling, Value: value})
+	f.contentBytes += mediatree.ElementHeaderSize + len(value)
 	f.lastChild[parent] = id
 	return id
 }
@@ -84,6 +86,7 @@ func (f *Filler) ensureRoot() {
 	}
 	f.rootID = 0
 	f.elems = append(f.elems, mediatree.Element{Type: mediatree.TypeVoid, Role: mediatree.RoleRoot, Parent: 0, Sibling: 0})
+	f.contentBytes += mediatree.ElementHeaderSize // root carries no Value
 	f.haveRoot = true
 	f.channelsID = f.append(f.rootID, mediatree.TypeVoid, mediatree.RoleChannels, nil)
 }
@@ -234,6 +237,17 @@ func (f *Filler) Len() int {
 	return len(f.elems)
 }
 
+// ContentBytes returns the total encoded size, in bytes, of every element
+// appended so far -- exactly what Content() would return today, but tracked
+// incrementally (a running counter, not a re-encode) so it's cheap to poll
+// frequently while the Filler is still being written to (the fblock-live
+// page's "how full is this fblock getting" fill bar).
+func (f *Filler) ContentBytes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.contentBytes
+}
+
 // Elements returns a snapshot of the tree built so far, safe to use after
 // the Filler is done being written to (e.g. at fcontainer close). The
 // returned slice is a copy; mutating it does not affect the Filler.
@@ -242,6 +256,22 @@ func (f *Filler) Elements() []mediatree.Element {
 	defer f.mu.Unlock()
 	out := make([]mediatree.Element, len(f.elems))
 	copy(out, f.elems)
+	return out
+}
+
+// ElementsSince returns the elements appended after index n (n == Len() at
+// the time of the last call means "nothing new"). Cheap to call frequently
+// while the Filler is still being written to — append never rewrites an
+// existing element (parent/sibling links are only ever set once, at
+// creation), so unlike Elements this only copies the new tail.
+func (f *Filler) ElementsSince(n int) []mediatree.Element {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n < 0 || n > len(f.elems) {
+		n = 0
+	}
+	out := make([]mediatree.Element, len(f.elems)-n)
+	copy(out, f.elems[n:])
 	return out
 }
 

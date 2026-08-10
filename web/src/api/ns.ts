@@ -22,6 +22,31 @@ export function parseCandidatesJSON(text: string): Candidate[] {
   return raw.map((c) => ({ index: c.index, uuid: c.uuid, begin: BigInt(c.begin), end: BigInt(c.end) }))
 }
 
+// Mirrors internal/api/fblocks.go's fblockInfo -- uuid/begin/end/channels
+// are only present once state is "ready".
+export type FblockInfo = {
+  index: number
+  state: string
+  uuid?: string
+  begin?: bigint
+  end?: bigint
+  protected: boolean
+  channels?: number[]
+}
+
+type RawFblockInfo = Omit<FblockInfo, 'begin' | 'end'> & { begin?: string; end?: string }
+
+// Same bigint-precision problem as parseCandidatesJSON, same fix.
+export function parseFblocksJSON(text: string): FblockInfo[] {
+  const quoted = text.replace(/"(begin|end)":(\d+)/g, '"$1":"$2"')
+  const raw = JSON.parse(quoted) as RawFblockInfo[]
+  return raw.map((r) => ({
+    ...r,
+    begin: r.begin !== undefined ? BigInt(r.begin) : undefined,
+    end: r.end !== undefined ? BigInt(r.end) : undefined,
+  }))
+}
+
 export function nsFromDate(d: Date): bigint {
   return BigInt(d.getTime()) * 1_000_000n
 }

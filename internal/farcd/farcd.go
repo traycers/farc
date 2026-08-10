@@ -90,6 +90,18 @@ type Farcd struct {
 	bridgeStops map[string]func()
 	bridgeMu    sync.Mutex
 
+	// liveCursors tracks, per currently-recording channel, how many of its
+	// live segment's tree elements have already been published via
+	// PublishLiveProgress (the fblock-live page's WS feed) -- populated on
+	// SetOnRecordingChange(recording=true), advanced by
+	// runLiveProgressTicker, dropped on recording=false. No final flush is
+	// needed on stop: the segment's own fblock.ready (published moments
+	// later by bridgeFblockEvents once WriteFcontainer finishes) carries the
+	// complete, authoritative tree via GET .../tree, which is what the
+	// fblock-live page switches to on that event anyway.
+	liveCursors map[uint16]int
+	liveMu      sync.Mutex
+
 	httpSrv    *http.Server
 	wsSrv      *http.Server
 	metricsSrv *http.Server
@@ -110,6 +122,7 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 		cfg:         cfg,
 		configPath:  configPath,
 		bridgeStops: make(map[string]func()),
+		liveCursors: make(map[uint16]int),
 		logf:        func(string, ...any) {},
 	}
 
@@ -142,10 +155,20 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 
 	f.ing.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
 		// StorageOf, not List: this fires with the channel's own
-		// CapturePolicy mutex already held, and List's Policy() call would
-		// self-deadlock on it (see StorageOf's own doc comment). msm_server
-		// needs Storage (its "archive id") to call started_add/finished_add.
+		// CapturePolicy mutex already held, and List's Policy() call (or
+		// LiveElementsSince, which locks the same mutex) would self-deadlock
+		// on it (see StorageOf's own doc comment). msm_server needs Storage
+		// (its "archive id") to call started_add/finished_add.
 		storageID, _ := f.ing.StorageOf(channel)
+
+		f.liveMu.Lock()
+		if recording {
+			f.liveCursors[channel] = 0
+		} else {
+			delete(f.liveCursors, channel)
+		}
+		f.liveMu.Unlock()
+
 		if recording {
 			f.push.Publish(api.JournalEvent{Name: api.EventRecordingStarted, Channel: channel, Storage: storageID, Begin: t})
 			return
@@ -524,6 +547,64 @@ func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
 	}()
 }
 
+// liveProgressInterval is how often runLiveProgressTicker polls each
+// recording channel's Filler for newly-appended tree nodes -- frequent
+// enough that the fblock-live page feels live, coarse enough that even a
+// high-fps stream's per-tick delta stays a small WS frame (see
+// docs/docs/archive/08-array-trees.md §3.4 on why individual frames are
+// never pushed one at a time).
+const liveProgressInterval = time.Second
+
+// runLiveProgressTicker drives the fblock-live page's WS feed: once a
+// second, for every channel currently recording (per liveCursors), pull
+// whatever's been appended to its Filler since the last tick and publish it.
+// Runs until ctx is cancelled; like bridgeFblockEvents's goroutines, Run
+// doesn't wait for it to actually exit at shutdown.
+func (f *Farcd) runLiveProgressTicker(ctx context.Context) {
+	ticker := time.NewTicker(liveProgressInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			f.tickLiveProgress()
+		}
+	}
+}
+
+func (f *Farcd) tickLiveProgress() {
+	f.liveMu.Lock()
+	channels := make([]uint16, 0, len(f.liveCursors))
+	for ch := range f.liveCursors {
+		channels = append(channels, ch)
+	}
+	f.liveMu.Unlock()
+
+	for _, channel := range channels {
+		f.liveMu.Lock()
+		cursor := f.liveCursors[channel]
+		f.liveMu.Unlock()
+
+		elems, total, contentBytes, ok := f.ing.LiveElementsSince(channel, cursor)
+		if !ok || len(elems) == 0 {
+			continue
+		}
+		storageID, _ := f.ing.StorageOf(channel)
+		f.push.PublishLiveProgress(storageID, channel, total, contentBytes, elems, uint32(cursor))
+
+		f.liveMu.Lock()
+		// Only advance if the channel is still recording -- it may have
+		// stopped (and been deleted from liveCursors) between this tick's
+		// snapshot above and now, in which case leave the map alone rather
+		// than resurrecting a now-meaningless entry.
+		if _, stillRecording := f.liveCursors[channel]; stillRecording {
+			f.liveCursors[channel] = total
+		}
+		f.liveMu.Unlock()
+	}
+}
+
 func (f *Farcd) closeUnits() {
 	f.bridgeMu.Lock()
 	stops := f.bridgeStops
@@ -573,6 +654,7 @@ func (f *Farcd) Run(ctx context.Context) error {
 	go serve("http", f.httpSrv)
 	go serve("ws", f.wsSrv)
 	go serve("metrics", f.metricsSrv)
+	go f.runLiveProgressTicker(ctx)
 
 	var runErr error
 	select {

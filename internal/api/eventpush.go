@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"traycers/farc/internal/storage"
+	"traycers/farc/mediatree"
 	"traycers/farc/toc"
 )
 
@@ -57,6 +58,54 @@ type tocPushMessage struct {
 	Index   uint32 `json:"index"`
 	UUID    string `json:"uuid"`
 	TOC     []byte `json:"toc"`
+}
+
+// liveNode is one element of a live progress delta — see livePushMessage.
+// Field-compatible with treeNodeJSON's Role/Type/Parent/Value/Size (this
+// package's shared decodeScalarValue is reused verbatim, see
+// liveNodeFromElement), minus ChildCount, which has no meaning for a flat
+// delta list.
+type liveNode struct {
+	ID     uint32 `json:"id"`
+	Role   string `json:"role"`
+	Type   string `json:"type"`
+	Parent uint32 `json:"parent"`
+	Value  any    `json:"value,omitempty"`
+	Size   uint64 `json:"size,omitempty"`
+}
+
+// liveNodeFromElement decodes a mediatree.Element straight from an
+// in-memory fcontainer.Filler (internal/ingest.CapturePolicy.
+// LiveElementsSince) — unlike treeNodeJSON's finalized-TOC counterpart,
+// Value here is already the node's raw bytes at their exact fixed width
+// (Filler.append stores them pre-serialized), so decodeScalarValue applies
+// directly with no InlineValue/ContentOffset unpacking step.
+func liveNodeFromElement(id uint32, e mediatree.Element) liveNode {
+	n := liveNode{ID: id, Role: e.Role.String(), Type: e.Type.String(), Parent: e.Parent}
+	if v, ok := decodeScalarValue(e.Type, e.Value); ok {
+		n.Value = v
+	} else if e.Type.Variable() {
+		n.Size = uint64(len(e.Value))
+	}
+	return n
+}
+
+// livePushMessage reports fcontainer tree growth for a channel whose
+// segment is still being recorded (not yet written to disk — see
+// internal/farcd's periodic ticker, the only publisher). Nodes is the delta
+// since the subscriber's last-seen Total (the fblock-live page's own
+// cursor); Total is the new cursor to pass as `since` on the next tick. A
+// client that wants these must also set subscribeMessage.Channels, since
+// unlike JournalEvent's fblock.* names, live progress is meaningless
+// unscoped to a channel.
+type livePushMessage struct {
+	Type              string     `json:"type"` // "live"
+	Storage           string     `json:"storage"`
+	Channel           uint16     `json:"channel"`
+	Total             int        `json:"total"`
+	ContentBytes      uint64     `json:"content_bytes"`
+	EstimatedTocBytes uint64     `json:"estimated_toc_bytes"`
+	Nodes             []liveNode `json:"nodes"`
 }
 
 // EventChannelCreated/EventChannelRemoved are JournalEvent's Name values for
@@ -133,6 +182,7 @@ type EventPushServer struct {
 
 	mu         sync.Mutex
 	globalSubs map[chan JournalEvent]struct{}
+	liveSubs   map[chan livePushMessage]struct{}
 }
 
 // NewEventPushServer creates a WS push server over reg. CheckOrigin always
@@ -143,6 +193,7 @@ func NewEventPushServer(reg *StorageRegistry) *EventPushServer {
 		reg:        reg,
 		upgrader:   websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
 		globalSubs: make(map[chan JournalEvent]struct{}),
+		liveSubs:   make(map[chan livePushMessage]struct{}),
 	}
 }
 
@@ -235,14 +286,25 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 	for _, n := range sub.Want {
 		want[n] = true
 	}
+	// liveChannels scopes livePushMessage delivery only -- classic events
+	// stay unfiltered by channel, matching pre-existing behavior; live
+	// progress is meaningless unscoped (see livePushMessage's doc comment),
+	// so an empty set here means "no live messages", not "all of them".
+	liveChannels := make(map[uint16]bool, len(sub.Channels))
+	for _, c := range sub.Channels {
+		liveChannels[c] = true
+	}
 
 	events := make(chan JournalEvent, 64)
+	live := make(chan livePushMessage, 64)
 	p.mu.Lock()
 	p.globalSubs[events] = struct{}{}
+	p.liveSubs[live] = struct{}{}
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		delete(p.globalSubs, events)
+		delete(p.liveSubs, live)
 		p.mu.Unlock()
 	}()
 
@@ -274,6 +336,59 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 					}
 				}
 			}
+		case lv := <-live:
+			if !liveChannels[lv.Channel] {
+				continue
+			}
+			err := conn.WriteJSON(lv)
+			if err != nil {
+				return
+			}
+		}
+	}
+}
+
+// PublishLiveProgress builds a livePushMessage from elems -- a live segment
+// snapshot delta, as returned by internal/ingest.CapturePolicy.
+// LiveElementsSince via IngestManager -- and fans it out via PublishLive.
+// firstID is the absolute (Filler creation-order) id of elems[0], i.e. the
+// cursor internal/farcd's periodic ticker passed to LiveElementsSince, so
+// each element's true id can be recovered as firstID+i. Keeping
+// liveNode/livePushMessage's wire shape unexported (this is the one exported
+// entry point for producing them) means farcd never has to import
+// mediatree's role/type stringification or the value/size decoding this
+// package already implements for the finalized-tree endpoint.
+//
+// contentBytes is the segment's total encoded content size so far
+// (Filler.ContentBytes, via LiveElementsSince). EstimatedTocBytes is
+// computed here, not passed in, by reusing toc.ComputeOffsets against the
+// current node count total -- an exact prediction of the eventual TOC
+// section size *if* the segment stopped growing right now (the fblock-live
+// page's fill bar treats it as a live estimate, since more nodes may still
+// arrive).
+func (p *EventPushServer) PublishLiveProgress(storageID string, channel uint16, total int, contentBytes int, elems []mediatree.Element, firstID uint32) {
+	nodes := make([]liveNode, len(elems))
+	for i, e := range elems {
+		nodes[i] = liveNodeFromElement(firstID+uint32(i), e)
+	}
+	estimatedTocBytes := uint64(toc.ComputeOffsets(uint32(total)).Total)
+	p.PublishLive(livePushMessage{
+		Type: "live", Storage: storageID, Channel: channel, Total: total,
+		ContentBytes: uint64(contentBytes), EstimatedTocBytes: estimatedTocBytes, Nodes: nodes,
+	})
+}
+
+// PublishLive fans msg out to every current global subscriber whose
+// subscribeMessage.Channels includes msg.Channel, non-blocking (same
+// drop-if-slow policy as Publish) -- internal/farcd's periodic live-progress
+// ticker is the only caller.
+func (p *EventPushServer) PublishLive(msg livePushMessage) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for ch := range p.liveSubs {
+		select {
+		case ch <- msg:
+		default:
 		}
 	}
 }

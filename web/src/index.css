@@ -24,3 +24,39 @@ video {
   max-width: 720px;
   background: #000;
 }
+
+/* GNU tree-like fblock tree (FblockTree.tsx) */
+.tree {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.tree-row {
+  display: flex;
+}
+
+.tree-row--expandable {
+  cursor: pointer;
+}
+
+.tree-row--expandable:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tree-guide {
+  color: #888;
+  flex-shrink: 0;
+}
+
+/* transition lives on the persistent base class, not --new itself, so
+   removing --new (the page's own fade-out timer) animates the color back
+   down instead of snapping. */
+.tree-label {
+  transition: color 3s ease-out;
+}
+
+.tree-node--new .tree-label {
+  color: #3fd15e;
+}

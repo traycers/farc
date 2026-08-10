@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"traycers/farc/internal/storage"
+	"traycers/farc/mediatree"
 	"traycers/farc/toc"
 )
 
@@ -442,5 +443,166 @@ func TestEventPushServer_GlobalWithoutIncludeTOC(t *testing.T) {
 	err = conn.ReadJSON(&extra)
 	if err == nil {
 		t.Fatalf("unexpected second frame without IncludeTOC: %+v", extra)
+	}
+}
+
+func TestLiveNodeFromElement(t *testing.T) {
+	scalar := mediatree.Element{Type: mediatree.TypeUint32, Role: mediatree.RoleChannel, Parent: 1, Value: []byte{1, 0, 0, 0}}
+	n := liveNodeFromElement(5, scalar)
+	if n.ID != 5 || n.Role != "channel" || n.Type != "uint32" || n.Parent != 1 {
+		t.Fatalf("liveNodeFromElement(scalar) = %+v", n)
+	}
+	if v, ok := n.Value.(uint32); !ok || v != 1 {
+		t.Fatalf("Value = %#v, want uint32(1)", n.Value)
+	}
+	if n.Size != 0 {
+		t.Fatalf("Size = %d, want 0 for a scalar node", n.Size)
+	}
+
+	bytesNode := mediatree.Element{Type: mediatree.TypeBytes, Role: mediatree.RoleFrameDataVideo, Parent: 3, Value: []byte("hello")}
+	n2 := liveNodeFromElement(6, bytesNode)
+	if n2.Value != nil {
+		t.Fatalf("Value = %#v, want nil for a bytes node", n2.Value)
+	}
+	if n2.Size != 5 {
+		t.Fatalf("Size = %d, want 5", n2.Size)
+	}
+
+	voidNode := mediatree.Element{Type: mediatree.TypeVoid, Role: mediatree.RoleChannels, Parent: 0}
+	n3 := liveNodeFromElement(1, voidNode)
+	if n3.Value != nil || n3.Size != 0 {
+		t.Fatalf("liveNodeFromElement(void) = %+v, want no value/size", n3)
+	}
+}
+
+// TestEventPushServer_GlobalPublishLive_DeliveredWhenChannelSubscribed
+// exercises the fblock-live page's other WS mechanism: a global subscriber
+// that lists channel 1 in subscribeMessage.Channels receives a "live" frame
+// PublishLive sends for that channel.
+func TestEventPushServer_GlobalPublishLive_DeliveredWhenChannelSubscribed(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err := conn.WriteJSON(subscribeMessage{Storage: "", Channels: []uint16{1}})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	push.PublishLive(livePushMessage{
+		Type: "live", Storage: "s1", Channel: 1, Total: 3,
+		Nodes: []liveNode{{ID: 0, Role: "root", Type: "void"}},
+	})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg livePushMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read live frame: %v", err)
+	}
+	if msg.Type != "live" || msg.Storage != "s1" || msg.Channel != 1 || msg.Total != 3 || len(msg.Nodes) != 1 {
+		t.Fatalf("live frame = %+v", msg)
+	}
+}
+
+// TestEventPushServer_PublishLiveProgress_ComputesContentBytesAndTocEstimate
+// verifies PublishLiveProgress forwards contentBytes verbatim and computes
+// EstimatedTocBytes from total via the real toc.ComputeOffsets formula (not
+// a hand-rolled approximation) -- the two numbers the fblock-live page's
+// fill bar reads.
+func TestEventPushServer_PublishLiveProgress_ComputesContentBytesAndTocEstimate(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err := conn.WriteJSON(subscribeMessage{Storage: "", Channels: []uint16{1}})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	elems := []mediatree.Element{
+		{Type: mediatree.TypeVoid, Role: mediatree.RoleRoot},
+		{Type: mediatree.TypeUint32, Role: mediatree.RoleChannel, Value: []byte{1, 0, 0, 0}},
+	}
+	const total = 5 // pretend 3 earlier elements were already delivered
+	const contentBytes = 12345
+	push.PublishLiveProgress("s1", 1, total, contentBytes, elems, 3)
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg livePushMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read live frame: %v", err)
+	}
+	if msg.ContentBytes != contentBytes {
+		t.Fatalf("ContentBytes = %d, want %d", msg.ContentBytes, contentBytes)
+	}
+	want := uint64(toc.ComputeOffsets(total).Total)
+	if msg.EstimatedTocBytes != want {
+		t.Fatalf("EstimatedTocBytes = %d, want %d (toc.ComputeOffsets(%d).Total)", msg.EstimatedTocBytes, want, total)
+	}
+	if len(msg.Nodes) != len(elems) || msg.Nodes[0].ID != 3 || msg.Nodes[1].ID != 4 {
+		t.Fatalf("Nodes = %+v, want ids starting at firstID=3", msg.Nodes)
+	}
+}
+
+// TestEventPushServer_GlobalPublishLive_FiltersOtherChannels verifies a
+// subscriber only sees live progress for channels it actually listed.
+func TestEventPushServer_GlobalPublishLive_FiltersOtherChannels(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err := conn.WriteJSON(subscribeMessage{Storage: "", Channels: []uint16{1}})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	push.PublishLive(livePushMessage{Type: "live", Channel: 2, Total: 1})
+
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var msg livePushMessage
+	err = conn.ReadJSON(&msg)
+	if err == nil {
+		t.Fatalf("unexpected live frame for unsubscribed channel: %+v", msg)
+	}
+}
+
+// TestEventPushServer_GlobalPublishLive_RequiresChannelsSubscription
+// verifies that omitting Channels entirely (the ordinary Journal/UI
+// subscription today) suppresses live progress altogether, not just for
+// unlisted channels -- see livePushMessage's own doc comment: unscoped
+// delivery would be meaningless.
+func TestEventPushServer_GlobalPublishLive_RequiresChannelsSubscription(t *testing.T) {
+	reg := NewStorageRegistry()
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err := conn.WriteJSON(subscribeMessage{Storage: ""})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	push.PublishLive(livePushMessage{Type: "live", Channel: 1, Total: 1})
+
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var msg livePushMessage
+	err = conn.ReadJSON(&msg)
+	if err == nil {
+		t.Fatalf("unexpected live frame without a Channels subscription: %+v", msg)
 	}
 }
