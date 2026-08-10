@@ -43,11 +43,16 @@ export type FblockFillBarProps = {
 // (matching write order -- prologue and catalog are laid out first), toc/
 // epilog are pinned to the right (matching how they're actually located --
 // from the end of the fblock backward, see CLAUDE.md's "Read from both
-// ends"). prolog/catalog/toc/epilog render at a fixed minimum width (see
+// ends"). prolog/catalog/epilog render at a fixed minimum width (see
 // LANDMARK_WIDTH) since their true byte proportion is invisible at real
-// FblockSize scale; content and the free remainder split the true
-// remaining space via flexGrow, proportional to their real byte ratio, so
-// that part of the bar stays an accurate fill gauge.
+// FblockSize scale and never changes during a recording. toc keeps that
+// same minimum width as a floor but also grows via flexGrow as
+// estimatedTocBytes increases -- unlike prolog/catalog/epilog, its size
+// is not fixed: it's an estimate of what the TOC will cost once the fblock
+// is finalized, and needs to visibly grow so the bar can be read as "how
+// close is this fblock to being done." content and the free remainder
+// split the true remaining space via flexGrow, proportional to their real
+// byte ratio, so that part of the bar stays an accurate fill gauge.
 export default function FblockFillBar({ fblockSize, maxChannels, catalogN, contentBytes, estimatedTocBytes }: FblockFillBarProps) {
   const prolog = PROLOG_FIXED
   const catalog = MAGIC_LABEL + catalogSize(maxChannels, catalogN) + HEADER_CHECKSUMS + MAGIC_LABEL
@@ -80,8 +85,8 @@ export default function FblockFillBar({ fblockSize, maxChannels, catalogN, conte
           title={`свободно: ${formatBytes(freeBytes)}`}
         />
         <div
-          className="progress-bar bg-warning flex-grow-0"
-          style={{ flexBasis: LANDMARK_WIDTH, flexShrink: 0 }}
+          className="progress-bar bg-warning"
+          style={{ flexBasis: LANDMARK_WIDTH, flexGrow: estimatedTocBytes, flexShrink: 1, minWidth: 0 }}
           title={`toc (оценка): ${formatBytes(toc)}`}
         />
         <div

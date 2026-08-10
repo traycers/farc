@@ -36,15 +36,24 @@ export type FblockInfo = {
 
 type RawFblockInfo = Omit<FblockInfo, 'begin' | 'end'> & { begin?: string; end?: string }
 
-// Same bigint-precision problem as parseCandidatesJSON, same fix.
-export function parseFblocksJSON(text: string): FblockInfo[] {
+export type FblockListPage = {
+  total: number
+  fblocks: FblockInfo[]
+}
+
+// Same bigint-precision problem as parseCandidatesJSON, same fix. Mirrors
+// internal/api/fblocks.go's fblockListResponse envelope: {total, fblocks}.
+export function parseFblocksJSON(text: string): FblockListPage {
   const quoted = text.replace(/"(begin|end)":(\d+)/g, '"$1":"$2"')
-  const raw = JSON.parse(quoted) as RawFblockInfo[]
-  return raw.map((r) => ({
-    ...r,
-    begin: r.begin !== undefined ? BigInt(r.begin) : undefined,
-    end: r.end !== undefined ? BigInt(r.end) : undefined,
-  }))
+  const raw = JSON.parse(quoted) as { total: number; fblocks: RawFblockInfo[] }
+  return {
+    total: raw.total,
+    fblocks: raw.fblocks.map((r) => ({
+      ...r,
+      begin: r.begin !== undefined ? BigInt(r.begin) : undefined,
+      end: r.end !== undefined ? BigInt(r.end) : undefined,
+    })),
+  }
 }
 
 export function nsFromDate(d: Date): bigint {

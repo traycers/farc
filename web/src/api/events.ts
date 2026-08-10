@@ -15,11 +15,13 @@ export type JournalEvent = {
 }
 
 // Mirrors internal/api/eventpush.go's liveNode/livePushMessage -- the
-// fblock-live page's per-tick growth of a channel's segment still being
-// recorded (not yet on disk). Value/size follow the same convention as
-// web/src/api/fblocktree.ts's TreeNode (a decimal string for ns-scale
-// values, a plain number otherwise); unlike TreeNode there's no child_count,
-// since this is a flat delta list, not a "node + its children" listing.
+// fblock-live page's per-tick growth of a storage's shared fcontainer still
+// being recorded (not yet on disk), covering every channel currently
+// writing into it at once (docs/docs/archive/adr/014-channel-registry.md).
+// Value/size follow the same convention as web/src/api/fblocktree.ts's
+// TreeNode (a decimal string for ns-scale values, a plain number
+// otherwise); unlike TreeNode there's no child_count, since this is a flat
+// delta list, not a "node + its children" listing.
 export type LiveNode = {
   id: number
   role: string
@@ -32,7 +34,6 @@ export type LiveNode = {
 export type LivePushMessage = {
   type: 'live'
   storage: string
-  channel: number
   total: number
   content_bytes: number
   estimated_toc_bytes: number
@@ -103,22 +104,22 @@ export function subscribeJournal(
   return connectEvents({ storage: '', want: [], channels: [] }, (msg) => onEvent(msg as JournalEvent), onStatusChange)
 }
 
-// subscribeLive opens a "global" subscription scoped to one channel via
-// subscribeMessage.Channels -- required for "live" frames to be delivered
-// at all (internal/api/eventpush.go's serveGlobal treats an empty Channels
-// set as "no live subscriber", since unscoped live progress is meaningless).
-// Classic events (fblock.created/fblock.ready, needed to know when to
-// switch from live progress to the finalized tree) are NOT filtered by
-// channel server-side, so onEvent is called for every one and the caller
-// must check its own .channel/.storage fields.
+// subscribeLive opens a "global" subscription scoped to the given storage
+// via subscribeMessage.LiveStorages -- required for "live" frames to be
+// delivered at all (internal/api/eventpush.go's serveGlobal treats an empty
+// LiveStorages set as "no live subscriber", since unscoped live progress is
+// meaningless). Classic events (fblock.created/fblock.ready, needed to know
+// when to switch from live progress to the finalized tree) are NOT filtered
+// by storage server-side, so onEvent is called for every one and the
+// caller must check its own .storage field.
 export function subscribeLive(
-  channel: number,
+  storage: string,
   onLive: (msg: LivePushMessage) => void,
   onEvent: (e: JournalEvent) => void,
   onStatusChange?: (connected: boolean) => void,
 ): () => void {
   return connectEvents(
-    { storage: '', want: [], channels: [channel] },
+    { storage: '', want: [], channels: [], live_storages: [storage] },
     (msg) => {
       if (msg.type === 'live') {
         onLive(msg as LivePushMessage)

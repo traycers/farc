@@ -25,12 +25,16 @@ func TestHandleListFblocks(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	var out []fblockInfo
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	var body fblockListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	out := body.Fblocks
 	if len(out) == 0 {
 		t.Fatal("empty fblocks list")
+	}
+	if body.Total != len(out) {
+		t.Fatalf("total = %d, want %d (no paging requested)", body.Total, len(out))
 	}
 
 	var ready *fblockInfo
@@ -94,11 +98,11 @@ func TestHandleListFblocks_ProtectedFlagReported(t *testing.T) {
 		t.Fatalf("GET /fblocks: %v", err)
 	}
 	defer resp.Body.Close()
-	var out []fblockInfo
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	var body fblockListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, fb := range out {
+	for _, fb := range body.Fblocks {
 		if fb.Index == idx {
 			if !fb.Protected {
 				t.Fatalf("fblock %d Protected = false, want true", idx)
@@ -106,5 +110,46 @@ func TestHandleListFblocks_ProtectedFlagReported(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("fblock %d not found in list: %+v", idx, out)
+	t.Fatalf("fblock %d not found in list: %+v", idx, body.Fblocks)
+}
+
+func TestHandleListFblocks_Paging(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t) // newTestUnit's storage has Geometry.N == 4, see testutil_test.go.
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	srv := newTestServer(t, reg)
+
+	resp, err := http.Get(srv.URL + "/storages/s1/fblocks?offset=1&limit=2")
+	if err != nil {
+		t.Fatalf("GET /fblocks: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body fblockListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 4 {
+		t.Fatalf("total = %d, want 4", body.Total)
+	}
+	if len(body.Fblocks) != 2 {
+		t.Fatalf("len(fblocks) = %d, want 2", len(body.Fblocks))
+	}
+	if body.Fblocks[0].Index != 1 || body.Fblocks[1].Index != 2 {
+		t.Fatalf("fblocks indices = [%d, %d], want [1, 2]", body.Fblocks[0].Index, body.Fblocks[1].Index)
+	}
+
+	resp2, err := http.Get(srv.URL + "/storages/s1/fblocks?offset=0&limit=0")
+	if err != nil {
+		t.Fatalf("GET /fblocks: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for limit=0", resp2.StatusCode)
+	}
 }

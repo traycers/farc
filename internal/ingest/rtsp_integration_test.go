@@ -72,7 +72,7 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 	}
 
 	rec := &fakeRecorder{}
-	policy := NewCapturePolicy(1, rec, uint64(10*time.Second), PolicyContinuous, PolicyParams{})
+	policy := NewCapturePolicy(1, newTestSegment(rec), uint64(10*time.Second), PolicyContinuous, PolicyParams{})
 	err = policy.StartRecording(0, nil)
 	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
@@ -211,7 +211,7 @@ func TestChannelIngest_RepeatedSPSPPSDoesNotDuplicateConfig(t *testing.T) {
 	}
 
 	rec := &fakeRecorder{}
-	policy := NewCapturePolicy(1, rec, uint64(10*time.Second), PolicyContinuous, PolicyParams{})
+	policy := NewCapturePolicy(1, newTestSegment(rec), uint64(10*time.Second), PolicyContinuous, PolicyParams{})
 	err = policy.StartRecording(0, nil)
 	if err != nil {
 		t.Fatalf("StartRecording: %v", err)

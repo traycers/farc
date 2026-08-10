@@ -18,16 +18,26 @@ import (
 type ChannelConfig struct {
 	Channel uint16
 	RTSPURL string
-	// StorageID is reporting-only (List/GET /channels) -- IngestManager has
-	// no Storage awareness at all (see BackpressureSignal's doc below), it
-	// just carries the id the caller resolved Recorder from.
-	StorageID    string
-	Recorder     Recorder
-	QueueDepth   uint64 // ns
-	PolicyType   PolicyType
-	PolicyParams PolicyParams
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	// StorageID groups channels that share one storage's sharedSegment --
+	// IngestManager still doesn't depend on internal/storage itself (see
+	// BackpressureSignal's doc below), it just uses this string to decide
+	// which channels' CapturePolicy instances hand their frames to the same
+	// *sharedSegment (docs/docs/archive/adr/014-channel-registry.md: one
+	// fcontainer commonly holds every channel of a storage at once).
+	StorageID string
+	Recorder  Recorder
+	// SegmentFlushBytes is the content-size threshold (~min_container_share
+	// × the storage's fblock_size, resolved by internal/farcd from the
+	// storage's own Geometry/Params) that triggers an automatic flush of
+	// that storage's shared segment -- see sharedSegment's doc comment. Only
+	// consulted the first time a storage's segment is created; every
+	// channel sharing a storage is expected to report the same value.
+	SegmentFlushBytes int
+	QueueDepth        uint64 // ns
+	PolicyType        PolicyType
+	PolicyParams      PolicyParams
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
 
 	// Name is an optional human-readable label -- reporting-only, same
 	// status as StorageID above; IngestManager never keys off it.
@@ -63,10 +73,14 @@ type ChannelInfo struct {
 }
 
 // IngestManager creates and owns one ChannelIngest per configured channel
-// (docs/docs/archive/11-service-composition.md §5.1.1).
+// (docs/docs/archive/11-service-composition.md §5.1.1), plus one
+// *sharedSegment per distinct StorageID among them, reference-counted by how
+// many currently-tracked channels share that StorageID.
 type IngestManager struct {
 	mu                sync.Mutex
 	channels          map[uint16]*channelEntry
+	segments          map[string]*sharedSegment
+	segmentRefs       map[string]int
 	logf              func(format string, args ...any)
 	onRecordingChange func(channel uint16, recording bool, t uint64)
 }
@@ -75,8 +89,35 @@ type IngestManager struct {
 func NewIngestManager() *IngestManager {
 	return &IngestManager{
 		channels:          make(map[uint16]*channelEntry),
+		segments:          make(map[string]*sharedSegment),
+		segmentRefs:       make(map[string]int),
 		logf:              func(string, ...any) {},
 		onRecordingChange: func(uint16, bool, uint64) {},
+	}
+}
+
+// acquireSegmentLocked returns storageID's shared segment, creating one from
+// cfg if this is the first channel referencing that storage. Must be called
+// with m.mu held.
+func (m *IngestManager) acquireSegmentLocked(cfg ChannelConfig) *sharedSegment {
+	seg, ok := m.segments[cfg.StorageID]
+	if !ok {
+		seg = newSharedSegment(cfg.Recorder, cfg.SegmentFlushBytes)
+		m.segments[cfg.StorageID] = seg
+	}
+	m.segmentRefs[cfg.StorageID]++
+	return seg
+}
+
+// releaseSegmentLocked drops one reference to storageID's shared segment,
+// deleting it once nothing references it anymore. Must be called with m.mu
+// held, and only after the channel releasing it has already detached (its
+// ChannelIngest.run has returned, via CapturePolicy.Close on shutdown).
+func (m *IngestManager) releaseSegmentLocked(storageID string) {
+	m.segmentRefs[storageID]--
+	if m.segmentRefs[storageID] <= 0 {
+		delete(m.segmentRefs, storageID)
+		delete(m.segments, storageID)
 	}
 }
 
@@ -116,7 +157,8 @@ func (m *IngestManager) Start(cfgs []ChannelConfig) {
 }
 
 func (m *IngestManager) startLocked(cfg ChannelConfig) {
-	policy := NewCapturePolicy(cfg.Channel, cfg.Recorder, cfg.QueueDepth, cfg.PolicyType, cfg.PolicyParams)
+	seg := m.acquireSegmentLocked(cfg)
+	policy := NewCapturePolicy(cfg.Channel, seg, cfg.QueueDepth, cfg.PolicyType, cfg.PolicyParams)
 	policy.SetOnRecordingChange(m.onRecordingChange)
 	ci := NewChannelIngest(cfg.Channel, policy)
 	ci.SetLogger(m.logf)
@@ -206,6 +248,13 @@ func (m *IngestManager) RemoveChannel(channel uint16) (ChannelConfig, error) {
 
 	e.cancel()
 	<-e.done
+
+	// e.ingest.run's ctx.Done branch already called policy.Close (detaching
+	// from the shared segment, flushing it if this was the last attached
+	// channel) before returning -- safe to drop this channel's reference now.
+	m.mu.Lock()
+	m.releaseSegmentLocked(e.cfg.StorageID)
+	m.mu.Unlock()
 	return e.cfg, nil
 }
 
@@ -237,19 +286,36 @@ func (m *IngestManager) TriggerEvent(channel uint16, now, eventTime uint64) erro
 	return e.ingest.policy.Trigger(now, eventTime)
 }
 
-// LiveElementsSince forwards to channel's CapturePolicy.LiveElementsSince --
-// the fblock-live page's polling/ticker entry point for a growing snapshot
-// of the segment currently being recorded. ok is false for an unknown
-// channel as well as for CapturePolicy.LiveElementsSince's own "not
-// recording" case, since both mean "nothing live to report".
-func (m *IngestManager) LiveElementsSince(channel uint16, n int) (elems []mediatree.Element, total int, contentBytes int, ok bool) {
+// LiveElementsSinceStorage forwards to storageID's shared segment (if any
+// channel currently references it) -- the fblock-live page's polling/
+// ticker entry point for a growing snapshot of the fcontainer currently
+// being recorded, covering every channel of that storage at once. ok is
+// false when no channel of storageID is currently tracked, as well as for
+// sharedSegment.liveElementsSince's own "no Filler open" case, since both
+// mean "nothing live to report".
+func (m *IngestManager) LiveElementsSinceStorage(storageID string, n int) (elems []mediatree.Element, total int, contentBytes int, ok bool) {
 	m.mu.Lock()
-	e, exists := m.channels[channel]
+	seg, exists := m.segments[storageID]
 	m.mu.Unlock()
 	if !exists {
 		return nil, 0, 0, false
 	}
-	return e.ingest.policy.LiveElementsSince(n)
+	return seg.liveElementsSince(n)
+}
+
+// StorageIDs returns the distinct storage ids currently referenced by at
+// least one tracked channel -- internal/farcd's live-progress ticker uses
+// this to know which storages to poll, now that live progress is
+// storage-scoped rather than channel-scoped.
+func (m *IngestManager) StorageIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, 0, len(m.segments))
+	for id := range m.segments {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // StartRecording forwards continuous's "начать запись [with from_time]"

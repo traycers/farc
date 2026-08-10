@@ -24,6 +24,15 @@ func (r *fakeRecorder) WriteFcontainer(channels []uint16, begin, end uint64, fil
 	return [16]byte{byte(len(r.writes))}, nil
 }
 
+// newTestSegment wraps rec in a sharedSegment with a flush target far larger
+// than anything these tiny synthetic-frame tests ever accumulate, so the
+// segment's own size-triggered auto-flush (sharedSegment's doc comment)
+// never fires and every test's single CapturePolicy behaves exactly as it
+// did back when it owned a private Filler outright.
+func newTestSegment(rec Recorder) *sharedSegment {
+	return newSharedSegment(rec, 1<<30)
+}
+
 func videoParams(t uint64) fcontainer.StreamParams {
 	return fcontainer.StreamParams{Time: t, CodecVideo: mediatree.CodecH264, ParamSPS: []byte{1, 2}, ParamPPS: []byte{3, 4}}
 }
@@ -44,7 +53,7 @@ func countRole(f *fcontainer.Filler, role mediatree.Role) int {
 
 func TestContinuous_StartWithoutFromTimeDoesNotReplay(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI))
@@ -79,9 +88,9 @@ func TestContinuous_StartWithoutFromTimeDoesNotReplay(t *testing.T) {
 
 func TestLiveElementsSince(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
 
-	if _, _, _, ok := p.LiveElementsSince(0); ok {
+	if _, _, _, ok := p.segment.liveElementsSince(0); ok {
 		t.Fatal("LiveElementsSince before recording starts: want ok=false")
 	}
 
@@ -91,7 +100,7 @@ func TestLiveElementsSince(t *testing.T) {
 		t.Fatalf("StartRecording: %v", err)
 	}
 
-	elems, total, contentBytes, ok := p.LiveElementsSince(0)
+	elems, total, contentBytes, ok := p.segment.liveElementsSince(0)
 	if !ok || len(elems) != total || contentBytes != 0 {
 		t.Fatalf("LiveElementsSince(0) right after open = elems=%d total=%d contentBytes=%d ok=%v, want an empty snapshot", len(elems), total, contentBytes, ok)
 	}
@@ -101,7 +110,7 @@ func TestLiveElementsSince(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleFrame: %v", err)
 	}
-	delta, total2, contentBytes2, ok := p.LiveElementsSince(cursor)
+	delta, total2, contentBytes2, ok := p.segment.liveElementsSince(cursor)
 	if !ok {
 		t.Fatal("LiveElementsSince while recording: want ok=true")
 	}
@@ -125,14 +134,14 @@ func TestLiveElementsSince(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}
-	if _, _, _, ok := p.LiveElementsSince(0); ok {
+	if _, _, _, ok := p.segment.liveElementsSince(0); ok {
 		t.Fatal("LiveElementsSince after segment closes: want ok=false")
 	}
 }
 
 func TestOnRecordingChange_ReceivesStartAndStopTimes(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
 
 	type call struct {
 		channel   uint16
@@ -175,7 +184,7 @@ func TestOnRecordingChange_ReceivesStartAndStopTimes(t *testing.T) {
 
 func TestContinuous_StartWithFromTimeReplaysQueue(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	for _, ts := range []uint64{10, 20, 30} {
@@ -204,7 +213,7 @@ func TestContinuous_StartWithFromTimeReplaysQueue(t *testing.T) {
 }
 
 func TestContinuous_WrongCommandType(t *testing.T) {
-	p := NewCapturePolicy(1, &fakeRecorder{}, 1000, PolicyContinuous, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(&fakeRecorder{}), 1000, PolicyContinuous, PolicyParams{})
 	if err := p.Trigger(0, 0); !errors.Is(err, ErrWrongPolicyType) {
 		t.Fatalf("Trigger on continuous = %v, want ErrWrongPolicyType", err)
 	}
@@ -212,7 +221,7 @@ func TestContinuous_WrongCommandType(t *testing.T) {
 
 func TestEvent_TriggerInIdleReplaysPrerecordAndSetsStopAt(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyEvent, PolicyParams{Prerecord: 20, Postrecord: 50})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyEvent, PolicyParams{Prerecord: 20, Postrecord: 50})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	for _, ts := range []uint64{60, 80, 100} {
@@ -259,7 +268,7 @@ func TestEvent_TriggerInIdleReplaysPrerecordAndSetsStopAt(t *testing.T) {
 
 func TestEvent_TriggerDuringRecordingExtendsButNeverShrinks(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyEvent, PolicyParams{Prerecord: 0, Postrecord: 50})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyEvent, PolicyParams{Prerecord: 0, Postrecord: 50})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	err := p.Trigger(100, 100)
@@ -294,7 +303,7 @@ func TestEvent_TriggerDuringRecordingExtendsButNeverShrinks(t *testing.T) {
 }
 
 func TestEvent_WrongCommandType(t *testing.T) {
-	p := NewCapturePolicy(1, &fakeRecorder{}, 1000, PolicyEvent, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(&fakeRecorder{}), 1000, PolicyEvent, PolicyParams{})
 	if err := p.StartRecording(0, nil); !errors.Is(err, ErrWrongPolicyType) {
 		t.Fatalf("StartRecording on event = %v, want ErrWrongPolicyType", err)
 	}
@@ -302,7 +311,7 @@ func TestEvent_WrongCommandType(t *testing.T) {
 
 func TestSetPolicy_OpenSegmentSurvivesSwapAndFallsUnderNewRules(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	err := p.StartRecording(0, nil)
@@ -360,7 +369,7 @@ func TestSetPolicy_OpenSegmentSurvivesSwapAndFallsUnderNewRules(t *testing.T) {
 
 func TestReplay_MultipleConfigVersionsAddedInOrder(t *testing.T) {
 	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, rec, 1000, PolicyContinuous, PolicyParams{})
+	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
 
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 	err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI))

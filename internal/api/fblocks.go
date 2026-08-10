@@ -4,8 +4,19 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"traycers/farc/fblock"
+)
+
+// defaultFblocksLimit/maxFblocksLimit bound GET .../fblocks paging -- a
+// storage's physical fblock count scales with disk size (docs/docs/archive's
+// requirements call for 20+ TB storages), so returning the whole catalog
+// unpaginated on every request doesn't scale; 100 matches the fblock-status
+// page's list view, 1000 is a generous ceiling against accidental abuse.
+const (
+	defaultFblocksLimit = 100
+	maxFblocksLimit     = 1000
 )
 
 // fblockInfo is one GET .../fblocks result entry -- a whole-storage,
@@ -24,8 +35,40 @@ type fblockInfo struct {
 	Channels  []uint16 `json:"channels,omitempty"`
 }
 
-// handleListFblocks implements GET /storages/{id}/fblocks -- the
-// fblock-status page's table of every fblock in a storage, so a user can
+// fblockListResponse is GET .../fblocks's response envelope. Total is the
+// storage's full physical fblock count (independent of offset/limit), so a
+// caller can page through it (e.g. Total/limit pages of 100).
+type fblockListResponse struct {
+	Total   int          `json:"total"`
+	Fblocks []fblockInfo `json:"fblocks"`
+}
+
+// parseFblocksPaging reads ?offset=&limit= (both optional), clamping limit
+// to (0, maxFblocksLimit].
+func parseFblocksPaging(r *http.Request) (offset, limit int, err error) {
+	q := r.URL.Query()
+	offset = 0
+	if s := q.Get("offset"); s != "" {
+		offset, err = strconv.Atoi(s)
+		if err != nil || offset < 0 {
+			return 0, 0, fmt.Errorf("api: invalid offset %q", s)
+		}
+	}
+	limit = defaultFblocksLimit
+	if s := q.Get("limit"); s != "" {
+		limit, err = strconv.Atoi(s)
+		if err != nil || limit <= 0 {
+			return 0, 0, fmt.Errorf("api: invalid limit %q", s)
+		}
+		if limit > maxFblocksLimit {
+			limit = maxFblocksLimit
+		}
+	}
+	return offset, limit, nil
+}
+
+// handleListFblocks implements GET /storages/{id}/fblocks?offset=&limit= --
+// the fblock-status page's table of every fblock in a storage, so a user can
 // browse and pick one without already knowing its uuid. Reads
 // unit.Index().Snapshot() (the same *fblock.Catalog handleCandidates already
 // uses for Begin/End/UUID) directly, with no channel filter at all.
@@ -35,10 +78,19 @@ func (s *HttpApiServer) handleListFblocks(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", r.PathValue("id")))
 		return
 	}
+	offset, limit, err := parseFblocksPaging(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	snap := unit.Index().Snapshot()
-	out := make([]fblockInfo, snap.N)
-	for i := uint32(0); i < snap.N; i++ {
+	total := int(snap.N)
+	start := min(offset, total)
+	end := min(start+limit, total)
+
+	out := make([]fblockInfo, 0, end-start)
+	for i := uint32(start); i < uint32(end); i++ {
 		info := fblockInfo{Index: i, State: snap.State(i).String(), Protected: snap.Protected(i)}
 		if snap.State(i) == fblock.Ready {
 			info.UUID = hex.EncodeToString(snap.UUID[i][:])
@@ -50,7 +102,7 @@ func (s *HttpApiServer) handleListFblocks(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
-		out[i] = info
+		out = append(out, info)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, fblockListResponse{Total: total, Fblocks: out})
 }

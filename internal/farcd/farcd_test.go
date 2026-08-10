@@ -617,14 +617,14 @@ func TestRun_CreateChannelOverHTTP_PersistsToConfigFile(t *testing.T) {
 	}
 }
 
-// TestFarcd_LiveProgress_TracksRecordingChannelLifecycle exercises
-// SetOnRecordingChange's liveCursors bookkeeping and tickLiveProgress's
-// guard logic directly (white-box, no HTTP/WS needed) -- the actual tree
-// data these feed into fblock-live's WS push is unit-tested at the
-// ingest/api layers (CapturePolicy.LiveElementsSince, EventPushServer.
-// PublishLiveProgress); this test only checks farcd's own wiring between
-// them doesn't panic and tracks the right channel at the right times.
-func TestFarcd_LiveProgress_TracksRecordingChannelLifecycle(t *testing.T) {
+// TestFarcd_LiveProgress_TracksStorageLifecycle exercises
+// tickLiveProgress's storage-scoped polling directly (white-box, no HTTP/WS
+// needed) -- the actual tree data these feed into fblock-live's WS push is
+// unit-tested at the ingest/api layers (IngestManager.
+// LiveElementsSinceStorage, EventPushServer.PublishLiveProgress); this test
+// only checks farcd's own wiring between them doesn't panic and reflects
+// the shared segment's state at the right times.
+func TestFarcd_LiveProgress_TracksStorageLifecycle(t *testing.T) {
 	cfg, path := testConfig(t, []config.Channel{
 		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
 	})
@@ -637,19 +637,16 @@ func TestFarcd_LiveProgress_TracksRecordingChannelLifecycle(t *testing.T) {
 	f.ing.Start(f.channels)
 	defer f.ing.Stop()
 
-	if _, _, _, ok := f.ing.LiveElementsSince(7, 0); ok {
-		t.Fatal("LiveElementsSince before recording starts: want ok=false")
+	if _, _, _, ok := f.ing.LiveElementsSinceStorage("disk0", 0); ok {
+		t.Fatal("LiveElementsSinceStorage before recording starts: want ok=false")
 	}
 
 	err = f.ing.StartRecording(7, 1000, nil)
 	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
-	f.liveMu.Lock()
-	_, tracked := f.liveCursors[7]
-	f.liveMu.Unlock()
-	if !tracked {
-		t.Fatal("liveCursors has no entry for channel 7 right after recording starts")
+	if _, _, _, ok := f.ing.LiveElementsSinceStorage("disk0", 0); !ok {
+		t.Fatal("LiveElementsSinceStorage right after recording starts: want ok=true")
 	}
 
 	// An empty segment (no frames yet) must tick without panicking and
@@ -663,14 +660,8 @@ func TestFarcd_LiveProgress_TracksRecordingChannelLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}
-	f.liveMu.Lock()
-	_, tracked = f.liveCursors[7]
-	f.liveMu.Unlock()
-	if tracked {
-		t.Fatal("liveCursors still has an entry for channel 7 after recording stops")
-	}
-	if _, _, _, ok := f.ing.LiveElementsSince(7, 0); ok {
-		t.Fatal("LiveElementsSince after recording stops: want ok=false")
+	if _, _, _, ok := f.ing.LiveElementsSinceStorage("disk0", 0); ok {
+		t.Fatal("LiveElementsSinceStorage after recording stops (last channel detached): want ok=false")
 	}
 }
 
@@ -678,8 +669,9 @@ func TestFarcd_LiveProgress_TracksRecordingChannelLifecycle(t *testing.T) {
 // against a fully running Farcd (real net/http + gorilla/websocket servers,
 // not internal/api's httptest-only coverage): GET .../tree reaches the
 // actual HTTP route registered in server.go, and a WS client subscribed to
-// a recording channel's Channels stays connected across a live-progress
-// tick without the ticker goroutine panicking. It doesn't write a real
+// a recording channel's storage via LiveStorages stays connected across a
+// live-progress tick without the ticker goroutine panicking. It doesn't
+// write a real
 // fblock through farcd's own (O_DIRECT) storage backend -- that write path
 // requires block-device-grade alignment this package's other tests never
 // exercise either, since they only ever read/administer "disk0" -- decoding
@@ -717,7 +709,7 @@ func TestRun_ServesFblockTreeAndLiveProgress(t *testing.T) {
 		t.Fatalf("dial %s: %v", wsURL, err)
 	}
 	defer conn.Close()
-	err = conn.WriteJSON(map[string]any{"storage": "", "want": []string{}, "channels": []int{7}})
+	err = conn.WriteJSON(map[string]any{"storage": "", "want": []string{}, "channels": []int{}, "live_storages": []string{"disk0"}})
 	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}

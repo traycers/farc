@@ -13,7 +13,6 @@ export default function FblockLivePage() {
   const [storages, setStorages] = useState<StorageInfo[]>([])
   const [storage, setStorage] = useState('')
   const [channels, setChannels] = useState<ChannelInfo[]>([])
-  const [channel, setChannel] = useState<number | null>(null)
   const [liveState, setLiveState] = useState<LiveTreeState>(newLiveTreeState())
   const [contentBytes, setContentBytes] = useState(0)
   const [estimatedTocBytes, setEstimatedTocBytes] = useState(0)
@@ -41,33 +40,37 @@ export default function FblockLivePage() {
   const channelsForStorage = channels.filter((c) => c.storage === storage)
 
   useEffect(() => {
-    if (channel === null && channelsForStorage.length > 0) setChannel(channelsForStorage[0].channel)
-  }, [channel, channelsForStorage])
-
-  // Bootstrap the "previous fblock" link from candidates() -- before the
-  // first fblock.ready arrives over WS, this is the only way to know what
-  // the channel's last-written fblock was.
-  useEffect(() => {
-    if (!storage || channel === null) return
-    setPrevUUID(null)
-    const now = BigInt(Date.now()) * 1_000_000n
-    candidates(storage, channel, 0n, now)
-      .then((rows) => {
-        if (rows.length === 0) return
-        const latest = rows.reduce((a, b) => (b.end > a.end ? b : a))
-        setPrevUUID(latest.uuid)
-      })
-      .catch((e) => setError(String(e)))
-  }, [storage, channel])
-
-  useEffect(() => {
-    if (channel === null) return
     setLiveState(newLiveTreeState())
     setContentBytes(0)
     setEstimatedTocBytes(0)
+    setPrevUUID(null)
+  }, [storage])
+
+  // Bootstrap the "previous fblock" link from candidates() -- before the
+  // first fblock.ready arrives over WS, this is the only way to know what
+  // this storage's last-written fblock was. fblock.ready is a storage-level
+  // event (one fcontainer commonly holds every channel of a storage at
+  // once, docs/docs/archive/adr/014-channel-registry.md), so there's no
+  // single "the channel" to ask -- picking any one channel of this storage
+  // is a best-effort seed, same imprecision this link always had.
+  const firstChannel = channelsForStorage[0]?.channel
+
+  useEffect(() => {
+    if (!storage || firstChannel === undefined) return
+    const now = BigInt(Date.now()) * 1_000_000n
+    candidates(storage, firstChannel, 0n, now)
+      .then((rows) => {
+        if (rows.length === 0) return
+        const latest = rows.reduce((a, b) => (b.end > a.end ? b : a))
+        setPrevUUID((cur) => cur ?? latest.uuid)
+      })
+      .catch((e) => setError(String(e)))
+  }, [storage, firstChannel])
+
+  useEffect(() => {
+    if (!storage) return
 
     function onLive(msg: LivePushMessage) {
-      if (msg.channel !== channel) return
       setLiveState((prev) => applyLiveNodes(prev, msg.nodes))
       setContentBytes(msg.content_bytes)
       setEstimatedTocBytes(msg.estimated_toc_bytes)
@@ -80,23 +83,22 @@ export default function FblockLivePage() {
     }
 
     function onEvent(e: JournalEvent) {
-      if (e.channel !== channel) return
+      if (e.storage !== storage) return
       if (e.name === 'fblock.created') {
-        // A new segment just started recording -- the old one (if any) is
-        // now fully superseded by its own fblock.ready below, so the live
-        // tree resets to track the new segment from scratch. Creation-order
-        // ids restart at 0 each segment, so keeping stale entries around
-        // would silently corrupt frame counts/parent links.
+        // The storage's shared segment just flushed and reopened a fresh
+        // one -- the old tree is now fully superseded by its own
+        // fblock.ready below, so the live tree resets to track the new
+        // fcontainer from scratch.
         setLiveState(newLiveTreeState())
         setContentBytes(0)
         setEstimatedTocBytes(0)
-      } else if (e.name === 'fblock.ready' && e.storage === storage && e.uuid) {
+      } else if (e.name === 'fblock.ready' && e.uuid) {
         setPrevUUID(e.uuid)
       }
     }
 
-    return subscribeLive(channel, onLive, onEvent, setConnected)
-  }, [channel, storage])
+    return subscribeLive(storage, onLive, onEvent, setConnected)
+  }, [storage])
 
   const geometry = storages.find((s) => s.id === storage)?.geometry
 
@@ -107,17 +109,10 @@ export default function FblockLivePage() {
       <div className="card mb-3">
         <div className="card-body">
           <div className="row g-3 align-items-end">
-            <div className="col-sm-6 col-md-3">
+            <div className="col-sm-6 col-md-4">
               <label className="form-label">
                 storage
-                <select
-                  className="form-select"
-                  value={storage}
-                  onChange={(e) => {
-                    setStorage(e.target.value)
-                    setChannel(null)
-                  }}
-                >
+                <select className="form-select" value={storage} onChange={(e) => setStorage(e.target.value)}>
                   {storages.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.id}
@@ -126,24 +121,12 @@ export default function FblockLivePage() {
                 </select>
               </label>
             </div>
-            <div className="col-sm-6 col-md-3">
-              <label className="form-label">
-                channel
-                <select className="form-select" value={channel ?? ''} onChange={(e) => setChannel(Number(e.target.value))}>
-                  {channelsForStorage.map((c) => (
-                    <option key={c.channel} value={c.channel}>
-                      {c.name ? `${c.channel} — ${c.name}` : c.channel}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="col-md-3">
+            <div className="col-md-4">
               <span className={`badge ${connected ? 'text-bg-success' : 'text-bg-secondary'}`}>
                 {connected ? 'подключено' : 'не подключено'}
               </span>
             </div>
-            <div className="col-md-3 text-md-end">
+            <div className="col-md-4 text-md-end">
               {prevUUID && storage && (
                 <Link to={`/fblock-status?storage=${encodeURIComponent(storage)}&uuid=${prevUUID}`}>предыдущий fblock →</Link>
               )}
@@ -154,7 +137,7 @@ export default function FblockLivePage() {
 
       {error && <div className="alert alert-danger">{error}</div>}
 
-      {channel !== null && geometry && (
+      {storage && geometry && (
         <FblockFillBar
           fblockSize={geometry.FblockSize}
           maxChannels={geometry.MaxChannels}
@@ -164,7 +147,7 @@ export default function FblockLivePage() {
         />
       )}
 
-      {channel !== null && <FblockTree mode="live" state={liveState} />}
+      {storage && <FblockTree mode="live" state={liveState} />}
     </section>
   )
 }

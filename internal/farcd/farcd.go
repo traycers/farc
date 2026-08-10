@@ -90,17 +90,18 @@ type Farcd struct {
 	bridgeStops map[string]func()
 	bridgeMu    sync.Mutex
 
-	// liveCursors tracks, per currently-recording channel, how many of its
-	// live segment's tree elements have already been published via
-	// PublishLiveProgress (the fblock-live page's WS feed) -- populated on
-	// SetOnRecordingChange(recording=true), advanced by
-	// runLiveProgressTicker, dropped on recording=false. No final flush is
-	// needed on stop: the segment's own fblock.ready (published moments
-	// later by bridgeFblockEvents once WriteFcontainer finishes) carries the
-	// complete, authoritative tree via GET .../tree, which is what the
-	// fblock-live page switches to on that event anyway.
-	liveCursors map[uint16]int
-	liveMu      sync.Mutex
+	// liveStorageCursors tracks, per storage, how many of its shared
+	// segment's tree elements have already been published via
+	// PublishLiveProgress (the fblock-live page's WS feed) -- advanced by
+	// runLiveProgressTicker, which is the only thing that ever touches this
+	// map (a single dedicated goroutine), so it needs no lock of its own.
+	// Never explicitly cleared: a storage with nothing currently recording
+	// just keeps ticking zero-length deltas (tickLiveProgress skips
+	// publishing those), and Filler.ElementsSince already clamps a
+	// stale/too-large cursor back to 0 on its own if the segment flushed
+	// and reopened a smaller Filler since the last tick -- no explicit
+	// "detect the reset" logic is needed here.
+	liveStorageCursors map[string]int
 
 	httpSrv    *http.Server
 	wsSrv      *http.Server
@@ -117,13 +118,13 @@ type Farcd struct {
 // later via POST /storages can be persisted back into it (persistNewStorage).
 func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	f := &Farcd{
-		registry:    api.NewStorageRegistry(),
-		ing:         ingest.NewIngestManager(),
-		cfg:         cfg,
-		configPath:  configPath,
-		bridgeStops: make(map[string]func()),
-		liveCursors: make(map[uint16]int),
-		logf:        func(string, ...any) {},
+		registry:           api.NewStorageRegistry(),
+		ing:                ingest.NewIngestManager(),
+		cfg:                cfg,
+		configPath:         configPath,
+		bridgeStops:        make(map[string]func()),
+		liveStorageCursors: make(map[string]int),
+		logf:               func(string, ...any) {},
 	}
 
 	push := api.NewEventPushServer(f.registry)
@@ -155,19 +156,10 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 
 	f.ing.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
 		// StorageOf, not List: this fires with the channel's own
-		// CapturePolicy mutex already held, and List's Policy() call (or
-		// LiveElementsSince, which locks the same mutex) would self-deadlock
-		// on it (see StorageOf's own doc comment). msm_server needs Storage
-		// (its "archive id") to call started_add/finished_add.
+		// CapturePolicy mutex already held, and List's Policy() call would
+		// self-deadlock on it (see StorageOf's own doc comment). msm_server
+		// needs Storage (its "archive id") to call started_add/finished_add.
 		storageID, _ := f.ing.StorageOf(channel)
-
-		f.liveMu.Lock()
-		if recording {
-			f.liveCursors[channel] = 0
-		} else {
-			delete(f.liveCursors, channel)
-		}
-		f.liveMu.Unlock()
 
 		if recording {
 			f.push.Publish(api.JournalEvent{Name: api.EventRecordingStarted, Channel: channel, Storage: storageID, Begin: t})
@@ -253,12 +245,19 @@ func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, err
 	}
 
 	return ingest.ChannelConfig{
-		Channel:    cc.ID,
-		RTSPURL:    cc.RTSPURL,
-		StorageID:  cc.Storage,
-		Recorder:   unit,
-		QueueDepth: queueDepth,
-		PolicyType: policyType,
+		Channel:   cc.ID,
+		RTSPURL:   cc.RTSPURL,
+		StorageID: cc.Storage,
+		Recorder:  unit,
+		// ~min_container_share × fblock_size -- the size threshold that
+		// triggers internal/ingest's shared per-storage segment to flush
+		// automatically (sharedSegment's doc comment). Only the first
+		// channel to reference a given storage actually has this value
+		// consulted, but every channel of that storage resolves the same
+		// Geometry/Params, so they'd all compute the same number anyway.
+		SegmentFlushBytes: int(float64(unit.Geometry().FblockSize) * unit.MinContainerShare()),
+		QueueDepth:        queueDepth,
+		PolicyType:        policyType,
 		PolicyParams: ingest.PolicyParams{
 			Prerecord:  uint64(cc.CapturePolicy.Prerecord.Duration().Nanoseconds()),
 			Postrecord: uint64(cc.CapturePolicy.Postrecord.Duration().Nanoseconds()),
@@ -556,10 +555,10 @@ func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
 const liveProgressInterval = time.Second
 
 // runLiveProgressTicker drives the fblock-live page's WS feed: once a
-// second, for every channel currently recording (per liveCursors), pull
-// whatever's been appended to its Filler since the last tick and publish it.
-// Runs until ctx is cancelled; like bridgeFblockEvents's goroutines, Run
-// doesn't wait for it to actually exit at shutdown.
+// second, for every storage with at least one tracked channel, pull
+// whatever's been appended to its shared segment's Filler since the last
+// tick and publish it. Runs until ctx is cancelled; like bridgeFblockEvents's
+// goroutines, Run doesn't wait for it to actually exit at shutdown.
 func (f *Farcd) runLiveProgressTicker(ctx context.Context) {
 	ticker := time.NewTicker(liveProgressInterval)
 	defer ticker.Stop()
@@ -574,34 +573,14 @@ func (f *Farcd) runLiveProgressTicker(ctx context.Context) {
 }
 
 func (f *Farcd) tickLiveProgress() {
-	f.liveMu.Lock()
-	channels := make([]uint16, 0, len(f.liveCursors))
-	for ch := range f.liveCursors {
-		channels = append(channels, ch)
-	}
-	f.liveMu.Unlock()
-
-	for _, channel := range channels {
-		f.liveMu.Lock()
-		cursor := f.liveCursors[channel]
-		f.liveMu.Unlock()
-
-		elems, total, contentBytes, ok := f.ing.LiveElementsSince(channel, cursor)
+	for _, storageID := range f.ing.StorageIDs() {
+		cursor := f.liveStorageCursors[storageID]
+		elems, total, contentBytes, ok := f.ing.LiveElementsSinceStorage(storageID, cursor)
 		if !ok || len(elems) == 0 {
 			continue
 		}
-		storageID, _ := f.ing.StorageOf(channel)
-		f.push.PublishLiveProgress(storageID, channel, total, contentBytes, elems, uint32(cursor))
-
-		f.liveMu.Lock()
-		// Only advance if the channel is still recording -- it may have
-		// stopped (and been deleted from liveCursors) between this tick's
-		// snapshot above and now, in which case leave the map alone rather
-		// than resurrecting a now-meaningless entry.
-		if _, stillRecording := f.liveCursors[channel]; stillRecording {
-			f.liveCursors[channel] = total
-		}
-		f.liveMu.Unlock()
+		f.push.PublishLiveProgress(storageID, total, contentBytes, elems, uint32(cursor))
+		f.liveStorageCursors[storageID] = total
 	}
 }
 

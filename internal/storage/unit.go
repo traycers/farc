@@ -103,6 +103,15 @@ func (u *Unit) currentParams() fblock.Params {
 	return u.params
 }
 
+// MinContainerShare returns the storage's configured minimum fcontainer
+// share (fblock/params.go's Params.MinContainerShare) — the fraction of
+// fblock_size a single fcontainer is expected to fill. Exposed publicly (a
+// symmetric counterpart to Geometry) so internal/farcd can size
+// internal/ingest's shared-segment flush target off it without reaching
+// into currentParams, which stays private since nothing else outside this
+// package needs the whole Params value.
+func (u *Unit) MinContainerShare() float64 { return u.currentParams().MinContainerShare }
+
 func (u *Unit) nextWriteSequence() uint64 {
 	return u.writeSeq.Add(1)
 }

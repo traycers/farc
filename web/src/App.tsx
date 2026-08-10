@@ -8,6 +8,7 @@ import ChannelEditPage from './pages/channels/ChannelEditPage'
 import PlayerPage from './pages/PlayerPage'
 import JournalPage from './pages/JournalPage'
 import FblockLivePage from './pages/FblockLivePage'
+import FblockListPage from './pages/FblockListPage'
 import FblockStatusPage from './pages/FblockStatusPage'
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
@@ -36,8 +37,8 @@ export default function App() {
             <NavLink to="/fblock-live" className={navLinkClass}>
               Fblock (live)
             </NavLink>
-            <NavLink to="/fblock-status" className={navLinkClass}>
-              Fblock (status)
+            <NavLink to="/fblocks" className={navLinkClass}>
+              Fblocks
             </NavLink>
           </div>
         </div>
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="/player" element={<PlayerPage />} />
           <Route path="/journal" element={<JournalPage />} />
           <Route path="/fblock-live" element={<FblockLivePage />} />
+          <Route path="/fblocks" element={<FblockListPage />} />
           <Route path="/fblock-status" element={<FblockStatusPage />} />
         </Routes>
       </main>

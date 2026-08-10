@@ -475,11 +475,11 @@ func TestLiveNodeFromElement(t *testing.T) {
 	}
 }
 
-// TestEventPushServer_GlobalPublishLive_DeliveredWhenChannelSubscribed
+// TestEventPushServer_GlobalPublishLive_DeliveredWhenStorageSubscribed
 // exercises the fblock-live page's other WS mechanism: a global subscriber
-// that lists channel 1 in subscribeMessage.Channels receives a "live" frame
-// PublishLive sends for that channel.
-func TestEventPushServer_GlobalPublishLive_DeliveredWhenChannelSubscribed(t *testing.T) {
+// that lists storage "s1" in subscribeMessage.LiveStorages receives a
+// "live" frame PublishLive sends for that storage.
+func TestEventPushServer_GlobalPublishLive_DeliveredWhenStorageSubscribed(t *testing.T) {
 	reg := NewStorageRegistry()
 	push := NewEventPushServer(reg)
 	s := NewHttpApiServer(reg, nil, push)
@@ -487,14 +487,14 @@ func TestEventPushServer_GlobalPublishLive_DeliveredWhenChannelSubscribed(t *tes
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	err := conn.WriteJSON(subscribeMessage{Storage: "", Channels: []uint16{1}})
+	err := conn.WriteJSON(subscribeMessage{Storage: "", LiveStorages: []string{"s1"}})
 	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
 
 	push.PublishLive(livePushMessage{
-		Type: "live", Storage: "s1", Channel: 1, Total: 3,
+		Type: "live", Storage: "s1", Total: 3,
 		Nodes: []liveNode{{ID: 0, Role: "root", Type: "void"}},
 	})
 
@@ -503,7 +503,7 @@ func TestEventPushServer_GlobalPublishLive_DeliveredWhenChannelSubscribed(t *tes
 	if err := conn.ReadJSON(&msg); err != nil {
 		t.Fatalf("read live frame: %v", err)
 	}
-	if msg.Type != "live" || msg.Storage != "s1" || msg.Channel != 1 || msg.Total != 3 || len(msg.Nodes) != 1 {
+	if msg.Type != "live" || msg.Storage != "s1" || msg.Total != 3 || len(msg.Nodes) != 1 {
 		t.Fatalf("live frame = %+v", msg)
 	}
 }
@@ -521,7 +521,7 @@ func TestEventPushServer_PublishLiveProgress_ComputesContentBytesAndTocEstimate(
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	err := conn.WriteJSON(subscribeMessage{Storage: "", Channels: []uint16{1}})
+	err := conn.WriteJSON(subscribeMessage{Storage: "", LiveStorages: []string{"s1"}})
 	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestEventPushServer_PublishLiveProgress_ComputesContentBytesAndTocEstimate(
 	}
 	const total = 5 // pretend 3 earlier elements were already delivered
 	const contentBytes = 12345
-	push.PublishLiveProgress("s1", 1, total, contentBytes, elems, 3)
+	push.PublishLiveProgress("s1", total, contentBytes, elems, 3)
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var msg livePushMessage
@@ -552,9 +552,9 @@ func TestEventPushServer_PublishLiveProgress_ComputesContentBytesAndTocEstimate(
 	}
 }
 
-// TestEventPushServer_GlobalPublishLive_FiltersOtherChannels verifies a
-// subscriber only sees live progress for channels it actually listed.
-func TestEventPushServer_GlobalPublishLive_FiltersOtherChannels(t *testing.T) {
+// TestEventPushServer_GlobalPublishLive_FiltersOtherStorages verifies a
+// subscriber only sees live progress for storages it actually listed.
+func TestEventPushServer_GlobalPublishLive_FiltersOtherStorages(t *testing.T) {
 	reg := NewStorageRegistry()
 	push := NewEventPushServer(reg)
 	s := NewHttpApiServer(reg, nil, push)
@@ -562,28 +562,28 @@ func TestEventPushServer_GlobalPublishLive_FiltersOtherChannels(t *testing.T) {
 	defer srv.Close()
 
 	conn := dialWS(t, srv)
-	err := conn.WriteJSON(subscribeMessage{Storage: "", Channels: []uint16{1}})
+	err := conn.WriteJSON(subscribeMessage{Storage: "", LiveStorages: []string{"s1"}})
 	if err != nil {
 		t.Fatalf("write subscribe: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	push.PublishLive(livePushMessage{Type: "live", Channel: 2, Total: 1})
+	push.PublishLive(livePushMessage{Type: "live", Storage: "s2", Total: 1})
 
 	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	var msg livePushMessage
 	err = conn.ReadJSON(&msg)
 	if err == nil {
-		t.Fatalf("unexpected live frame for unsubscribed channel: %+v", msg)
+		t.Fatalf("unexpected live frame for unsubscribed storage: %+v", msg)
 	}
 }
 
-// TestEventPushServer_GlobalPublishLive_RequiresChannelsSubscription
-// verifies that omitting Channels entirely (the ordinary Journal/UI
+// TestEventPushServer_GlobalPublishLive_RequiresLiveStoragesSubscription
+// verifies that omitting LiveStorages entirely (the ordinary Journal/UI
 // subscription today) suppresses live progress altogether, not just for
-// unlisted channels -- see livePushMessage's own doc comment: unscoped
+// unlisted storages -- see livePushMessage's own doc comment: unscoped
 // delivery would be meaningless.
-func TestEventPushServer_GlobalPublishLive_RequiresChannelsSubscription(t *testing.T) {
+func TestEventPushServer_GlobalPublishLive_RequiresLiveStoragesSubscription(t *testing.T) {
 	reg := NewStorageRegistry()
 	push := NewEventPushServer(reg)
 	s := NewHttpApiServer(reg, nil, push)
@@ -597,12 +597,12 @@ func TestEventPushServer_GlobalPublishLive_RequiresChannelsSubscription(t *testi
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	push.PublishLive(livePushMessage{Type: "live", Channel: 1, Total: 1})
+	push.PublishLive(livePushMessage{Type: "live", Storage: "s1", Total: 1})
 
 	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	var msg livePushMessage
 	err = conn.ReadJSON(&msg)
 	if err == nil {
-		t.Fatalf("unexpected live frame without a Channels subscription: %+v", msg)
+		t.Fatalf("unexpected live frame without a LiveStorages subscription: %+v", msg)
 	}
 }

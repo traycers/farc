@@ -173,36 +173,36 @@ func TestIngestManager_StartThenAddChannel_BothPresent(t *testing.T) {
 	}
 }
 
-func TestIngestManager_LiveElementsSince(t *testing.T) {
+func TestIngestManager_LiveElementsSinceStorage(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()
 
-	if _, _, _, ok := m.LiveElementsSince(1, 0); ok {
-		t.Fatal("LiveElementsSince for unknown channel: want ok=false")
+	if _, _, _, ok := m.LiveElementsSinceStorage("disk0", 0); ok {
+		t.Fatal("LiveElementsSinceStorage for unknown storage: want ok=false")
 	}
 
 	err := m.AddChannel(testChannelConfig(1, "disk0"))
 	if err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
-	if _, _, _, ok := m.LiveElementsSince(1, 0); ok {
-		t.Fatal("LiveElementsSince before recording starts: want ok=false")
+	if _, _, _, ok := m.LiveElementsSinceStorage("disk0", 0); ok {
+		t.Fatal("LiveElementsSinceStorage before recording starts: want ok=false")
 	}
 
 	err = m.StartRecording(1, 100, nil)
 	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
-	if _, _, _, ok := m.LiveElementsSince(1, 0); !ok {
-		t.Fatal("LiveElementsSince while recording: want ok=true")
+	if _, _, _, ok := m.LiveElementsSinceStorage("disk0", 0); !ok {
+		t.Fatal("LiveElementsSinceStorage while recording: want ok=true")
 	}
 
 	err = m.StopRecording(1, 200)
 	if err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}
-	if _, _, _, ok := m.LiveElementsSince(1, 0); ok {
-		t.Fatal("LiveElementsSince after recording stops: want ok=false")
+	if _, _, _, ok := m.LiveElementsSinceStorage("disk0", 0); ok {
+		t.Fatal("LiveElementsSinceStorage after recording stops (last channel detached): want ok=false")
 	}
 }
 

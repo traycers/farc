@@ -23,10 +23,20 @@ import (
 // the one subscriber that sets it, to compute vaa-blocks without polling
 // GET .../toc).
 type subscribeMessage struct {
-	Storage    string   `json:"storage"`
-	Want       []string `json:"want"`
-	Channels   []uint16 `json:"channels"`
-	IncludeTOC bool     `json:"include_toc"`
+	Storage  string   `json:"storage"`
+	Want     []string `json:"want"`
+	Channels []uint16 `json:"channels"`
+	// LiveStorages scopes livePushMessage delivery on a global subscription
+	// -- required for "live" frames to be delivered at all (an empty set
+	// means "no live messages", not "all of them", since live progress is
+	// meaningless unscoped to a storage). Unrelated to Channels above, which
+	// is the per-storage NotificationBus subscription's own fblock-bitmap
+	// filter (ServeHTTP's non-global branch) -- fblock-live's live-progress
+	// feed is storage-scoped, not channel-scoped (docs/docs/archive/
+	// adr/014-channel-registry.md: one fcontainer commonly holds every
+	// channel of a storage at once).
+	LiveStorages []string `json:"live_storages"`
+	IncludeTOC   bool     `json:"include_toc"`
 }
 
 // pushMessage is one WS frame pushed to a subscribed client — a compact,
@@ -90,18 +100,19 @@ func liveNodeFromElement(id uint32, e mediatree.Element) liveNode {
 	return n
 }
 
-// livePushMessage reports fcontainer tree growth for a channel whose
+// livePushMessage reports fcontainer tree growth for a storage whose shared
 // segment is still being recorded (not yet written to disk — see
-// internal/farcd's periodic ticker, the only publisher). Nodes is the delta
-// since the subscriber's last-seen Total (the fblock-live page's own
-// cursor); Total is the new cursor to pass as `since` on the next tick. A
-// client that wants these must also set subscribeMessage.Channels, since
-// unlike JournalEvent's fblock.* names, live progress is meaningless
-// unscoped to a channel.
+// internal/farcd's periodic ticker, the only publisher). One storage's
+// fcontainer commonly covers several channels at once (docs/docs/archive/
+// adr/014-channel-registry.md), so this is deliberately not scoped to any
+// one channel. Nodes is the delta since the subscriber's last-seen Total
+// (the fblock-live page's own cursor); Total is the new cursor to pass as
+// `since` on the next tick. A client that wants these must also set
+// subscribeMessage.LiveStorages, since live progress is meaningless
+// unscoped to a storage.
 type livePushMessage struct {
 	Type              string     `json:"type"` // "live"
 	Storage           string     `json:"storage"`
-	Channel           uint16     `json:"channel"`
 	Total             int        `json:"total"`
 	ContentBytes      uint64     `json:"content_bytes"`
 	EstimatedTocBytes uint64     `json:"estimated_toc_bytes"`
@@ -286,13 +297,13 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 	for _, n := range sub.Want {
 		want[n] = true
 	}
-	// liveChannels scopes livePushMessage delivery only -- classic events
-	// stay unfiltered by channel, matching pre-existing behavior; live
+	// liveStorages scopes livePushMessage delivery only -- classic events
+	// stay unfiltered by storage, matching pre-existing behavior; live
 	// progress is meaningless unscoped (see livePushMessage's doc comment),
 	// so an empty set here means "no live messages", not "all of them".
-	liveChannels := make(map[uint16]bool, len(sub.Channels))
-	for _, c := range sub.Channels {
-		liveChannels[c] = true
+	liveStorages := make(map[string]bool, len(sub.LiveStorages))
+	for _, s := range sub.LiveStorages {
+		liveStorages[s] = true
 	}
 
 	events := make(chan JournalEvent, 64)
@@ -337,7 +348,7 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 				}
 			}
 		case lv := <-live:
-			if !liveChannels[lv.Channel] {
+			if !liveStorages[lv.Storage] {
 				continue
 			}
 			err := conn.WriteJSON(lv)
@@ -348,38 +359,38 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 	}
 }
 
-// PublishLiveProgress builds a livePushMessage from elems -- a live segment
-// snapshot delta, as returned by internal/ingest.CapturePolicy.
-// LiveElementsSince via IngestManager -- and fans it out via PublishLive.
-// firstID is the absolute (Filler creation-order) id of elems[0], i.e. the
-// cursor internal/farcd's periodic ticker passed to LiveElementsSince, so
-// each element's true id can be recovered as firstID+i. Keeping
-// liveNode/livePushMessage's wire shape unexported (this is the one exported
-// entry point for producing them) means farcd never has to import
-// mediatree's role/type stringification or the value/size decoding this
-// package already implements for the finalized-tree endpoint.
+// PublishLiveProgress builds a livePushMessage from elems -- a live
+// fcontainer snapshot delta for storageID's shared segment, as returned by
+// internal/ingest.IngestManager.LiveElementsSinceStorage -- and fans it out
+// via PublishLive. firstID is the absolute (Filler creation-order) id of
+// elems[0], i.e. the cursor internal/farcd's periodic ticker passed to
+// LiveElementsSinceStorage, so each element's true id can be recovered as
+// firstID+i. Keeping liveNode/livePushMessage's wire shape unexported (this
+// is the one exported entry point for producing them) means farcd never has
+// to import mediatree's role/type stringification or the value/size
+// decoding this package already implements for the finalized-tree endpoint.
 //
 // contentBytes is the segment's total encoded content size so far
-// (Filler.ContentBytes, via LiveElementsSince). EstimatedTocBytes is
+// (Filler.ContentBytes, via LiveElementsSinceStorage). EstimatedTocBytes is
 // computed here, not passed in, by reusing toc.ComputeOffsets against the
 // current node count total -- an exact prediction of the eventual TOC
 // section size *if* the segment stopped growing right now (the fblock-live
 // page's fill bar treats it as a live estimate, since more nodes may still
 // arrive).
-func (p *EventPushServer) PublishLiveProgress(storageID string, channel uint16, total int, contentBytes int, elems []mediatree.Element, firstID uint32) {
+func (p *EventPushServer) PublishLiveProgress(storageID string, total int, contentBytes int, elems []mediatree.Element, firstID uint32) {
 	nodes := make([]liveNode, len(elems))
 	for i, e := range elems {
 		nodes[i] = liveNodeFromElement(firstID+uint32(i), e)
 	}
 	estimatedTocBytes := uint64(toc.ComputeOffsets(uint32(total)).Total)
 	p.PublishLive(livePushMessage{
-		Type: "live", Storage: storageID, Channel: channel, Total: total,
+		Type: "live", Storage: storageID, Total: total,
 		ContentBytes: uint64(contentBytes), EstimatedTocBytes: estimatedTocBytes, Nodes: nodes,
 	})
 }
 
 // PublishLive fans msg out to every current global subscriber whose
-// subscribeMessage.Channels includes msg.Channel, non-blocking (same
+// subscribeMessage.LiveStorages includes msg.Storage, non-blocking (same
 // drop-if-slow policy as Publish) -- internal/farcd's periodic live-progress
 // ticker is the only caller.
 func (p *EventPushServer) PublishLive(msg livePushMessage) {

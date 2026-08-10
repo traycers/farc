@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"traycers/farc/internal/fcontainer"
-	"traycers/farc/mediatree"
 )
 
 // PolicyType selects a CapturePolicy strategy (docs/docs/archive/
@@ -38,7 +37,7 @@ type PolicyParams struct {
 // policy, or StartRecording on an event one).
 var ErrWrongPolicyType = errors.New("ingest: command not valid for this CapturePolicy's current type")
 
-// Recorder is the subset of internal/storage.Unit CapturePolicy needs. A
+// Recorder is the subset of internal/storage.Unit sharedSegment needs. A
 // real *storage.Unit satisfies this directly. "Get/return a buffer" per
 // docs/docs/archive/00-requirements.md §4.8 has no separate handshake in
 // this v1 (ADR-017's streaming write is deferred, see internal/storage's
@@ -48,17 +47,30 @@ type Recorder interface {
 	WriteFcontainer(channels []uint16, begin, end uint64, filler *fcontainer.Filler, now uint64) ([16]byte, error)
 }
 
+// configEntry is one (stream, kind)'s cached config-node handle into the
+// storage's current sharedSegment — cid/gen are only valid together and
+// only for as long as gen still matches the segment's current generation
+// (see sharedSegment's doc comment).
+type configEntry struct {
+	cid    uint32
+	params *fcontainer.StreamParams // which params version cid was built from
+	gen    uint64
+}
+
 // CapturePolicy is one channel's capture strategy plus all the state that
 // must survive a §6 SetPolicy swap: the frame queue, cached last-known
-// stream params (independent of segment state), and the currently open
-// segment (if any). Continuous and event share this one state machine —
-// see this package's doc comment — differing only in which admin command
-// opens/extends a segment and whether Tick ever does anything.
+// stream params (independent of segment state), and whether this channel
+// is currently attached to its storage's shared segment. Continuous and
+// event share this one state machine — see this package's doc comment —
+// differing only in which admin command attaches/extends and whether Tick
+// ever does anything. WHERE the captured frames actually land (the shared,
+// possibly multi-channel fcontainer) is sharedSegment's concern, not this
+// type's — see docs/docs/archive/adr/014-channel-registry.md.
 type CapturePolicy struct {
 	mu sync.Mutex
 
-	channel  uint16
-	recorder Recorder
+	channel uint16
+	segment *sharedSegment
 
 	policyType PolicyType
 	params     PolicyParams
@@ -66,14 +78,10 @@ type CapturePolicy struct {
 	queue        *FrameQueue
 	cachedParams map[StreamID]*fcontainer.StreamParams
 
-	recording  bool
-	stopAt     uint64
-	stopAtSet  bool
-	filler     *fcontainer.Filler
-	configIDs  map[StreamID]uint32
-	configVers map[StreamID]*fcontainer.StreamParams // which params version configIDs[id] was built from
-	haveFrame  bool
-	begin, end uint64
+	recording bool
+	stopAt    uint64
+	stopAtSet bool
+	configs   map[StreamID]configEntry
 
 	// onRecordingChange fires on every actual p.recording flip, from
 	// whichever admin command or internal state machine (Tick's stop_at
@@ -90,19 +98,21 @@ type CapturePolicy struct {
 }
 
 // NewCapturePolicy creates a CapturePolicy for channel, initially idle.
-// queueDepth (ns) is the frame queue's retention window — a channel-level
-// constant, not touched by SetPolicy (docs/docs/archive/
-// 10-capture-policy.md §6: "очередь... передаётся как есть").
-func NewCapturePolicy(channel uint16, recorder Recorder, queueDepth uint64, policyType PolicyType, params PolicyParams) *CapturePolicy {
+// segment is this channel's storage's shared segment coordinator (one per
+// storage, shared with every other channel recording into the same
+// storage — see sharedSegment's doc comment). queueDepth (ns) is the frame
+// queue's retention window — a channel-level constant, not touched by
+// SetPolicy (docs/docs/archive/10-capture-policy.md §6: "очередь...
+// передаётся как есть").
+func NewCapturePolicy(channel uint16, segment *sharedSegment, queueDepth uint64, policyType PolicyType, params PolicyParams) *CapturePolicy {
 	return &CapturePolicy{
 		channel:           channel,
-		recorder:          recorder,
+		segment:           segment,
 		policyType:        policyType,
 		params:            params,
 		queue:             NewFrameQueue(queueDepth),
 		cachedParams:      make(map[StreamID]*fcontainer.StreamParams),
-		configIDs:         make(map[StreamID]uint32),
-		configVers:        make(map[StreamID]*fcontainer.StreamParams),
+		configs:           make(map[StreamID]configEntry),
 		onRecordingChange: func(uint16, bool, uint64) {},
 	}
 }
@@ -134,7 +144,7 @@ func (p *CapturePolicy) SetStreamParams(stream uint32, kind fcontainer.StreamKin
 }
 
 // HandleFrame is called for every decoded frame (§4). It always queues the
-// frame; if a segment is open, it's also forwarded to the Filler
+// frame; if a segment is open, it's also forwarded to the shared segment
 // immediately.
 func (p *CapturePolicy) HandleFrame(stream uint32, kind fcontainer.StreamKind, frame fcontainer.Frame) error {
 	p.mu.Lock()
@@ -150,81 +160,72 @@ func (p *CapturePolicy) HandleFrame(stream uint32, kind fcontainer.StreamKind, f
 	if !p.recording {
 		return nil
 	}
-	cid, err := p.ensureConfigLocked(id, params)
-	if err != nil {
-		return err
-	}
-	err = p.filler.AddFrames(cid, []fcontainer.Frame{frame})
-	if err != nil {
-		return err
-	}
-	p.trackTimeLocked(frame.Time)
-	return nil
+	return p.writeFrameLocked(id, params, frame)
 }
 
-// ensureConfigLocked returns the current segment's config id for id,
-// adding a new config node (a new version) if params differs by identity
-// from whatever was last used — pointer identity, not value equality,
-// because cachedParams always stores a fresh copy per SetStreamParams
-// call, so identity exactly captures "a genuinely new params event", which
-// is what should open a new config node.
-func (p *CapturePolicy) ensureConfigLocked(id StreamID, params *fcontainer.StreamParams) (uint32, error) {
-	if cid, ok := p.configIDs[id]; ok && p.configVers[id] == params {
-		return cid, nil
+// writeFrameLocked writes one frame to the segment under id/params' current
+// config, retrying once if the segment flushed (possibly triggered by a
+// different channel sharing it) between ensureConfigLocked and addFrames —
+// see sharedSegment's errStaleGeneration doc.
+func (p *CapturePolicy) writeFrameLocked(id StreamID, params *fcontainer.StreamParams, frame fcontainer.Frame) error {
+	for attempt := 0; attempt < 2; attempt++ {
+		cid, gen, err := p.ensureConfigLocked(id, params)
+		if err != nil {
+			return err
+		}
+		err = p.segment.addFrames(gen, p.channel, cid, []fcontainer.Frame{frame})
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errStaleGeneration) {
+			return err
+		}
+		delete(p.configs, id)
 	}
-	cid, err := p.filler.AddStreamParams(uint32(p.channel), id.Stream, id.Kind, *params)
+	return errors.New("ingest: writeFrame: segment kept flushing across retries")
+}
+
+// ensureConfigLocked returns the current segment's config id (and the
+// generation it's valid for) for id, adding a new config node (a new
+// version) if params differs by identity from whatever was last used —
+// pointer identity, not value equality, because cachedParams always stores
+// a fresh copy per SetStreamParams call, so identity exactly captures "a
+// genuinely new params event", which is what should open a new config
+// node.
+func (p *CapturePolicy) ensureConfigLocked(id StreamID, params *fcontainer.StreamParams) (cid uint32, gen uint64, err error) {
+	if ce, ok := p.configs[id]; ok && ce.params == params {
+		return ce.cid, ce.gen, nil
+	}
+	cid, gen, err = p.segment.addStreamParams(p.channel, id.Stream, id.Kind, *params)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	p.configIDs[id] = cid
-	p.configVers[id] = params
-	return cid, nil
+	p.configs[id] = configEntry{cid: cid, params: params, gen: gen}
+	return cid, gen, nil
 }
 
-func (p *CapturePolicy) trackTimeLocked(t uint64) {
-	if !p.haveFrame {
-		p.begin, p.end = t, t
-		p.haveFrame = true
-		return
-	}
-	if t < p.begin {
-		p.begin = t
-	}
-	if t > p.end {
-		p.end = t
-	}
-}
-
-// openSegmentLocked opens a fresh segment and replays every queued frame
-// with time >= replayFrom into it, in order (§5.1/§5.2), adding whichever
-// distinct config versions they span along the way.
+// openSegmentLocked attaches to the storage's shared segment and replays
+// every queued frame with time >= replayFrom into it, in order (§5.1/§5.2),
+// adding whichever distinct config versions they span along the way.
 func (p *CapturePolicy) openSegmentLocked(replayFrom uint64) error {
-	p.filler = fcontainer.New()
-	p.configIDs = make(map[StreamID]uint32)
-	p.configVers = make(map[StreamID]*fcontainer.StreamParams)
-	p.haveFrame = false
+	p.configs = make(map[StreamID]configEntry)
+	p.segment.attach(p.channel)
 	p.recording = true
 	p.onRecordingChange(p.channel, true, replayFrom)
 
 	for _, qf := range p.queue.Since(replayFrom) {
 		id := StreamID{qf.Stream, qf.Kind}
-		cid, err := p.ensureConfigLocked(id, qf.Params)
+		err := p.writeFrameLocked(id, qf.Params, qf.Frame)
 		if err != nil {
 			return fmt.Errorf("ingest: replay: %w", err)
 		}
-		err = p.filler.AddFrames(cid, []fcontainer.Frame{qf.Frame})
-		if err != nil {
-			return fmt.Errorf("ingest: replay: %w", err)
-		}
-		p.trackTimeLocked(qf.Frame.Time)
 	}
 	return nil
 }
 
-// closeSegmentLocked closes the current segment (if any) and hands the
-// finished fcontainer to Recorder. A segment that never received a single
-// frame is simply discarded — the docs don't cover this case explicitly,
-// and writing an empty fcontainer would serve no purpose.
+// closeSegmentLocked detaches from the storage's shared segment. The
+// segment itself decides whether that actually flushes anything to disk —
+// see sharedSegment.detach.
 func (p *CapturePolicy) closeSegmentLocked(now uint64) error {
 	if !p.recording {
 		return nil
@@ -232,15 +233,7 @@ func (p *CapturePolicy) closeSegmentLocked(now uint64) error {
 	p.recording = false
 	p.onRecordingChange(p.channel, false, now)
 	p.stopAtSet = false
-	filler := p.filler
-	begin, end, wrote := p.begin, p.end, p.haveFrame
-	p.filler = nil
-	p.haveFrame = false
-	if !wrote {
-		return nil
-	}
-	_, err := p.recorder.WriteFcontainer([]uint16{p.channel}, begin, end, filler, now)
-	return err
+	return p.segment.detach(p.channel, now)
 }
 
 // StartRecording is continuous's "начать запись [with from_time]" (§5.1).
@@ -334,22 +327,6 @@ func (p *CapturePolicy) Policy() (PolicyType, PolicyParams) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.policyType, p.params
-}
-
-// LiveElementsSince reports the current segment's tree elements appended
-// since cursor n, for a live/streaming view of the fcontainer still being
-// built (the web UI's fblock-live page). contentBytes is the segment's
-// total encoded content size so far (Filler.ContentBytes), used by that
-// page's fill bar. ok is false when no segment is currently open
-// (p.recording == false) — n is meaningless in that case, and the caller
-// should drop its cursor rather than keep comparing against it.
-func (p *CapturePolicy) LiveElementsSince(n int) (elems []mediatree.Element, total int, contentBytes int, ok bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.recording {
-		return nil, 0, 0, false
-	}
-	return p.filler.ElementsSince(n), p.filler.Len(), p.filler.ContentBytes(), true
 }
 
 // Close forces the current segment closed, if any, regardless of policy

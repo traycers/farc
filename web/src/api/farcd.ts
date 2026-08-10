@@ -1,4 +1,4 @@
-import { parseCandidatesJSON, parseFblocksJSON, type Candidate, type FblockInfo } from './ns'
+import { parseCandidatesJSON, parseFblocksJSON, type Candidate, type FblockListPage } from './ns'
 
 const BASE = '/api/farcd'
 
@@ -87,11 +87,12 @@ export async function candidates(
   return parseCandidatesJSON(text)
 }
 
-// listFblocks fetches every fblock in storage, regardless of channel --
-// GET /storages/{id}/fblocks, internal/api/fblocks.go -- for the
-// fblock-status page's browse-and-pick table.
-export async function listFblocks(storage: string): Promise<FblockInfo[]> {
-  const text = await (await ok(await fetch(`${BASE}/storages/${encodeURIComponent(storage)}/fblocks`))).text()
+// listFblocks fetches one page of fblocks in storage, regardless of channel
+// -- GET /storages/{id}/fblocks?offset=&limit=, internal/api/fblocks.go --
+// for the fblocks list page's browse-and-pick table.
+export async function listFblocks(storage: string, offset: number, limit: number): Promise<FblockListPage> {
+  const url = `${BASE}/storages/${encodeURIComponent(storage)}/fblocks?offset=${offset}&limit=${limit}`
+  const text = await (await ok(await fetch(url))).text()
   return parseFblocksJSON(text)
 }
 
