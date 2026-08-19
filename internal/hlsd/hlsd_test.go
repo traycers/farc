@@ -422,8 +422,12 @@ func waitForNotConfigured(t *testing.T, url string) {
 
 // readPersistedChannels reads path's raw JSON "channels" list directly,
 // bypassing hlsconfig.Load's env-sourced field validation (which would fail
-// in a test process with no HLS_SERVER_* env set).
-func readPersistedChannels(t *testing.T, path string) []hlsconfig.Channel {
+// in a test process with no HLS_SERVER_* env set). hlsconfig.Save writes in
+// place (os.WriteFile, not temp-plus-rename -- see its doc comment), so a
+// read landing between Save's truncate and the full write completing can
+// observe a partial/empty file; that's reported via ok=false rather than
+// t.Fatalf so waitForPersistedChannels' poll loop can just retry.
+func readPersistedChannels(t *testing.T, path string) ([]hlsconfig.Channel, error) {
 	t.Helper()
 	buf, err := os.ReadFile(path)
 	if err != nil {
@@ -434,9 +438,9 @@ func readPersistedChannels(t *testing.T, path string) []hlsconfig.Channel {
 	}
 	err = json.Unmarshal(buf, &wire)
 	if err != nil {
-		t.Fatalf("unmarshal %s: %v", path, err)
+		return nil, err
 	}
-	return wire.Channels
+	return wire.Channels, nil
 }
 
 // waitForPersistedChannels polls path until its persisted channel list
@@ -449,12 +453,23 @@ func waitForPersistedChannels(t *testing.T, path string, want []hlsconfig.Channe
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	var last []hlsconfig.Channel
+	var lastErr error
 	for time.Now().Before(deadline) {
-		last = readPersistedChannels(t, path)
+		got, err := readPersistedChannels(t, path)
+		if err != nil {
+			lastErr = err
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		lastErr = nil
+		last = got
 		if channelListsEqual(last, want) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("config file channels never converged to %v, last read error: %v", want, lastErr)
 	}
 	t.Fatalf("config file channels never converged to %v, last = %v", want, last)
 }
