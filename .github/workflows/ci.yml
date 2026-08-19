@@ -33,8 +33,10 @@ jobs:
         with:
           go-version: "1.26.6"
       # .golangci.yaml is a "version: 2" config -- v6 of this action only
-      # supports golangci-lint v1, so a v2.x binary needs v7 of the action.
-      - uses: golangci/golangci-lint-action@v7
+      # supports golangci-lint v1, so a v2.x binary needs v7+ of the action.
+      # v9 also drops the Node 20 runtime (deprecated by GitHub Actions)
+      # in favor of Node 24.
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
 
