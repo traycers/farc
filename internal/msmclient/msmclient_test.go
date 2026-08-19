@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/api"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/msmclient"
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/api"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/msmclient"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
 )
 
 // Recreated from internal/api/testutil_test.go (an unexported _test.go

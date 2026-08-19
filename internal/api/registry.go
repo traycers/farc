@@ -5,7 +5,7 @@ import (
 	"sort"
 	"sync"
 
-	"traycers/farc/internal/storage"
+	"github.com/traycers/farc/internal/storage"
 )
 
 // StorageInfo is StorageRegistry's public listing shape for GET /storages.

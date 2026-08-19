@@ -1,8 +1,8 @@
 package playlist
 
 import (
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 // videoSig and audioSig are comparable snapshots of a channel's active
@@ -74,15 +74,14 @@ func audioSigFor(c *toc.Columns, start, stop uint32, first bool) (audioSig, bool
 // between the end of the previous record and the start of next, for
 // channel — the condition ADR-019 requires a #EXT-X-DISCONTINUITY for.
 func configChanged(prev, next *toc.Columns, channel uint16) bool {
-	prevStart, prevStop, ok := channelSubtree(prev, channel)
+	prevStart, prevStop, ok := toc.ChannelSubtreeRange(prev, channel)
 	if !ok {
 		return false
 	}
-	nextStart, nextStop, ok := channelSubtree(next, channel)
+	nextStart, nextStop, ok := toc.ChannelSubtreeRange(next, channel)
 	if !ok {
 		return false
 	}
-
 	prevVideo, prevHasVideo := videoSigFor(prev, prevStart, prevStop, false)
 	nextVideo, nextHasVideo := videoSigFor(next, nextStart, nextStop, true)
 	if prevHasVideo != nextHasVideo || (prevHasVideo && prevVideo != nextVideo) {

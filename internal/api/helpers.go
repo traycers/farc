@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/traycers/farc/internal/ingest"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -42,6 +44,18 @@ func writeAPIError(w http.ResponseWriter, err error, defaultStatus int) {
 		return
 	}
 	writeError(w, defaultStatus, err)
+}
+
+// writeCommandError maps an IngestManager command error (TriggerEvent/
+// StartRecording/StopRecording) to its HTTP status: 409 for
+// ingest.ErrWrongPolicyType (the command doesn't apply to this channel's
+// current CapturePolicy), 404 for everything else (an unknown channel id).
+func writeCommandError(w http.ResponseWriter, err error) {
+	status := http.StatusNotFound
+	if errors.Is(err, ingest.ErrWrongPolicyType) {
+		status = http.StatusConflict
+	}
+	writeError(w, status, err)
 }
 
 func decodeJSON(r *http.Request, v any) error {

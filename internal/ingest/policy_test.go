@@ -1,36 +1,107 @@
 package ingest
 
 import (
+	"encoding/binary"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
 )
 
-type recordedWrite struct {
-	channels []uint16
-	begin    uint64
-	end      uint64
-	filler   *fcontainer.Filler
+// fakeUnderlyingSegment is a real *fcontainer.Filler wrapped to satisfy
+// storage.Segment -- the fake counterpart of internal/storage's real
+// segmentImpl, isolating internal/ingest's tests from real disk I/O
+// exactly as the old fakeRecorder did for the pre-shared-segment design.
+type fakeUnderlyingSegment struct {
+	mu               sync.Mutex
+	filler           *fcontainer.Filler
+	closed           bool
+	addStreamParamsN int
 }
 
-type fakeRecorder struct {
-	writes []recordedWrite
+func newFakeUnderlyingSegment() *fakeUnderlyingSegment {
+	return &fakeUnderlyingSegment{filler: fcontainer.New()}
 }
 
-func (r *fakeRecorder) WriteFcontainer(channels []uint16, begin, end uint64, filler *fcontainer.Filler, now uint64) ([16]byte, error) {
-	r.writes = append(r.writes, recordedWrite{append([]uint16(nil), channels...), begin, end, filler})
-	return [16]byte{byte(len(r.writes))}, nil
+func (f *fakeUnderlyingSegment) AddStreamParams(channel, stream uint32, kind fcontainer.StreamKind, params fcontainer.StreamParams) (uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return 0, storage.ErrSegmentClosed
+	}
+	f.addStreamParamsN++
+	return f.filler.AddStreamParams(channel, stream, kind, params)
 }
 
-// newTestSegment wraps rec in a sharedSegment with a flush target far larger
-// than anything these tiny synthetic-frame tests ever accumulate, so the
-// segment's own size-triggered auto-flush (sharedSegment's doc comment)
-// never fires and every test's single CapturePolicy behaves exactly as it
-// did back when it owned a private Filler outright.
-func newTestSegment(rec Recorder) *sharedSegment {
-	return newSharedSegment(rec, 1<<30)
+func (f *fakeUnderlyingSegment) AddFrames(configID uint32, frames []fcontainer.Frame) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return storage.ErrSegmentClosed
+	}
+	return f.filler.AddFrames(configID, frames)
+}
+
+func (f *fakeUnderlyingSegment) RegisterChannel(channel uint16) error { return nil }
+
+func (f *fakeUnderlyingSegment) Elements() []mediatree.Element {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.filler.Elements()
+}
+
+func (f *fakeUnderlyingSegment) Close(now uint64) ([16]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	return [16]byte{}, nil
+}
+
+// fakeSegmentBackend is a fake SegmentBackend: BeginSegment lazily creates
+// (or returns the existing) fakeUnderlyingSegment, standing in for one
+// Storage's real buffer pool always having at most one active segment.
+type fakeSegmentBackend struct {
+	mu         sync.Mutex
+	current    *fakeUnderlyingSegment
+	beginCount int
+}
+
+func (b *fakeSegmentBackend) BeginSegment(channels []uint16, now uint64) (storage.Segment, storage.PoolStatus, int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.beginCount++
+	if b.current == nil {
+		b.current = newFakeUnderlyingSegment()
+	}
+	return b.current, storage.PoolNormal, 0, nil
+}
+
+// rotate simulates a pool-driven fullness close: the current segment
+// closes and the next call through StorageSegment transparently reopens a
+// fresh one via BeginSegment, exactly like a real Segment rotating once
+// its fblock fills up.
+func (b *fakeSegmentBackend) rotate() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.current != nil {
+		b.current.mu.Lock()
+		b.current.closed = true
+		b.current.mu.Unlock()
+	}
+	b.current = nil
+}
+
+// newTestSegment gives a test its own isolated shared segment -- one
+// "Storage" of (by construction, unless another CapturePolicy is built
+// over the same *StorageSegment) one channel, standing in for the old
+// &fakeRecorder{} pattern.
+func newTestSegment() (*StorageSegment, *fakeSegmentBackend) {
+	b := &fakeSegmentBackend{}
+	return newStorageSegment(b), b
 }
 
 func videoParams(t uint64) fcontainer.StreamParams {
@@ -41,19 +112,23 @@ func vframe(t uint64, kind uint8) fcontainer.Frame {
 	return fcontainer.Frame{Data: []byte("f"), Time: t, Kind: kind}
 }
 
-func countRole(f *fcontainer.Filler, role mediatree.Role) int {
-	n := 0
-	for _, e := range f.Elements() {
-		if e.Role == role {
-			n++
+// frameTimesElems returns every decoded frame timestamp under timeRole, in
+// tree (append) order -- this package's tests' replacement for asserting
+// on a captured begin/end pair, since CapturePolicy no longer tracks those
+// itself (Segment does, one layer down, in internal/storage).
+func frameTimesElems(elems []mediatree.Element, timeRole mediatree.Role) []uint64 {
+	var out []uint64
+	for _, e := range elems {
+		if e.Role == timeRole && len(e.Value) == 8 {
+			out = append(out, binary.LittleEndian.Uint64(e.Value))
 		}
 	}
-	return n
+	return out
 }
 
 func TestContinuous_StartWithoutFromTimeDoesNotReplay(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI))
@@ -74,74 +149,66 @@ func TestContinuous_StartWithoutFromTimeDoesNotReplay(t *testing.T) {
 		t.Fatalf("StopRecording: %v", err)
 	}
 
-	if len(rec.writes) != 1 {
-		t.Fatalf("writes = %d, want 1", len(rec.writes))
+	elems := seg.Elements()
+	times := frameTimesElems(elems, mediatree.RoleFrameTimeVideo)
+	if len(times) != 1 || times[0] != 110 {
+		t.Fatalf("frame times = %v, want [110] (frame at t=10 must not have replayed)", times)
 	}
-	w := rec.writes[0]
-	if w.begin != 110 || w.end != 110 {
-		t.Fatalf("begin/end = %d/%d, want 110/110 (frame at t=10 must not have replayed)", w.begin, w.end)
-	}
-	if countRole(w.filler, mediatree.RoleFrameVideo) != 1 {
-		t.Fatalf("frame(video) count = %d, want 1", countRole(w.filler, mediatree.RoleFrameVideo))
+	if n := countRoleElems(elems, mediatree.RoleFrameVideo); n != 1 {
+		t.Fatalf("frame(video) count = %d, want 1", n)
 	}
 }
 
-func TestLiveElementsSince(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
+func TestLiveSnapshot_GenerationBumpsOnceOnNewSegment(t *testing.T) {
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
+	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
-	if _, _, _, ok := p.segment.liveElementsSince(0); ok {
-		t.Fatal("LiveElementsSince before recording starts: want ok=false")
+	if snap := p.LiveSnapshot(); snap.Recording || snap.Elements != nil {
+		t.Fatalf("idle snapshot = %+v, want not recording, nil elements", snap)
 	}
 
-	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
-	err := p.StartRecording(100, nil)
-	if err != nil {
+	if err := p.StartRecording(100, nil); err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
+	gen1 := p.LiveSnapshot().Generation
 
-	elems, total, contentBytes, ok := p.segment.liveElementsSince(0)
-	if !ok || len(elems) != total || contentBytes != 0 {
-		t.Fatalf("LiveElementsSince(0) right after open = elems=%d total=%d contentBytes=%d ok=%v, want an empty snapshot", len(elems), total, contentBytes, ok)
-	}
-	cursor := total
-
-	err = p.HandleFrame(0, fcontainer.KindVideo, vframe(110, mediatree.FrameKindI))
-	if err != nil {
+	if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(110, mediatree.FrameKindI)); err != nil {
 		t.Fatalf("HandleFrame: %v", err)
 	}
-	delta, total2, contentBytes2, ok := p.segment.liveElementsSince(cursor)
-	if !ok {
-		t.Fatal("LiveElementsSince while recording: want ok=true")
+	snap := p.LiveSnapshot()
+	if !snap.Recording {
+		t.Fatal("expected Recording=true while a segment is open")
 	}
-	if len(delta) == 0 || total2 <= cursor {
-		t.Fatalf("LiveElementsSince(%d) after one frame = delta=%d total=%d, want new elements", cursor, len(delta), total2)
+	if snap.Generation != gen1 {
+		t.Errorf("Generation changed within the same segment: %d -> %d", gen1, snap.Generation)
 	}
-	if contentBytes2 <= contentBytes {
-		t.Fatalf("contentBytes = %d, want > %d after a frame with real payload bytes", contentBytes2, contentBytes)
-	}
-	got := 0
-	for _, e := range delta {
-		if e.Role == mediatree.RoleFrameVideo {
-			got++
-		}
-	}
-	if got != 1 {
-		t.Fatalf("delta frame(video) count = %d, want 1", got)
+	if len(snap.Elements) == 0 {
+		t.Fatal("expected non-empty Elements after HandleFrame")
 	}
 
-	err = p.StopRecording(200)
-	if err != nil {
+	if err := p.StopRecording(200); err != nil {
 		t.Fatalf("StopRecording: %v", err)
 	}
-	if _, _, _, ok := p.segment.liveElementsSince(0); ok {
-		t.Fatal("LiveElementsSince after segment closes: want ok=false")
+	if err := p.StartRecording(300, nil); err != nil {
+		t.Fatalf("second StartRecording: %v", err)
 	}
+	snap2 := p.LiveSnapshot()
+	if snap2.Generation != gen1+1 {
+		t.Errorf("Generation after new segment = %d, want %d", snap2.Generation, gen1+1)
+	}
+	// Content is no longer guaranteed empty here: the underlying fake
+	// segment persists across this stop/start unless the pool actually
+	// rotates it (fakeSegmentBackend.rotate() -- see
+	// TestCapturePolicy_RotationMidRecording_RejoinsAndResetsConfigIDs in
+	// policy_sharedsegment_test.go), matching the real design where
+	// closing is purely fullness-driven, not tied to any one channel
+	// stopping and restarting.
 }
 
 func TestOnRecordingChange_ReceivesStartAndStopTimes(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
 
 	type call struct {
 		channel   uint16
@@ -182,9 +249,72 @@ func TestOnRecordingChange_ReceivesStartAndStopTimes(t *testing.T) {
 	}
 }
 
+// TestOnRecordingChange_CanSafelyCallBackIntoPolicy guards the fix that
+// moved onRecordingChange's invocation to after p.mu is released: the hook
+// must be able to call any p.mu-guarded method (Policy here) without
+// deadlocking on the same, non-reentrant mutex.
+func TestOnRecordingChange_CanSafelyCallBackIntoPolicy(t *testing.T) {
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
+
+	var gotType PolicyType
+	p.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
+		gotType, _ = p.Policy()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = p.StartRecording(100, nil)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartRecording did not return -- onRecordingChange likely still holds p.mu while firing")
+	}
+	if gotType != PolicyContinuous {
+		t.Fatalf("onRecordingChange saw Policy() = %v, want PolicyContinuous", gotType)
+	}
+}
+
+// TestOnRecordingChange_FiresEvenWhenReplayFails preserves the pre-refactor
+// guarantee that the hook fires unconditionally on every actual p.recording
+// flip, regardless of whether the subsequent replay of queued frames
+// succeeds -- moving the call to after openSegmentLocked must not make it
+// conditional on that call's error.
+func TestOnRecordingChange_FiresEvenWhenReplayFails(t *testing.T) {
+	seg, backend := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
+	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(10))
+	if err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, 1)); err != nil {
+		t.Fatalf("HandleFrame: %v", err)
+	}
+	// Pre-seed the shared segment already closed (unlike rotate(), which
+	// also nils backend.current so the next BeginSegment call would hand
+	// back a fresh one) -- StorageSegment.call's one retry sees the same
+	// closed segment both times and gives up with a hard error, making the
+	// replay genuinely fail.
+	backend.mu.Lock()
+	backend.current = &fakeUnderlyingSegment{filler: fcontainer.New(), closed: true}
+	backend.mu.Unlock()
+
+	fired := false
+	p.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
+		fired = true
+	})
+
+	err := p.StartRecording(10, nil) // replayFrom=10 matches the queued frame's own time, so it's actually replayed
+	if err == nil {
+		t.Fatal("StartRecording = nil error, want the replay failure to surface")
+	}
+	if !fired {
+		t.Fatal("onRecordingChange did not fire despite the recording flip actually happening")
+	}
+}
+
 func TestContinuous_StartWithFromTimeReplaysQueue(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	for _, ts := range []uint64{10, 20, 30} {
@@ -203,25 +333,27 @@ func TestContinuous_StartWithFromTimeReplaysQueue(t *testing.T) {
 		t.Fatalf("StopRecording: %v", err)
 	}
 
-	w := rec.writes[0]
-	if w.begin != 20 || w.end != 30 {
-		t.Fatalf("begin/end = %d/%d, want 20/30 (only frames >= 15 replayed)", w.begin, w.end)
+	elems := seg.Elements()
+	times := frameTimesElems(elems, mediatree.RoleFrameTimeVideo)
+	if len(times) != 2 || times[0] != 20 || times[1] != 30 {
+		t.Fatalf("frame times = %v, want [20 30] (only frames >= 15 replayed)", times)
 	}
-	if got := countRole(w.filler, mediatree.RoleFrameVideo); got != 2 {
+	if got := countRoleElems(elems, mediatree.RoleFrameVideo); got != 2 {
 		t.Fatalf("frame(video) count = %d, want 2", got)
 	}
 }
 
 func TestContinuous_WrongCommandType(t *testing.T) {
-	p := NewCapturePolicy(1, newTestSegment(&fakeRecorder{}), 1000, PolicyContinuous, PolicyParams{})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
 	if err := p.Trigger(0, 0); !errors.Is(err, ErrWrongPolicyType) {
 		t.Fatalf("Trigger on continuous = %v, want ErrWrongPolicyType", err)
 	}
 }
 
 func TestEvent_TriggerInIdleReplaysPrerecordAndSetsStopAt(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyEvent, PolicyParams{Prerecord: 20, Postrecord: 50})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyEvent, PolicyParams{Prerecord: 20, Postrecord: 50})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	for _, ts := range []uint64{60, 80, 100} {
@@ -258,17 +390,16 @@ func TestEvent_TriggerInIdleReplaysPrerecordAndSetsStopAt(t *testing.T) {
 	if p.recording {
 		t.Fatal("should have closed at stop_at")
 	}
-	if len(rec.writes) != 1 {
-		t.Fatalf("writes = %d, want 1", len(rec.writes))
-	}
-	if w := rec.writes[0]; w.begin != 80 || w.end != 100 {
-		t.Fatalf("begin/end = %d/%d, want 80/100", w.begin, w.end)
+
+	times := frameTimesElems(seg.Elements(), mediatree.RoleFrameTimeVideo)
+	if len(times) != 2 || times[0] != 80 || times[1] != 100 {
+		t.Fatalf("frame times = %v, want [80 100]", times)
 	}
 }
 
 func TestEvent_TriggerDuringRecordingExtendsButNeverShrinks(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyEvent, PolicyParams{Prerecord: 0, Postrecord: 50})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyEvent, PolicyParams{Prerecord: 0, Postrecord: 50})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	err := p.Trigger(100, 100)
@@ -296,22 +427,19 @@ func TestEvent_TriggerDuringRecordingExtendsButNeverShrinks(t *testing.T) {
 	if p.stopAt != 170 {
 		t.Fatalf("stopAt = %d, want 170 (must not shrink)", p.stopAt)
 	}
-
-	if len(rec.writes) != 0 {
-		t.Fatalf("writes = %d, want 0 (still recording)", len(rec.writes))
-	}
 }
 
 func TestEvent_WrongCommandType(t *testing.T) {
-	p := NewCapturePolicy(1, newTestSegment(&fakeRecorder{}), 1000, PolicyEvent, PolicyParams{})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyEvent, PolicyParams{})
 	if err := p.StartRecording(0, nil); !errors.Is(err, ErrWrongPolicyType) {
 		t.Fatalf("StartRecording on event = %v, want ErrWrongPolicyType", err)
 	}
 }
 
 func TestSetPolicy_OpenSegmentSurvivesSwapAndFallsUnderNewRules(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 
 	err := p.StartRecording(0, nil)
@@ -358,18 +486,17 @@ func TestSetPolicy_OpenSegmentSurvivesSwapAndFallsUnderNewRules(t *testing.T) {
 	if p.recording {
 		t.Fatal("should have closed")
 	}
-	if len(rec.writes) != 1 {
-		t.Fatalf("writes = %d, want 1", len(rec.writes))
-	}
-	// The single write covers frames from both before and after the swap.
-	if w := rec.writes[0]; w.begin != 10 {
-		t.Fatalf("begin = %d, want 10 (frame added before the swap)", w.begin)
+	// The segment's content covers frames from both before and after the
+	// swap.
+	times := frameTimesElems(seg.Elements(), mediatree.RoleFrameTimeVideo)
+	if len(times) == 0 || times[0] != 10 {
+		t.Fatalf("frame times = %v, want first entry 10 (frame added before the swap)", times)
 	}
 }
 
 func TestReplay_MultipleConfigVersionsAddedInOrder(t *testing.T) {
-	rec := &fakeRecorder{}
-	p := NewCapturePolicy(1, newTestSegment(rec), 1000, PolicyContinuous, PolicyParams{})
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, 1000, PolicyContinuous, PolicyParams{})
 
 	p.SetStreamParams(0, fcontainer.KindVideo, videoParams(0))
 	err := p.HandleFrame(0, fcontainer.KindVideo, vframe(10, mediatree.FrameKindI))
@@ -393,11 +520,11 @@ func TestReplay_MultipleConfigVersionsAddedInOrder(t *testing.T) {
 		t.Fatalf("StopRecording: %v", err)
 	}
 
-	w := rec.writes[0]
-	if got := countRole(w.filler, mediatree.RoleConfigVideo); got != 2 {
+	elems := seg.Elements()
+	if got := countRoleElems(elems, mediatree.RoleConfigVideo); got != 2 {
 		t.Fatalf("config(video) node count = %d, want 2 (one per distinct params version)", got)
 	}
-	if got := countRole(w.filler, mediatree.RoleFrameVideo); got != 2 {
+	if got := countRoleElems(elems, mediatree.RoleFrameVideo); got != 2 {
 		t.Fatalf("frame(video) count = %d, want 2", got)
 	}
 }

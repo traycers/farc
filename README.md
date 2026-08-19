@@ -1,65 +1,65 @@
 # farc
 
-A system for archiving video/audio streams to disk using fblocks (fixed-size blocks) and serving the archive back over HTTP/HLS. `farc`/`farcd` itself is the archiving daemon; `hls_server` and the `web/` SPA build on top of it (see below).
+Система для архивирования видео/аудио потоков на диск с использованием fblocks (блоков фиксированного размера) и раздачи архива обратно по HTTP/HLS. Сам `farc`/`farcd` — это демон архивации; `hls_server` и SPA в `web/` строятся поверх него (см. ниже).
 
-## Components
+## Компоненты
 
-- **`farc`** (`cmd/farc`, runs as the `farcd` daemon) — ingests RTSP streams and writes them to disk in fblocks; exposes an HTTP+WebSocket API for reading the archive back (`internal/api`).
-- **`hls_server`** (`cmd/hls_server`) — a separate process that turns `farcd`'s archive into browser-playable HLS (H.264/AAC, VOD only, CMAF remux, no transcoding). Talks to `farcd` only through its external API.
-- **`web/`** — a React SPA: an admin console for `farcd` (storages, capture policy) plus a VOD player backed by `hls_server`.
+- **`farc`** (`cmd/farc`, запускается как демон `farcd`) — принимает RTSP-потоки и записывает их на диск в fblocks; предоставляет HTTP+WebSocket API для чтения архива обратно (`internal/api`).
+- **`hls_server`** (`cmd/hls_server`) — отдельный процесс, превращающий архив `farcd` в HLS, воспроизводимый в браузере (H.264/AAC, только VOD, CMAF-ремукс, без перекодирования). Общается с `farcd` только через его внешний API.
+- **`web/`** — SPA на React: консоль администратора для `farcd` (хранилища, политика захвата) плюс VOD-плеер на основе `hls_server`.
 
-The design documentation (in Russian, under `docs/docs/archive/`) describes the full fblock/storage architecture; `PLAN.md` tracks the current implementation plan and known gaps for the web client and deployment.
+Проектная документация (в `docs/docs/archive/`) описывает полную архитектуру fblock/storage; `PLAN.md` отслеживает текущий план реализации и известные пробелы для веб-клиента и развёртывания.
 
-## Build
+## Сборка
 
-Requires Go 1.25+. With [Task](https://taskfile.dev):
+Требуется Go 1.21+. С помощью [Task](https://taskfile.dev):
 
 ```sh
-task build          # builds farc, hls_server, and web/dist
-task build/app       # farc only
+task build          # собирает farc, hls_server и web/dist
+task build/app       # только farc
 task build/hls_server
-task build/web       # requires Node.js/npm
+task build/web       # требует Node.js/npm
 ```
 
-Or directly:
+Или напрямую:
 
 ```sh
 go build -o farc ./cmd/farc
 go build -o hls_server ./cmd/hls_server
 ```
 
-`task test` / `go test ./...` run the unit test suite. `tests/` holds an end-to-end test (build tag `e2e`) that runs both binaries as real OS processes:
+`task test` / `go test ./...` запускают набор юнит-тестов. В `tests/` находится end-to-end тест (build tag `e2e`), запускающий оба бинарника как настоящие процессы ОС:
 
 ```sh
 go test -tags e2e ./tests/... -v
 ```
 
-`task lint` runs `golangci-lint`. **Don't trust the rest of `taskfile.yaml`** — several tasks (`run`, `help`, `db/*`, `env/*`) were copied from an unrelated project and don't apply here.
+`task lint` запускает `golangci-lint`. **Не доверяйте остальному содержимому `taskfile.yaml`** — несколько задач (`run`, `help`, `db/*`, `env/*`) скопированы из другого, не связанного с этим проекта и здесь не применимы.
 
-## Run
+## Запуск
 
-Both binaries take a `-c`/`--config` flag pointing at a JSON config file (`internal/config`, `internal/hlsconfig`):
+Оба бинарника принимают флаг `-c`/`--config`, указывающий на JSON-файл конфигурации (`internal/config`, `internal/hlsconfig`):
 
 ```sh
 ./farc -c farc.config.json
 ./hls_server -c hls_server.config.json
 ```
 
-`farc`'s HTTP/WS/Metrics server addresses come from the environment instead of the JSON file — `FARC_HTTP_IP`/`FARC_HTTP_PORT`, `FARC_WS_IP`/`FARC_WS_PORT`/`FARC_WS_MAX_CONNECTIONS`, `FARC_METRICS_IP`/`FARC_METRICS_PORT` (`*_IP` defaults to `0.0.0.0`, `*_PORT` is required) — so a working deployment's env (or a `.env` file next to the binary, loaded via `godotenv`) can be committed alongside `docker-compose.yaml` without exposing per-site topology in `farc.config.json`. `farc.config.json` itself no longer ships as a repo file at all: if `-c` points at a path that doesn't exist yet, `farc` creates an empty one (`internal/config.EnsureExists`) rather than failing, so a fresh, empty config file/volume just works. Its `storages` list must reference already-initialized storage image files — `farcd` never creates them itself (the operator only needs to size a partition/file up front; `farcd` initializes it via `POST /storages`, e.g. through the web client's Storages page). `farcd` persists a newly created storage back into `farc.config.json` itself, so it's picked up again on the next restart — the config file must be writable by the process (see `docker-compose.yaml`'s `farc` service, which keeps it on a dedicated `farc_config` volume for exactly this reason).
+Адреса HTTP/WS/Metrics-серверов `farc` берутся из окружения, а не из JSON-файла — `FARC_HTTP_IP`/`FARC_HTTP_PORT`, `FARC_WS_IP`/`FARC_WS_PORT`/`FARC_WS_MAX_CONNECTIONS`, `FARC_METRICS_IP`/`FARC_METRICS_PORT` (`*_IP` по умолчанию `0.0.0.0`, `*_PORT` обязателен). `FARC_LOG_DIR` — необязательная директория, куда `farcd` дополнительно (вместе со stderr) пишет `farcd.log`; если не задана — только stderr, как раньше. HTTP/WS-серверы `farcd` логируют по одной access-log строке на запрос через `X-Request-Id`/`X-Session-Id` — если envoy (или любой другой прокси перед системой) проставляет эти заголовки, они попадают в лог этой строкой (`request_id=...`/`session_id=...`); заголовки не проставляются, если их нет во входящем запросе. — благодаря этому окружение рабочего развёртывания (или файл `.env` рядом с бинарником, загружаемый через `godotenv`) можно закоммитить вместе с `docker-compose.yaml`, не раскрывая топологию конкретной площадки в `farc.config.json`. Сам `farc.config.json` больше вообще не поставляется как файл в репозитории: если `-c` указывает на путь, который ещё не существует, `farc` создаёт пустой файл (`internal/config.EnsureExists`) вместо того, чтобы завершиться с ошибкой — так что свежий, пустой конфиг-файл/volume просто работает. Его список `storages` должен ссылаться на уже инициализированные файлы-образы хранилищ — `farcd` никогда не создаёт их сам (оператору нужно лишь заранее выделить размер партиции/файла; `farcd` инициализирует его через `POST /storages`, например через страницу Storages веб-клиента). `farcd` сохраняет вновь созданное хранилище обратно в `farc.config.json`, так что оно снова подхватывается при следующем перезапуске — конфиг-файл должен быть доступен процессу на запись (см. сервис `farc` в `docker-compose.yaml`, который держит его именно поэтому на отдельном volume `farc_config`).
 
-`hls_server`'s HTTP address, the one farcd it talks to (ADR-020 — v1 supports exactly one, not a list), and segment/cache tuning are env-sourced the same way — `HLS_SERVER_HTTP_IP`/`HLS_SERVER_HTTP_PORT`, `HLS_SERVER_FARC_HTTP`/`HLS_SERVER_FARC_WS`, `HLS_SERVER_TARGET_SEGMENT_DURATION`, `HLS_SERVER_CACHE_DIR`, `HLS_SERVER_CACHE_QUOTA_BYTES` (`*_PORT`, `*_FARC_HTTP`, `*_FARC_WS`, `*_TARGET_SEGMENT_DURATION`, `*_CACHE_DIR` are required; `*_CACHE_QUOTA_BYTES` <= 0 means unbounded). `hls_server.config.json` keeps only the channel → farcd-side storage id mapping. It no longer ships as a repo file either: like `farc.config.json`, if `-c` points at a path that doesn't exist yet, `hls_server` creates an empty one (`internal/hlsconfig.EnsureExists`) instead of failing — but unlike `farc`, `hls_server` never rewrites this file itself afterward (no CRUD API for channels here), so growing it past empty is still a manual/operator step.
+HTTP-адрес `hls_server`, тот единственный farcd, с которым он общается (ADR-020 — v1 поддерживает ровно один, а не список), и настройки сегментов/кэша задаются через окружение так же — `HLS_SERVER_HTTP_IP`/`HLS_SERVER_HTTP_PORT`, `HLS_SERVER_FARC_HTTP`/`HLS_SERVER_FARC_WS`, `HLS_SERVER_TARGET_SEGMENT_DURATION`, `HLS_SERVER_CACHE_DIR`, `HLS_SERVER_CACHE_QUOTA_BYTES` (`*_PORT`, `*_FARC_HTTP`, `*_FARC_WS`, `*_TARGET_SEGMENT_DURATION`, `*_CACHE_DIR` обязательны; `*_CACHE_QUOTA_BYTES` <= 0 означает без ограничения). `HLS_SERVER_LOG_DIR` — необязательная директория для `hls_server.log`, тот же смысл, что и `FARC_LOG_DIR` у `farcd`. `hls_server` так же логирует по `X-Request-Id`/`X-Session-Id` на входе и прокидывает их дальше в свои запросы к `farcd`, так что один и тот же запрос браузера виден под одним и тем же `request_id` в логах обоих сервисов. `hls_server.config.json` хранит только соответствие канал → id хранилища на стороне farcd. Он тоже больше не поставляется как файл в репозитории: как и `farc.config.json`, если `-c` указывает на путь, который ещё не существует, `hls_server` создаёт пустой файл (`internal/hlsconfig.EnsureExists`) вместо ошибки — но, в отличие от `farc`, `hls_server` никогда сам не перезаписывает этот файл впоследствии (CRUD API для каналов здесь нет), так что расширение его сверх пустого — по-прежнему ручной шаг оператора.
 
-## Docker / full stack
+## Docker / полный стек
 
 ```sh
 docker compose up --build
 ```
 
-Brings up `farc`, `hls_server`, and `web` (nginx serving the SPA and reverse-proxying `/api/farcd/` and `/api/hls/` to the two backends) on `http://localhost/`. `farc.config.json` lives on the `farc_config` volume (bootstrapped empty on first start, then grown via the web client's Storages/Channels pages); `hls_server.config.json` lives on its own `hls_config` volume the same way, though nothing grows it automatically after that — a channel added to `farc.config.json` still needs the matching entry added to `hls_server.config.json` by hand (`docs/docs/archive/12-hls-server.md` §8's still-unresolved sync question); archive/cache data lives in the `farc_data`/`hls_cache` named volumes.
+Поднимает `farc`, `hls_server` и `web` (nginx, раздающий SPA и проксирующий `/api/farcd/` и `/api/hls/` на два backend'а) на `http://localhost/`. `farc.config.json` живёт на volume `farc_config` (при первом запуске создаётся пустым, затем растёт через страницы Storages/Channels веб-клиента); `hls_server.config.json` живёт на своём собственном volume `hls_config` так же, хотя после этого ничто не растит его автоматически — канал, добавленный в `farc.config.json`, всё ещё требует добавления соответствующей записи в `hls_server.config.json` вручную (нерешённый пока вопрос синхронизации из §8 `docs/docs/archive/12-hls-server.md`); данные архива/кэша живут в именованных volume `farc_data`/`hls_cache`.
 
-## Docs
+## Документация
 
-Design docs (Russian) build with [mkdocs-material](https://squidfunk.github.io/mkdocs-material/):
+Проектная документация собирается с помощью [mkdocs-material](https://squidfunk.github.io/mkdocs-material/):
 
 ```sh
 mkdocs serve -f docs/mkdocs.yaml

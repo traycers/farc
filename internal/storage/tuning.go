@@ -1,6 +1,6 @@
 package storage
 
-import "traycers/farc/internal/storageengine"
+import "github.com/traycers/farc/internal/storageengine"
 
 // EngineTuning are the storageengine.Config knobs that aren't part of the
 // on-disk fblock.Params JSON (docs/docs/archive/03-storage-format.md §5.2
@@ -42,6 +42,35 @@ func (t EngineTuning) withDefaults() EngineTuning {
 	}
 	if t.QuotaPortions == 0 {
 		t.QuotaPortions = d.QuotaPortions
+	}
+	return t
+}
+
+// PoolTuning are Pool's occupancy-threshold knobs — pure in-memory
+// operational parameters (same convention as EngineTuning above), not part
+// of the on-disk fblock.Params JSON. Callers may override any field; zero
+// fields fall back to DefaultPoolTuning.
+type PoolTuning struct {
+	Size           int
+	WarningAt      int
+	BackpressureAt int
+}
+
+// DefaultPoolTuning returns this package's chosen v1 defaults.
+func DefaultPoolTuning() PoolTuning {
+	return PoolTuning{Size: 4, WarningAt: 2, BackpressureAt: 4}
+}
+
+func (t PoolTuning) withDefaults() PoolTuning {
+	d := DefaultPoolTuning()
+	if t.Size == 0 {
+		t.Size = d.Size
+	}
+	if t.WarningAt == 0 {
+		t.WarningAt = d.WarningAt
+	}
+	if t.BackpressureAt == 0 {
+		t.BackpressureAt = d.BackpressureAt
 	}
 	return t
 }

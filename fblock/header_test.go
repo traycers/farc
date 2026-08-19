@@ -67,7 +67,7 @@ func TestHeaderDiagnosisTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeHeader: %v", err)
 	}
-	offs := ComputeOffsets(h.Prolog.ParamsSize, h.Prolog.CatalogSize)
+	offs := ComputeOffsets(h.Prolog.ParamsSize, h.Prolog.CatalogSize, 1)
 
 	flip := func(src []byte, at uint64) []byte {
 		out := append([]byte(nil), src...)

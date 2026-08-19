@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"traycers/farc/fblock"
+	"github.com/traycers/farc/fblock"
 )
 
 func TestRegisterChannelAllocatesLowestFree(t *testing.T) {

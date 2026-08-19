@@ -3,15 +3,16 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
-	"github.com/bluenviron/gortsplib/v5"
-	"github.com/bluenviron/gortsplib/v5/pkg/base"
-	"github.com/bluenviron/gortsplib/v5/pkg/description"
-	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v4"
+	"github.com/bluenviron/gortsplib/v4/pkg/base"
+	"github.com/bluenviron/gortsplib/v4/pkg/description"
+	"github.com/bluenviron/gortsplib/v4/pkg/format"
 
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/mediatree"
 )
 
 // testServerHandler is the minimal gortsplib.ServerHandler needed to serve
@@ -42,9 +43,21 @@ func (h *testServerHandler) OnPlay(*gortsplib.ServerHandlerOnPlayCtx) (*base.Res
 // SPS/PPS/frame/GOP shape.
 func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 	handler := &testServerHandler{}
+	var listener net.Listener
 	server := &gortsplib.Server{
 		Handler:     handler,
 		RTSPAddress: "127.0.0.1:0",
+		// gortsplib v4 has no Server.NetListener() accessor (unlike v5) --
+		// capturing the real net.Listen result via this hook is v4's own way
+		// to learn the actual bound port after listening on ":0".
+		Listen: func(network, address string) (net.Listener, error) {
+			l, err := net.Listen(network, address)
+			if err != nil {
+				return nil, err
+			}
+			listener = l
+			return l, nil
+		},
 	}
 	err := server.Start()
 	if err != nil {
@@ -71,8 +84,8 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 		t.Fatalf("CreateEncoder: %v", err)
 	}
 
-	rec := &fakeRecorder{}
-	policy := NewCapturePolicy(1, newTestSegment(rec), uint64(10*time.Second), PolicyContinuous, PolicyParams{})
+	seg, _ := newTestSegment()
+	policy := NewCapturePolicy(1, seg, uint64(10*time.Second), PolicyContinuous, PolicyParams{})
 	err = policy.StartRecording(0, nil)
 	if err != nil {
 		t.Fatalf("StartRecording: %v", err)
@@ -80,7 +93,7 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 	ci := NewChannelIngest(1, policy)
 	ci.SetLogger(t.Logf)
 
-	addr := server.NetListener().Addr().String()
+	addr := listener.Addr().String()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -120,8 +133,10 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 	}
 
 	// Give the loopback round-trip time to deliver and decode all three
-	// access units, then stop the channel — Run's ctx.Done() path closes
-	// the segment, handing the finished Filler to rec.
+	// access units, then stop the channel. Content lives in the shared
+	// segment as it arrives (no longer gated behind a close/write event),
+	// so it's already readable at this point regardless of Run's own
+	// ctx.Done() teardown.
 	time.Sleep(300 * time.Millisecond)
 	cancel()
 
@@ -134,11 +149,7 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 		t.Fatal("ChannelIngest.Run did not return after cancel")
 	}
 
-	if len(rec.writes) != 1 {
-		t.Fatalf("writes = %d, want 1", len(rec.writes))
-	}
-	filler := rec.writes[0].filler
-	elems := filler.Elements()
+	elems := seg.Elements()
 
 	configID := findConfigVideo(t, elems)
 	dataID, ok := mediatree.FindChildByRole(elems, configID, mediatree.RoleDataVideo)
@@ -171,117 +182,6 @@ func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 		if kindOf(id) != mediatree.FrameKindP {
 			t.Fatalf("frame %d kind = %v, want P", id, kindOf(id))
 		}
-	}
-}
-
-// TestChannelIngest_RepeatedSPSPPSDoesNotDuplicateConfig reproduces the real-
-// world pattern that used to duplicate config(video) nodes: a camera that
-// re-announces byte-identical SPS/PPS before every IDR frame (two GOPs here,
-// each led by the exact same sps/pps bytes) must still produce exactly one
-// config(video) version, not one per GOP.
-func TestChannelIngest_RepeatedSPSPPSDoesNotDuplicateConfig(t *testing.T) {
-	handler := &testServerHandler{}
-	server := &gortsplib.Server{
-		Handler:     handler,
-		RTSPAddress: "127.0.0.1:0",
-	}
-	err := server.Start()
-	if err != nil {
-		t.Fatalf("server.Start: %v", err)
-	}
-	defer server.Close()
-
-	desc := &description.Session{
-		Medias: []*description.Media{{
-			Type:    description.MediaTypeVideo,
-			Formats: []format.Format{&format.H264{PayloadTyp: 96, PacketizationMode: 1}},
-		}},
-	}
-	stream := &gortsplib.ServerStream{Server: server, Desc: desc}
-	err = stream.Initialize()
-	if err != nil {
-		t.Fatalf("stream.Initialize: %v", err)
-	}
-	defer stream.Close()
-	handler.stream = stream
-
-	rtpEnc, err := desc.Medias[0].Formats[0].(*format.H264).CreateEncoder()
-	if err != nil {
-		t.Fatalf("CreateEncoder: %v", err)
-	}
-
-	rec := &fakeRecorder{}
-	policy := NewCapturePolicy(1, newTestSegment(rec), uint64(10*time.Second), PolicyContinuous, PolicyParams{})
-	err = policy.StartRecording(0, nil)
-	if err != nil {
-		t.Fatalf("StartRecording: %v", err)
-	}
-	ci := NewChannelIngest(1, policy)
-	ci.SetLogger(t.Logf)
-
-	addr := server.NetListener().Addr().String()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	runErr := make(chan error, 1)
-	go func() {
-		runErr <- ci.Run(ctx, fmt.Sprintf("rtsp://%s/test", addr), 2*time.Second, 2*time.Second)
-	}()
-
-	time.Sleep(300 * time.Millisecond)
-
-	// Same sps/pps bytes re-sent before the second GOP's IDR -- exactly what
-	// many real cameras do, and what previously fooled ensureConfigLocked's
-	// pointer-identity check into opening a second config(video).
-	sps := []byte{0x67, 0x01, 0x02, 0x03}
-	pps := []byte{0x68, 0x04}
-	idr1 := []byte{0x65, 0xaa, 0xaa}
-	p1 := []byte{0x41, 0xbb}
-	idr2 := []byte{0x65, 0xdd, 0xdd}
-	p2 := []byte{0x41, 0xcc}
-	aus := [][][]byte{{sps, pps, idr1}, {p1}, {sps, pps, idr2}, {p2}}
-
-	var ts uint32
-	for _, au := range aus {
-		packets, err := rtpEnc.Encode(au)
-		if err != nil {
-			t.Fatalf("Encode: %v", err)
-		}
-		for _, pkt := range packets {
-			pkt.Timestamp = ts
-			err := stream.WritePacketRTP(desc.Medias[0], pkt)
-			if err != nil {
-				t.Fatalf("WritePacketRTP: %v", err)
-			}
-		}
-		ts += 3000
-	}
-
-	time.Sleep(300 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-runErr:
-		if err != nil {
-			t.Fatalf("ChannelIngest.Run: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("ChannelIngest.Run did not return after cancel")
-	}
-
-	if len(rec.writes) != 1 {
-		t.Fatalf("writes = %d, want 1", len(rec.writes))
-	}
-	elems := rec.writes[0].filler.Elements()
-
-	configIDs := roleIDs(elems, mediatree.RoleConfigVideo)
-	if len(configIDs) != 1 {
-		t.Fatalf("config(video) count = %d, want 1 (repeated byte-identical SPS/PPS must not open a new version)", len(configIDs))
-	}
-
-	frameIDs := roleIDs(elems, mediatree.RoleFrameVideo)
-	if len(frameIDs) != 4 {
-		t.Fatalf("frame(video) count = %d, want 4", len(frameIDs))
 	}
 }
 

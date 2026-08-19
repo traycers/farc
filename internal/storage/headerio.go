@@ -1,8 +1,8 @@
 package storage
 
 import (
-	"traycers/farc/fblock"
-	"traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/ioengine"
 )
 
 // fblockOffset is offset(index) = index × fblock_size (ADR-001).
@@ -29,7 +29,7 @@ func readHeader(backend ioengine.Backend, geo Geometry, idx uint32) (fblock.Head
 	if err != nil {
 		return fblock.Header{}, fblock.HeaderDiagnosis{}, err
 	}
-	offs := fblock.ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize)
+	offs := fblock.ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize, backend.Alignment())
 	total := offs.ChecksumsOffset + uint64(fblock.HeaderChecksumsSize)
 	buf := make([]byte, total)
 	_, err = backend.ReadAt(buf, int64(fblockOffset(geo, idx)))

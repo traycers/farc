@@ -1,4 +1,4 @@
-import { parseCandidatesJSON, parseFblocksJSON, type Candidate, type FblockListPage } from './ns'
+import { parseCandidatesJSON, type Candidate } from './ns'
 
 const BASE = '/api/farcd'
 
@@ -87,15 +87,6 @@ export async function candidates(
   return parseCandidatesJSON(text)
 }
 
-// listFblocks fetches one page of fblocks in storage, regardless of channel
-// -- GET /storages/{id}/fblocks?offset=&limit=, internal/api/fblocks.go --
-// for the fblocks list page's browse-and-pick table.
-export async function listFblocks(storage: string, offset: number, limit: number): Promise<FblockListPage> {
-  const url = `${BASE}/storages/${encodeURIComponent(storage)}/fblocks?offset=${offset}&limit=${limit}`
-  const text = await (await ok(await fetch(url))).text()
-  return parseFblocksJSON(text)
-}
-
 export async function setProtected(storage: string, uuid: string, value: boolean): Promise<void> {
   await ok(
     await fetch(`${BASE}/storages/${encodeURIComponent(storage)}/fcontainers/${uuid}/protected`, {
@@ -164,8 +155,11 @@ export type ChannelInfo = {
   name?: string
 }
 
-export async function listChannels(): Promise<ChannelInfo[]> {
-  return (await ok(await fetch(`${BASE}/channels`))).json()
+// storage, when given, is the farcd ?storage= filter (internal/api/channels.go)
+// -- avoids fetching every channel just to filter client-side to one storage.
+export async function listChannels(storage?: string): Promise<ChannelInfo[]> {
+  const qs = storage ? `?storage=${encodeURIComponent(storage)}` : ''
+  return (await ok(await fetch(`${BASE}/channels${qs}`))).json()
 }
 
 export async function createChannel(input: {

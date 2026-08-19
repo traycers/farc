@@ -31,12 +31,13 @@ import (
 	"sync"
 	"time"
 
-	"traycers/farc/internal/api"
-	"traycers/farc/internal/config"
-	"traycers/farc/internal/ingest"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storage"
-	"traycers/farc/internal/storageengine"
+	"github.com/traycers/farc/internal/api"
+	"github.com/traycers/farc/internal/config"
+	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/levellog"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/internal/tracing"
 )
 
 // rtspTimeout is ChannelIngest's RTSP read/write timeout. Not part of the
@@ -90,19 +91,6 @@ type Farcd struct {
 	bridgeStops map[string]func()
 	bridgeMu    sync.Mutex
 
-	// liveStorageCursors tracks, per storage, how many of its shared
-	// segment's tree elements have already been published via
-	// PublishLiveProgress (the fblock-live page's WS feed) -- advanced by
-	// runLiveProgressTicker, which is the only thing that ever touches this
-	// map (a single dedicated goroutine), so it needs no lock of its own.
-	// Never explicitly cleared: a storage with nothing currently recording
-	// just keeps ticking zero-length deltas (tickLiveProgress skips
-	// publishing those), and Filler.ElementsSince already clamps a
-	// stale/too-large cursor back to 0 on its own if the segment flushed
-	// and reopened a smaller Filler since the last tick -- no explicit
-	// "detect the reset" logic is needed here.
-	liveStorageCursors map[string]int
-
 	httpSrv    *http.Server
 	wsSrv      *http.Server
 	metricsSrv *http.Server
@@ -118,20 +106,19 @@ type Farcd struct {
 // later via POST /storages can be persisted back into it (persistNewStorage).
 func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	f := &Farcd{
-		registry:           api.NewStorageRegistry(),
-		ing:                ingest.NewIngestManager(),
-		cfg:                cfg,
-		configPath:         configPath,
-		bridgeStops:        make(map[string]func()),
-		liveStorageCursors: make(map[string]int),
-		logf:               func(string, ...any) {},
+		registry:    api.NewStorageRegistry(),
+		ing:         ingest.NewIngestManager(),
+		cfg:         cfg,
+		configPath:  configPath,
+		bridgeStops: make(map[string]func()),
+		logf:        func(string, ...any) {},
 	}
 
 	push := api.NewEventPushServer(f.registry)
 	f.push = push
 
 	for _, sc := range cfg.Storages {
-		unit, err := openStorage(sc)
+		unit, err := openStorage(sc, cfg)
 		if err != nil {
 			f.closeUnits()
 			return nil, fmt.Errorf("farcd: open storage %q: %w", sc.ID, err)
@@ -155,17 +142,27 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	}
 
 	f.ing.SetOnRecordingChange(func(channel uint16, recording bool, t uint64) {
-		// StorageOf, not List: this fires with the channel's own
-		// CapturePolicy mutex already held, and List's Policy() call would
-		// self-deadlock on it (see StorageOf's own doc comment). msm_server
-		// needs Storage (its "archive id") to call started_add/finished_add.
+		// StorageOf, not List: this only needs the storage id, and it's
+		// cheaper than List's full build-and-sort over every channel (no
+		// deadlock concern either way -- the hook fires after CapturePolicy's
+		// own mutex is released). msm_server needs Storage (its "archive id")
+		// to call started_add/finished_add.
 		storageID, _ := f.ing.StorageOf(channel)
-
 		if recording {
 			f.push.Publish(api.JournalEvent{Name: api.EventRecordingStarted, Channel: channel, Storage: storageID, Begin: t})
 			return
 		}
 		f.push.Publish(api.JournalEvent{Name: api.EventRecordingStopped, Channel: channel, Storage: storageID, End: t})
+	})
+
+	f.ing.SetOnConnectionChange(func(channel uint16, connected bool) {
+		// StorageOf, not List: same reasoning as SetOnRecordingChange above.
+		storageID, _ := f.ing.StorageOf(channel)
+		name := api.EventChannelRTSPDisconnected
+		if connected {
+			name = api.EventChannelRTSPConnected
+		}
+		f.push.Publish(api.JournalEvent{Name: name, Channel: channel, Storage: storageID})
 	})
 
 	// push IS passed into NewHttpApiServer (unlike WS's own listener on
@@ -182,8 +179,16 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	apiServer.SetOnChannelUpdated(f.persistUpdatedChannel)
 	apiServer.SetOnChannelRemoved(f.persistRemovedChannel)
 
-	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: apiServer.Handler(), ReadHeaderTimeout: readHeaderTimeout}
-	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: push, ReadHeaderTimeout: readHeaderTimeout}
+	// trace forwards to f.logf by field access, not by value, so it keeps
+	// working after SetLogger replaces f.logf -- SetLogger is only called by
+	// cmd/farc after New returns, but httpSrv/wsSrv are built here, inside
+	// New, so capturing f.logf itself would forever bind to its
+	// no-op default above.
+	trace := func(format string, args ...any) { f.logf(format, args...) }
+	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: tracing.Middleware(trace)(apiServer.Handler()), ReadHeaderTimeout: readHeaderTimeout}
+	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: tracing.Middleware(trace)(push), ReadHeaderTimeout: readHeaderTimeout}
+	// metricsSrv is left unwrapped -- internal scrape traffic, not proxied
+	// through envoy, so there's no X-Request-Id/X-Session-Id to correlate.
 	f.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: apiServer.MetricsHandler(), ReadHeaderTimeout: readHeaderTimeout}
 
 	return f, nil
@@ -199,8 +204,8 @@ func (f *Farcd) SetLogger(logf func(format string, args ...any)) {
 	f.ing.SetLogger(logf)
 }
 
-func openStorage(sc config.Storage) (*storage.Unit, error) {
-	backend, err := ioengine.Open(sc.Path, ioengine.Options{})
+func openStorage(sc config.Storage, cfg *config.Config) (*storage.Unit, error) {
+	backend, err := ioengine.Open(sc.Path, ioengine.Options{Backend: cfg.StorageBackend})
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +213,11 @@ func openStorage(sc config.Storage) (*storage.Unit, error) {
 		Backend:     backend,
 		CatalogPath: sc.CatalogPath,
 		Tuning:      storage.DefaultEngineTuning(),
+		PoolTuning: storage.PoolTuning{
+			Size:           cfg.StoragePoolSize,
+			WarningAt:      cfg.StoragePoolWarningAt,
+			BackpressureAt: cfg.StoragePoolBackpressureAt,
+		},
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -245,19 +255,12 @@ func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, err
 	}
 
 	return ingest.ChannelConfig{
-		Channel:   cc.ID,
-		RTSPURL:   cc.RTSPURL,
-		StorageID: cc.Storage,
-		Recorder:  unit,
-		// ~min_container_share × fblock_size -- the size threshold that
-		// triggers internal/ingest's shared per-storage segment to flush
-		// automatically (sharedSegment's doc comment). Only the first
-		// channel to reference a given storage actually has this value
-		// consulted, but every channel of that storage resolves the same
-		// Geometry/Params, so they'd all compute the same number anyway.
-		SegmentFlushBytes: int(float64(unit.Geometry().FblockSize) * unit.MinContainerShare()),
-		QueueDepth:        queueDepth,
-		PolicyType:        policyType,
+		Channel:        cc.ID,
+		RTSPURL:        cc.RTSPURL,
+		StorageID:      cc.Storage,
+		SegmentBackend: unit,
+		QueueDepth:     queueDepth,
+		PolicyType:     policyType,
 		PolicyParams: ingest.PolicyParams{
 			Prerecord:  uint64(cc.CapturePolicy.Prerecord.Duration().Nanoseconds()),
 			Postrecord: uint64(cc.CapturePolicy.Postrecord.Duration().Nanoseconds()),
@@ -267,33 +270,65 @@ func (f *Farcd) buildChannelConfig(cc config.Channel) (ingest.ChannelConfig, err
 		Name:         cc.Name,
 		// StorageUnit -> CapturePolicy backpressure signal (10-capture-
 		// policy.md §8, resolved in PLAN.md's gap-resolutions section):
-		// polled live off unit.EngineLevel() rather than tracked via a
-		// separate atomic flag updated on transitions -- Level() is
+		// polled live off unit.PoolStatus() rather than tracked via a
+		// separate atomic flag updated on transitions -- Status() is
 		// already a cheap, mutex-guarded read, so there's nothing to cache.
-		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
+		// Supersedes the pre-buffer-pool unit.EngineLevel() signal (still
+		// exposed, but metrics-only now -- see storage.Unit's own doc
+		// comment): occupancy of the buffer pool is the single
+		// backpressure signal, not StorageEngine's internal write queue.
+		BackpressureSignal: func() bool { return unit.PoolStatus() == storage.PoolBackpressure },
 	}, nil
+}
+
+// withConfigMutation runs mutate under f.cfgMu, then persists f.cfg via
+// config.Save unless mutate reports nothing to do. mutate must apply its
+// change directly to f.cfg (already locked by the time it's called) and
+// return a rollback closure that undoes it, or (nil, nil) if the mutation
+// turned out to be a no-op (e.g. the target was already in the desired
+// state), or (nil, err) if a precondition failed (e.g. "not present in
+// config") before any change was made -- in both of the latter cases,
+// config.Save is never called. mutated is true only when Save actually ran
+// and succeeded, so callers can gate their own post-success side effects
+// (publishing an event, starting/stopping a bridge goroutine) on it.
+func (f *Farcd) withConfigMutation(errCtx string, mutate func() (rollback func(), err error)) (mutated bool, err error) {
+	f.cfgMu.Lock()
+	defer f.cfgMu.Unlock()
+
+	rollback, err := mutate()
+	if err != nil {
+		return false, err
+	}
+	if rollback == nil {
+		return false, nil
+	}
+	err = config.Save(f.configPath, f.cfg)
+	if err != nil {
+		rollback()
+		return false, fmt.Errorf("farcd: %s to %s: %w", errCtx, f.configPath, err)
+	}
+	return true, nil
 }
 
 // persistNewStorage appends a storage created via POST /storages to farcd's
 // own config file, wired into HttpApiServer via SetOnStorageCreated -- the
 // only reason a runtime-created storage survives farcd's next restart
 // (config.Load is the only thing New's own storage-opening loop ever reads;
-// it never Inits, see this package's own doc comment). If Save fails, the
-// in-memory append is rolled back so cfg still matches what's on disk.
+// it never Inits, see this package's own doc comment).
 func (f *Farcd) persistNewStorage(id, path, catalogPath, name string) error {
-	f.cfgMu.Lock()
-	defer f.cfgMu.Unlock()
-
-	for _, s := range f.cfg.Storages {
-		if s.ID == id {
-			return nil
+	mutated, err := f.withConfigMutation(fmt.Sprintf("persist storage %q", id), func() (func(), error) {
+		for _, s := range f.cfg.Storages {
+			if s.ID == id {
+				return nil, nil //nolint:nilnil // withConfigMutation's own documented "nothing to do" signal, not an error
+			}
 		}
-	}
-	f.cfg.Storages = append(f.cfg.Storages, config.Storage{ID: id, Path: path, CatalogPath: catalogPath, Name: name})
-	err := config.Save(f.configPath, f.cfg)
-	if err != nil {
-		f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
-		return fmt.Errorf("farcd: persist storage %q to %s: %w", id, f.configPath, err)
+		f.cfg.Storages = append(f.cfg.Storages, config.Storage{ID: id, Path: path, CatalogPath: catalogPath, Name: name})
+		return func() {
+			f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
+		}, nil
+	})
+	if err != nil || !mutated {
+		return err
 	}
 	if unit, ok := f.registry.Get(id); ok {
 		f.bridgeFblockEvents(id, unit)
@@ -303,30 +338,26 @@ func (f *Farcd) persistNewStorage(id, path, catalogPath, name string) error {
 
 // persistUpdatedStorage renames an existing storage's config entry (PATCH
 // /storages/{id} with a name field), wired into HttpApiServer via
-// SetOnStorageUpdated -- mirrors persistNewStorage's role, rolling back the
-// in-memory rename if Save fails.
+// SetOnStorageUpdated.
 func (f *Farcd) persistUpdatedStorage(id, name string) error {
-	f.cfgMu.Lock()
-	defer f.cfgMu.Unlock()
-
-	idx := -1
-	for i, s := range f.cfg.Storages {
-		if s.ID == id {
-			idx = i
-			break
+	_, err := f.withConfigMutation(fmt.Sprintf("persist storage %q rename", id), func() (func(), error) {
+		idx := -1
+		for i, s := range f.cfg.Storages {
+			if s.ID == id {
+				idx = i
+				break
+			}
 		}
-	}
-	if idx < 0 {
-		return fmt.Errorf("farcd: persist storage %q: not present in config", id)
-	}
-	old := f.cfg.Storages[idx].Name
-	f.cfg.Storages[idx].Name = name
-	err := config.Save(f.configPath, f.cfg)
-	if err != nil {
-		f.cfg.Storages[idx].Name = old
-		return fmt.Errorf("farcd: persist storage %q rename to %s: %w", id, f.configPath, err)
-	}
-	return nil
+		if idx < 0 {
+			return nil, fmt.Errorf("farcd: persist storage %q: not present in config", id)
+		}
+		old := f.cfg.Storages[idx].Name
+		f.cfg.Storages[idx].Name = name
+		return func() {
+			f.cfg.Storages[idx].Name = old
+		}, nil
+	})
+	return err
 }
 
 // persistRemovedStorage removes a storage detached via archives.go's
@@ -338,29 +369,29 @@ func (f *Farcd) persistUpdatedStorage(id, name string) error {
 // Unit from f.units, so shutdown's closeUnits doesn't later double-close a
 // Unit archives.go's handler is about to Close itself.
 func (f *Farcd) persistRemovedStorage(id string) error {
-	f.cfgMu.Lock()
-	defer f.cfgMu.Unlock()
-
-	idx := -1
-	for i, sc := range f.cfg.Storages {
-		if sc.ID == id {
-			idx = i
-			break
+	mutated, err := f.withConfigMutation(fmt.Sprintf("persist archive %q detach", id), func() (func(), error) {
+		idx := -1
+		for i, sc := range f.cfg.Storages {
+			if sc.ID == id {
+				idx = i
+				break
+			}
 		}
-	}
-	if idx < 0 {
-		return fmt.Errorf("farcd: persist archive %q detach: not present in config", id)
-	}
-	removed := f.cfg.Storages[idx]
-	f.cfg.Storages = append(f.cfg.Storages[:idx], f.cfg.Storages[idx+1:]...)
-	err := config.Save(f.configPath, f.cfg)
-	if err != nil {
-		restored := make([]config.Storage, 0, len(f.cfg.Storages)+1)
-		restored = append(restored, f.cfg.Storages[:idx]...)
-		restored = append(restored, removed)
-		restored = append(restored, f.cfg.Storages[idx:]...)
-		f.cfg.Storages = restored
-		return fmt.Errorf("farcd: persist archive %q detach to %s: %w", id, f.configPath, err)
+		if idx < 0 {
+			return nil, fmt.Errorf("farcd: persist archive %q detach: not present in config", id)
+		}
+		removed := f.cfg.Storages[idx]
+		f.cfg.Storages = append(f.cfg.Storages[:idx], f.cfg.Storages[idx+1:]...)
+		return func() {
+			restored := make([]config.Storage, 0, len(f.cfg.Storages)+1)
+			restored = append(restored, f.cfg.Storages[:idx]...)
+			restored = append(restored, removed)
+			restored = append(restored, f.cfg.Storages[idx:]...)
+			f.cfg.Storages = restored
+		}, nil
+	})
+	if err != nil || !mutated {
+		return err
 	}
 
 	f.stopBridge(id)
@@ -403,19 +434,19 @@ func specToConfigChannel(spec api.ChannelSpec) config.Channel {
 // "global" /events/ws subscriber (internal/hlsd's reconciliation loop) picks
 // the channel up without waiting for its next GET /channels re-list.
 func (f *Farcd) persistNewChannel(spec api.ChannelSpec) error {
-	f.cfgMu.Lock()
-	defer f.cfgMu.Unlock()
-
-	for _, c := range f.cfg.Channels {
-		if c.ID == spec.ID {
-			return nil
+	mutated, err := f.withConfigMutation(fmt.Sprintf("persist channel %d", spec.ID), func() (func(), error) {
+		for _, c := range f.cfg.Channels {
+			if c.ID == spec.ID {
+				return nil, nil //nolint:nilnil // withConfigMutation's own documented "nothing to do" signal, not an error
+			}
 		}
-	}
-	f.cfg.Channels = append(f.cfg.Channels, specToConfigChannel(spec))
-	err := config.Save(f.configPath, f.cfg)
-	if err != nil {
-		f.cfg.Channels = f.cfg.Channels[:len(f.cfg.Channels)-1]
-		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
+		f.cfg.Channels = append(f.cfg.Channels, specToConfigChannel(spec))
+		return func() {
+			f.cfg.Channels = f.cfg.Channels[:len(f.cfg.Channels)-1]
+		}, nil
+	})
+	if err != nil || !mutated {
+		return err
 	}
 	f.push.Publish(api.JournalEvent{Name: api.EventChannelCreated, Channel: spec.ID, Storage: spec.Storage})
 	return nil
@@ -430,25 +461,26 @@ func (f *Farcd) persistNewChannel(spec api.ChannelSpec) error {
 // PUT that only edits rtsp_url/capture_policy (storage unchanged) publishes
 // nothing, since nothing a subscriber cares about actually moved.
 func (f *Farcd) persistUpdatedChannel(spec api.ChannelSpec) error {
-	f.cfgMu.Lock()
-	defer f.cfgMu.Unlock()
-
-	idx := -1
-	for i, c := range f.cfg.Channels {
-		if c.ID == spec.ID {
-			idx = i
-			break
+	var old config.Channel
+	mutated, err := f.withConfigMutation(fmt.Sprintf("persist channel %d", spec.ID), func() (func(), error) {
+		idx := -1
+		for i, c := range f.cfg.Channels {
+			if c.ID == spec.ID {
+				idx = i
+				break
+			}
 		}
-	}
-	if idx < 0 {
-		return fmt.Errorf("farcd: persist channel %d: not present in config", spec.ID)
-	}
-	old := f.cfg.Channels[idx]
-	f.cfg.Channels[idx] = specToConfigChannel(spec)
-	err := config.Save(f.configPath, f.cfg)
-	if err != nil {
-		f.cfg.Channels[idx] = old
-		return fmt.Errorf("farcd: persist channel %d to %s: %w", spec.ID, f.configPath, err)
+		if idx < 0 {
+			return nil, fmt.Errorf("farcd: persist channel %d: not present in config", spec.ID)
+		}
+		old = f.cfg.Channels[idx]
+		f.cfg.Channels[idx] = specToConfigChannel(spec)
+		return func() {
+			f.cfg.Channels[idx] = old
+		}, nil
+	})
+	if err != nil || !mutated {
+		return err
 	}
 	if old.Storage != spec.Storage {
 		f.push.Publish(api.JournalEvent{Name: api.EventChannelRemoved, Channel: spec.ID, Storage: old.Storage})
@@ -461,29 +493,30 @@ func (f *Farcd) persistUpdatedChannel(spec api.ChannelSpec) error {
 // /channels/{id}), restoring it at the same index if Save fails. On
 // success, publishes api.EventChannelRemoved (see persistNewChannel).
 func (f *Farcd) persistRemovedChannel(id uint16) error {
-	f.cfgMu.Lock()
-	defer f.cfgMu.Unlock()
-
-	idx := -1
-	for i, c := range f.cfg.Channels {
-		if c.ID == id {
-			idx = i
-			break
+	var removed config.Channel
+	mutated, err := f.withConfigMutation(fmt.Sprintf("persist removal of channel %d", id), func() (func(), error) {
+		idx := -1
+		for i, c := range f.cfg.Channels {
+			if c.ID == id {
+				idx = i
+				break
+			}
 		}
-	}
-	if idx < 0 {
-		return nil
-	}
-	removed := f.cfg.Channels[idx]
-	f.cfg.Channels = append(f.cfg.Channels[:idx], f.cfg.Channels[idx+1:]...)
-	err := config.Save(f.configPath, f.cfg)
-	if err != nil {
-		restored := make([]config.Channel, 0, len(f.cfg.Channels)+1)
-		restored = append(restored, f.cfg.Channels[:idx]...)
-		restored = append(restored, removed)
-		restored = append(restored, f.cfg.Channels[idx:]...)
-		f.cfg.Channels = restored
-		return fmt.Errorf("farcd: persist removal of channel %d from %s: %w", id, f.configPath, err)
+		if idx < 0 {
+			return nil, nil //nolint:nilnil // withConfigMutation's own documented "nothing to do" signal, not an error -- persistRemovedChannel's own doc comment: silently returns nil for an already-gone channel
+		}
+		removed = f.cfg.Channels[idx]
+		f.cfg.Channels = append(f.cfg.Channels[:idx], f.cfg.Channels[idx+1:]...)
+		return func() {
+			restored := make([]config.Channel, 0, len(f.cfg.Channels)+1)
+			restored = append(restored, f.cfg.Channels[:idx]...)
+			restored = append(restored, removed)
+			restored = append(restored, f.cfg.Channels[idx:]...)
+			f.cfg.Channels = restored
+		}, nil
+	})
+	if err != nil || !mutated {
+		return err
 	}
 	f.push.Publish(api.JournalEvent{Name: api.EventChannelRemoved, Channel: id, Storage: removed.Storage})
 	return nil
@@ -546,44 +579,6 @@ func (f *Farcd) bridgeFblockEvents(id string, unit *storage.Unit) {
 	}()
 }
 
-// liveProgressInterval is how often runLiveProgressTicker polls each
-// recording channel's Filler for newly-appended tree nodes -- frequent
-// enough that the fblock-live page feels live, coarse enough that even a
-// high-fps stream's per-tick delta stays a small WS frame (see
-// docs/docs/archive/08-array-trees.md §3.4 on why individual frames are
-// never pushed one at a time).
-const liveProgressInterval = time.Second
-
-// runLiveProgressTicker drives the fblock-live page's WS feed: once a
-// second, for every storage with at least one tracked channel, pull
-// whatever's been appended to its shared segment's Filler since the last
-// tick and publish it. Runs until ctx is cancelled; like bridgeFblockEvents's
-// goroutines, Run doesn't wait for it to actually exit at shutdown.
-func (f *Farcd) runLiveProgressTicker(ctx context.Context) {
-	ticker := time.NewTicker(liveProgressInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			f.tickLiveProgress()
-		}
-	}
-}
-
-func (f *Farcd) tickLiveProgress() {
-	for _, storageID := range f.ing.StorageIDs() {
-		cursor := f.liveStorageCursors[storageID]
-		elems, total, contentBytes, ok := f.ing.LiveElementsSinceStorage(storageID, cursor)
-		if !ok || len(elems) == 0 {
-			continue
-		}
-		f.push.PublishLiveProgress(storageID, total, contentBytes, elems, uint32(cursor))
-		f.liveStorageCursors[storageID] = total
-	}
-}
-
 func (f *Farcd) closeUnits() {
 	f.bridgeMu.Lock()
 	stops := f.bridgeStops
@@ -633,7 +628,6 @@ func (f *Farcd) Run(ctx context.Context) error {
 	go serve("http", f.httpSrv)
 	go serve("ws", f.wsSrv)
 	go serve("metrics", f.metricsSrv)
-	go f.runLiveProgressTicker(ctx)
 
 	var runErr error
 	select {
@@ -653,7 +647,7 @@ func (f *Farcd) shutdown() {
 	for _, srv := range []*http.Server{f.httpSrv, f.wsSrv, f.metricsSrv} {
 		err := srv.Shutdown(shutdownCtx)
 		if err != nil {
-			f.logf("farcd: server shutdown: %v", err)
+			levellog.New(f.logf).Error("farcd: server shutdown: %v", err)
 		}
 	}
 

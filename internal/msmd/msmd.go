@@ -1,34 +1,60 @@
-// Package msmd is msm_server's process wiring: subscribes to one farcd's WS
-// event feed (internal/msmclient) and, for every event, makes the matching
-// outbound call(s) to the external msm service (internal/msmapi),
-// converting the TOC msm_server receives over WS into vaa-blocks and stream
-// params (internal/vaablocks) along the way.
+// Package msmd is msm_server's process wiring for both integration
+// directions with the external msm/controller system:
 //
-// Delivery is best-effort, matching farcd's own WS feed (internal/api/
-// eventpush.go's documented "no reconnect catch-up" policy): Run redials on
-// disconnect and picks up wherever the reconnected feed resumes, but never
-// persists a queue or retries a call across a reconnect. Events are
-// processed strictly one at a time (a single goroutine per connection), so
-// a vaa_blocks_add for a given fblock is always sent, and completes, before
-// the info_set that follows it in the same fblock.ready handling -- the
-// ordering temp/msm/openapi.yaml documents, achieved here just by not doing
-// anything concurrently, not by any explicit sequencing mechanism.
+//   - Outbound: subscribes to one farcd's WS event feed (internal/msmclient)
+//     and, for every event, makes the matching outbound call(s) to the
+//     external msm service (internal/msmapi), converting the TOC msm_server
+//     receives over WS into vaa-blocks and stream params
+//     (internal/vaablocks) along the way.
+//   - Inbound: runs internal/archivesapi's HTTP server, translating the
+//     external msm/controller's /api/v1/archives/* calls
+//     (temp/controller/openapi.yaml) into calls against farcd's own generic
+//     Storage/Channel API via internal/farcctl -- the single integration
+//     point into this codebase, per the 2026-08-13 decision to move that
+//     route group out of farcd.
+//
+// The outbound side's delivery is best-effort, matching farcd's own WS feed
+// (internal/api/eventpush.go's documented "no reconnect catch-up" policy):
+// Run redials on disconnect and picks up wherever the reconnected feed
+// resumes, but never persists a queue or retries a call across a
+// reconnect. Events are processed strictly one at a time (a single
+// goroutine per connection), so a vaa_blocks_add for a given fblock is
+// always sent, and completes, before the info_set that follows it in the
+// same fblock.ready handling -- the ordering temp/msm/openapi.yaml
+// documents, achieved here just by not doing anything concurrently, not by
+// any explicit sequencing mechanism. The inbound side is a synchronous
+// per-request translation with no queue of its own either.
 package msmd
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"sync/atomic"
 	"time"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/msmapi"
-	"traycers/farc/internal/msmclient"
-	"traycers/farc/internal/msmconfig"
-	"traycers/farc/internal/vaablocks"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/archivesapi"
+	"github.com/traycers/farc/internal/farcctl"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/levellog"
+	"github.com/traycers/farc/internal/msmapi"
+	"github.com/traycers/farc/internal/msmclient"
+	"github.com/traycers/farc/internal/msmconfig"
+	"github.com/traycers/farc/internal/vaablocks"
+	"github.com/traycers/farc/toc"
 )
+
+// readHeaderTimeout bounds how long the archivesapi http.Server waits for a
+// client to finish sending request headers, matching internal/farcd's own
+// constant of the same purpose.
+const readHeaderTimeout = 10 * time.Second
+
+// shutdownTimeout bounds how long the archivesapi http.Server's graceful
+// shutdown waits for in-flight requests to finish, matching internal/farcd's
+// own constant of the same purpose.
+const shutdownTimeout = 10 * time.Second
 
 // Event name constants, duplicated from internal/api/eventpush.go rather
 // than imported -- internal/msmclient's own doc comment explains why this
@@ -100,7 +126,11 @@ func newProcessor(out outbound, content contentFetcher, logf func(string, ...any
 
 // Run subscribes to cfg's farcd and processes events until ctx is
 // cancelled, redialing with exponential backoff (capped at 30s) on any
-// disconnect or subscribe failure.
+// disconnect or subscribe failure -- concurrently with cfg.HTTP's
+// archivesapi server (the external msm/controller's single integration
+// point, per the 2026-08-13 decision to move /api/v1/archives/* out of
+// farcd and into msm_server). Either subsystem failing tears both down;
+// Run returns once both have stopped.
 func Run(ctx context.Context, cfg *msmconfig.Config, logf func(format string, args ...any)) {
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -109,16 +139,80 @@ func Run(ctx context.Context, cfg *msmconfig.Config, logf func(format string, ar
 	out := msmapi.New(cfg.MSMBaseURL)
 	content := hlsclient.New(cfg.FarcHTTP, "")
 	p := newProcessor(out, content, logf)
-	run(ctx, sub, p, logf)
+
+	client := farcctl.New(cfg.FarcHTTP)
+	httpSrv := &http.Server{
+		Addr:              cfg.HTTP.String(),
+		Handler:           archivesapi.New(client).Handler(),
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
+
+	var wsConnected atomic.Bool
+	metricsSrv := &http.Server{
+		Addr:              cfg.Metrics.String(),
+		Handler:           newMetricsHandler(&wsConnected),
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
+
+	// runCtx is run's own cancellation, derived from ctx so a normal
+	// shutdown (ctx cancelled by the caller) stops it automatically, but
+	// also cancellable on its own if the archives HTTP server fails to
+	// start (below) -- ctx itself isn't ours to cancel.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	errCh := make(chan error, 2)
+	go func() {
+		err := httpSrv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("msmd: archives http server: %w", err)
+			return
+		}
+		errCh <- nil
+	}()
+	go func() {
+		err := metricsSrv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("msmd: metrics server: %w", err)
+			return
+		}
+		errCh <- nil
+	}()
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		run(runCtx, sub, p, logf, &wsConnected)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case err := <-errCh:
+		if err != nil {
+			levellog.New(logf).Error("%v", err)
+		}
+		cancelRun()
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	for _, srv := range []*http.Server{httpSrv, metricsSrv} {
+		err := srv.Shutdown(shutdownCtx) //nolint:contextcheck // deliberate: ctx may already be Done() here, so shutdown builds its own fresh timeout context rather than reusing a cancelled one -- matches internal/farcd's identical pattern
+		if err != nil {
+			levellog.New(logf).Error("msmd: archives http server shutdown: %v", err)
+		}
+	}
+	<-runDone
 }
 
-func run(ctx context.Context, sub subscriber, p *processor, logf func(string, ...any)) {
+func run(ctx context.Context, sub subscriber, p *processor, logf func(string, ...any), wsConnected *atomic.Bool) {
 	const maxBackoff = 30 * time.Second
 	backoff := time.Second
 	for ctx.Err() == nil {
 		events, err := sub.Subscribe(ctx)
 		if err != nil {
-			logf("msmd: subscribe: %v", err)
+			wsConnected.Store(false)
+			levellog.New(logf).Warn("msmd: subscribe: %v", err)
 			select {
 			case <-ctx.Done():
 				return
@@ -130,9 +224,11 @@ func run(ctx context.Context, sub subscriber, p *processor, logf func(string, ..
 			continue
 		}
 		backoff = time.Second
-		logf("msmd: connected to farcd's event feed")
+		wsConnected.Store(true)
+		levellog.New(logf).Info("msmd: connected to farcd's event feed")
 		p.consume(ctx, events)
-		logf("msmd: disconnected from farcd's event feed, reconnecting")
+		wsConnected.Store(false)
+		levellog.New(logf).Warn("msmd: disconnected from farcd's event feed, reconnecting")
 	}
 }
 
@@ -156,7 +252,7 @@ func (p *processor) consume(ctx context.Context, events <-chan msmclient.Event) 
 			}
 			err := p.handle(ctx, ev, events)
 			if err != nil {
-				p.logf("msmd: handling %s (storage=%s channel=%d): %v", ev.Name, ev.Storage, ev.Channel, err)
+				levellog.New(p.logf).Warn("msmd: handling %s (storage=%s channel=%d): %v", ev.Name, ev.Storage, ev.Channel, err)
 			}
 		}
 	}
@@ -235,10 +331,11 @@ func (p *processor) handleFblockReady(ctx context.Context, ev msmclient.Event, e
 }
 
 // reportChannel params_adds every stream config version present for channel
-// (video and audio alike -- msm's own metadata about this archive's streams
-// stays complete even though only video ever becomes a vaa-block), then
-// vaa_blocks_add's every computed video vaa-block, referencing whichever
-// config governed its first frame.
+// (video and audio alike), then vaa_blocks_add's every computed vaa-block of
+// both kinds -- video and audio each have their own, independent
+// gap-splitting timeline (.scratch/msm-integration/issues/
+// 01-audio-vaa-blocks.md) -- referencing whichever config governed its
+// first frame.
 func (p *processor) reportChannel(ctx context.Context, aid string, fnum int64, fblockID [16]byte, columns *toc.Columns, channel uint16) error {
 	configs, err := vaablocks.StreamConfigs(columns, channel)
 	if err != nil {
@@ -253,31 +350,40 @@ func (p *processor) reportChannel(ctx context.Context, aid string, fnum int64, f
 		configByID[sc.ConfigID] = sc
 	}
 
-	blocks, err := vaablocks.Compute(columns, channel)
-	if err != nil {
-		return fmt.Errorf("compute vaa-blocks: %w", err)
+	kinds := [2]struct {
+		kind       vaablocks.StreamKind
+		streamType int
+	}{
+		{vaablocks.KindVideo, streamTypeVideo},
+		{vaablocks.KindAudio, streamTypeAudio},
 	}
-	for _, b := range blocks {
-		sc, ok := configByID[b.ConfigID]
-		if !ok {
-			return fmt.Errorf("vaa-block [%d,%d] references unknown config %d", b.Begin, b.End, b.ConfigID)
-		}
-		paramsID, err := p.ensureParams(ctx, aid, channel, fblockID, sc)
+	for _, k := range kinds {
+		blocks, err := vaablocks.Compute(columns, channel, k.kind)
 		if err != nil {
-			return fmt.Errorf("params for config %d: %w", b.ConfigID, err)
+			return fmt.Errorf("compute vaa-blocks: %w", err)
 		}
-		err = p.out.VaaBlocksAdd(ctx, aid, msmapi.VaaBlock{
-			ID:         msmapi.VaaBlockID{Fnum: fnum, Offset: int32(b.Offset), Size: int32(b.Size)},
-			FblockID:   fblockID,
-			ChannelNum: int32(b.Channel),
-			ParamsID:   paramsID,
-			StreamID:   int16(b.StreamID),
-			StreamType: streamTypeVideo,
-			Begin:      nsToTime(b.Begin),
-			End:        nsToTime(b.End),
-		})
-		if err != nil {
-			return fmt.Errorf("vaa_blocks_add: %w", err)
+		for _, b := range blocks {
+			sc, ok := configByID[b.ConfigID]
+			if !ok {
+				return fmt.Errorf("vaa-block [%d,%d] references unknown config %d", b.Begin, b.End, b.ConfigID)
+			}
+			paramsID, err := p.ensureParams(ctx, aid, channel, fblockID, sc)
+			if err != nil {
+				return fmt.Errorf("params for config %d: %w", b.ConfigID, err)
+			}
+			err = p.out.VaaBlocksAdd(ctx, aid, msmapi.VaaBlock{
+				ID:         msmapi.VaaBlockID{Fnum: fnum, Offset: int32(b.Offset), Size: int32(b.Size)},
+				FblockID:   fblockID,
+				ChannelNum: int32(b.Channel),
+				ParamsID:   paramsID,
+				StreamID:   int16(b.StreamID),
+				StreamType: k.streamType,
+				Begin:      nsToTime(b.Begin),
+				End:        nsToTime(b.End),
+			})
+			if err != nil {
+				return fmt.Errorf("vaa_blocks_add: %w", err)
+			}
 		}
 	}
 	return nil

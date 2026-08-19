@@ -3,7 +3,7 @@ package index
 import (
 	"testing"
 
-	"traycers/farc/fblock"
+	"github.com/traycers/farc/fblock"
 )
 
 func TestCandidatesFiltersByChannelTimeAndState(t *testing.T) {
@@ -42,6 +42,40 @@ func TestCandidatesUnknownChannel(t *testing.T) {
 	m := New(cat, 0, fblock.WriteModeCyclic, 30)
 	if got := m.Candidates(999, 0, 1); got != nil {
 		t.Errorf("Candidates for never-registered channel = %v, want nil", got)
+	}
+}
+
+func TestLatestReadyForChannel(t *testing.T) {
+	const c, n = 4, 4
+	cat := fblock.NewCatalog(c, n)
+	m := New(cat, 0, fblock.WriteModeCyclic, 30)
+	pos, _ := m.RegisterChannel(7)
+
+	// fblock 0: Ready, channel 7, End=200.
+	cat.SetState(0, fblock.Ready)
+	cat.End[0] = 200
+	cat.SetChannelBit(0, pos, true)
+
+	// fblock 1: Ready, channel 7, End=500 -- the latest.
+	cat.SetState(1, fblock.Ready)
+	cat.End[1] = 500
+	cat.SetChannelBit(1, pos, true)
+
+	// fblock 2: Ready, End=900, but NOT channel 7 -- must not win.
+	cat.SetState(2, fblock.Ready)
+	cat.End[2] = 900
+
+	// fblock 3: channel 7, End=999, but not Ready -- must not win.
+	cat.SetState(3, fblock.InProgress)
+	cat.End[3] = 999
+	cat.SetChannelBit(3, pos, true)
+
+	idx, ok := m.LatestReadyForChannel(7)
+	if !ok || idx != 1 {
+		t.Fatalf("LatestReadyForChannel(7) = %d,%v, want 1,true", idx, ok)
+	}
+	if _, ok := m.LatestReadyForChannel(999); ok {
+		t.Error("expected ok=false for a never-registered channel")
 	}
 }
 

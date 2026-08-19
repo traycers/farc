@@ -6,18 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/msmapi"
-	"traycers/farc/internal/msmclient"
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/msmapi"
+	"github.com/traycers/farc/internal/msmclient"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 // call/fakeOutbound records every outbound method invocation, in order, for
@@ -152,6 +153,7 @@ func writeChannelVideo(t *testing.T, unit *storage.Unit, channel uint16, times [
 	f := fcontainer.New()
 	cid, err := f.AddStreamParams(uint32(channel), 0, fcontainer.KindVideo, fcontainer.StreamParams{
 		Time: configTime, CodecVideo: mediatree.CodecH264, ParamSPS: []byte{1, 2, 3}, ParamPPS: []byte{4, 5},
+		Width: 1920, Height: 1080,
 	})
 	if err != nil {
 		t.Fatalf("AddStreamParams: %v", err)
@@ -177,6 +179,110 @@ func writeChannelVideo(t *testing.T, unit *storage.Unit, channel uint16, times [
 		t.Fatalf("toc.Encode: %v", err)
 	}
 	return uuid, buf
+}
+
+// writeChannelVideoAndAudio writes one channel's video AND audio frames
+// (sharing stream 0, per .scratch/fblocks-ui/issues/
+// 07-one-stream-per-channel-video-and-audio.md) at the given times,
+// returning the fblock's uuid and its raw TOC bytes.
+func writeChannelVideoAndAudio(t *testing.T, unit *storage.Unit, channel uint16, videoTimes, audioTimes []uint64) ([16]byte, []byte) {
+	t.Helper()
+	f := fcontainer.New()
+	videoCid, err := f.AddStreamParams(uint32(channel), 0, fcontainer.KindVideo, fcontainer.StreamParams{
+		Time: 0, CodecVideo: mediatree.CodecH264, ParamSPS: []byte{1, 2, 3}, ParamPPS: []byte{4, 5},
+	})
+	if err != nil {
+		t.Fatalf("AddStreamParams video: %v", err)
+	}
+	audioCid, err := f.AddStreamParams(uint32(channel), 0, fcontainer.KindAudio, fcontainer.StreamParams{
+		Time: 0, CodecAudio: mediatree.CodecG711A, SampleRate: 8000, ChannelCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("AddStreamParams audio: %v", err)
+	}
+	videoFrames := make([]fcontainer.Frame, len(videoTimes))
+	for i, tm := range videoTimes {
+		videoFrames[i] = fcontainer.Frame{Data: []byte(fmt.Sprintf("video-%d-payload", i)), Time: tm, Kind: mediatree.FrameKindI}
+	}
+	if err := f.AddFrames(videoCid, videoFrames); err != nil {
+		t.Fatalf("AddFrames video: %v", err)
+	}
+	audioFrames := make([]fcontainer.Frame, len(audioTimes))
+	for i, tm := range audioTimes {
+		audioFrames[i] = fcontainer.Frame{Data: []byte(fmt.Sprintf("audio-%d-payload", i)), Time: tm}
+	}
+	if err := f.AddFrames(audioCid, audioFrames); err != nil {
+		t.Fatalf("AddFrames audio: %v", err)
+	}
+	begin, end := videoTimes[0], videoTimes[len(videoTimes)-1]
+	uuid, err := unit.WriteFcontainer([]uint16{channel}, begin, end, f, 1000)
+	if err != nil {
+		t.Fatalf("WriteFcontainer: %v", err)
+	}
+	columns, err := unit.ReadTOC(uuid)
+	if err != nil {
+		t.Fatalf("ReadTOC: %v", err)
+	}
+	buf, err := toc.Encode(columns)
+	if err != nil {
+		t.Fatalf("toc.Encode: %v", err)
+	}
+	return uuid, buf
+}
+
+// TestHandleFblockReady_ReportsBothVideoAndAudioVaaBlocks is
+// .scratch/msm-integration/issues/01-audio-vaa-blocks.md: a channel with
+// both video and audio frames must vaa_blocks_add both, each tagged with
+// its own StreamType, both before info_set.
+func TestHandleFblockReady_ReportsBothVideoAndAudioVaaBlocks(t *testing.T) {
+	unit := newTestUnit(t)
+	uuid, tocBytes := writeChannelVideoAndAudio(t, unit, 1, []uint64{0, second}, []uint64{0, second})
+
+	out := &fakeOutbound{}
+	p := newProcessor(out, unitContentFetcher{unit}, nil)
+
+	events := make(chan msmclient.Event, 2)
+	events <- msmclient.Event{Type: "event", Name: eventFblockReady, Storage: "arch1", Index: 7, UUID: uuid, HasUUID: true, Begin: 0, End: second}
+	events <- msmclient.Event{Type: "toc", Storage: "arch1", Index: 7, UUID: uuid, TOC: tocBytes}
+
+	ev := <-events
+	err := p.handle(context.Background(), ev, events)
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	var streamTypes []int
+	infoSetSeen := false
+	for _, c := range out.calls {
+		if c.method == "VaaBlocksAdd" {
+			if infoSetSeen {
+				t.Fatal("VaaBlocksAdd called after InfoSet")
+			}
+			block, ok := c.args[1].(msmapi.VaaBlock)
+			if !ok {
+				t.Fatalf("VaaBlocksAdd arg = %+v, want msmapi.VaaBlock", c.args[1])
+			}
+			streamTypes = append(streamTypes, block.StreamType)
+		}
+		if c.method == "InfoSet" {
+			infoSetSeen = true
+		}
+	}
+	if len(streamTypes) != 2 {
+		t.Fatalf("VaaBlocksAdd called %d times, want 2 (one per kind), got StreamTypes %v", len(streamTypes), streamTypes)
+	}
+	hasVideo, hasAudio := false, false
+	for _, st := range streamTypes {
+		if st == streamTypeVideo {
+			hasVideo = true
+		}
+		if st == streamTypeAudio {
+			hasAudio = true
+		}
+	}
+	if !hasVideo || !hasAudio {
+		t.Fatalf("StreamTypes = %v, want both streamTypeVideo (%d) and streamTypeAudio (%d)", streamTypes, streamTypeVideo, streamTypeAudio)
+	}
 }
 
 func TestHandle_FblockCreated(t *testing.T) {
@@ -277,6 +383,9 @@ func TestHandleFblockReady_FullFlow(t *testing.T) {
 	if !ok || data["codec"] != "h264" || data["sps"] == nil || data["pps"] == nil {
 		t.Fatalf("ParamsAdd data = %+v", paramsCall.args[3])
 	}
+	if data["width"] != uint32(1920) || data["height"] != uint32(1080) {
+		t.Fatalf("ParamsAdd data = %+v, want width=1920 height=1080", paramsCall.args[3])
+	}
 
 	vaaCall := out.calls[1]
 	block, ok := vaaCall.args[1].(msmapi.VaaBlock)
@@ -354,7 +463,7 @@ func TestRun_ReconnectsOnDisconnect(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	run(ctx, sub, p, func(string, ...any) {})
+	run(ctx, sub, p, func(string, ...any) {}, &atomic.Bool{})
 
 	if sub.calls < 2 {
 		t.Fatalf("Subscribe called %d times, want at least 2 (should reconnect on disconnect)", sub.calls)
@@ -376,7 +485,7 @@ func TestRun_ReconnectsAfterSubscribeError(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1300*time.Millisecond)
 	defer cancel()
-	run(ctx, sub, p, func(string, ...any) {})
+	run(ctx, sub, p, func(string, ...any) {}, &atomic.Bool{})
 
 	if sub.calls < 2 {
 		t.Fatalf("Subscribe called %d times, want at least 2 (should retry after an error)", sub.calls)

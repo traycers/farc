@@ -1,6 +1,6 @@
 package index
 
-import "traycers/farc/fblock"
+import "github.com/traycers/farc/fblock"
 
 // ResolveUUID returns the physical index of the Ready fblock holding the
 // fcontainer with this UUID, if any (docs/docs/archive/

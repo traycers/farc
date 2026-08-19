@@ -1,0 +1,43 @@
+{
+  "title": "Logs",
+  "uid": "farc-logs",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "tags": ["farc"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Log volume by level",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (level) (count_over_time({container=~\".+\"} | regexp \"level=(?P<level>[A-Z]+)\" [1m]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Live tail",
+      "type": "logs",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessages": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        { "expr": "{container=~\"farc|hls_server|msm_server\"}", "refId": "A" }
+      ]
+    }
+  ]
+}

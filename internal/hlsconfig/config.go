@@ -1,7 +1,8 @@
 // Package hlsconfig implements hls_server's process configuration, split the
 // same way internal/config splits farcd's (see that package's doc comment):
 // server/tuning parameters come from environment variables (HLS_SERVER_
-// HTTP_IP/PORT, HLS_SERVER_FARC_HTTP/WS, HLS_SERVER_TARGET_SEGMENT_DURATION,
+// HTTP_IP/PORT, HLS_SERVER_METRICS_IP/PORT, HLS_SERVER_FARC_HTTP/WS,
+// HLS_SERVER_TARGET_SEGMENT_DURATION,
 // HLS_SERVER_CACHE_BACKEND ("disk" or "s3"), HLS_SERVER_CACHE_DIR/
 // HLS_SERVER_CACHE_QUOTA_BYTES (disk backend), HLS_SERVER_S3_ENDPOINT/
 // HLS_SERVER_S3_BUCKET/HLS_SERVER_S3_ACCESS_KEY/HLS_SERVER_S3_SECRET_KEY/
@@ -80,7 +81,8 @@ type Channel struct {
 // TargetSegmentDuration/CacheDir/CacheQuotaBytes come from env (loadEnv),
 // Channels from the JSON file at path.
 type Config struct {
-	HTTP Addr `json:"-"` // hls_server's own player-facing listen address
+	HTTP    Addr `json:"-"` // hls_server's own player-facing listen address
+	Metrics Addr `json:"-"` // Prometheus /metrics listen address
 
 	Farcd    Farcd     `json:"-"`
 	Channels []Channel `json:"channels"`
@@ -105,6 +107,12 @@ type Config struct {
 	S3AccessKey string `json:"-"`
 	S3SecretKey string `json:"-"`
 	S3UseSSL    bool   `json:"-"`
+
+	// LogDir is HLS_SERVER_LOG_DIR: a directory hls_server additionally
+	// writes its own log lines to (hls_server.log), alongside stderr.
+	// Optional -- empty means stderr only, matching the process's behavior
+	// before this field existed.
+	LogDir string `json:"-"`
 }
 
 // Load reads HTTP/Farcd/TargetSegmentDuration/CacheDir/CacheQuotaBytes from
@@ -188,6 +196,12 @@ func loadEnv(cfg *Config) error {
 	}
 	cfg.HTTP.Port = port
 
+	cfg.Metrics.IP = envOr("HLS_SERVER_METRICS_IP", "0.0.0.0")
+	cfg.Metrics.Port, err = envInt("HLS_SERVER_METRICS_PORT")
+	if err != nil {
+		return err
+	}
+
 	cfg.Farcd.HTTP = os.Getenv("HLS_SERVER_FARC_HTTP")
 	cfg.Farcd.WS = os.Getenv("HLS_SERVER_FARC_WS")
 
@@ -213,6 +227,8 @@ func loadEnv(cfg *Config) error {
 	cfg.S3AccessKey = os.Getenv("HLS_SERVER_S3_ACCESS_KEY")
 	cfg.S3SecretKey = os.Getenv("HLS_SERVER_S3_SECRET_KEY")
 	cfg.S3UseSSL = os.Getenv("HLS_SERVER_S3_USE_SSL") == "true"
+
+	cfg.LogDir = os.Getenv("HLS_SERVER_LOG_DIR")
 
 	return nil
 }
@@ -252,6 +268,9 @@ func (cfg *Config) validate() error {
 	if cfg.HTTP.Port == 0 {
 		return errors.New("http.port is required")
 	}
+	if cfg.Metrics.Port == 0 {
+		return errors.New("metrics.port is required")
+	}
 
 	if cfg.Farcd.HTTP == "" {
 		return errors.New("farcd.http is required")
@@ -280,11 +299,17 @@ func (cfg *Config) validate() error {
 		return errors.New("target_segment_duration must be a positive duration")
 	}
 
+	// cache_dir is required regardless of cache_backend: it also roots
+	// hls_server's persistent TOC cache (issue
+	// .scratch/hls-toc-bootstrap/issues/02-persistent-toc-cache-and-catalog-diff.md),
+	// which s3 exempts the *segment* cache from needing a local dir for, but
+	// never the TOC cache.
+	if cfg.CacheDir == "" {
+		return errors.New("cache_dir is required")
+	}
+
 	switch cfg.CacheBackend {
 	case "disk":
-		if cfg.CacheDir == "" {
-			return errors.New("cache_dir is required")
-		}
 	case "s3":
 		if cfg.S3Endpoint == "" {
 			return errors.New(`s3_endpoint is required when cache_backend is "s3"`)

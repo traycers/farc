@@ -1,147 +1,61 @@
 package storage
 
 import (
-	"fmt"
-
-	"traycers/farc/fblock"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/fcontainer"
 )
 
-// WriteFcontainer performs docs/docs/archive/04-storage-operations.md §7
-// end to end for one already-filled fcontainer: resolve channels to
-// compact positions, select a physical index, assemble the fblock and
-// write it with verify, retrying on a corrupted write with a fresh index
-// (§7.3 step 1), and commit + publish on success. now is Unix ns, used for
-// select_next_index's retention check and as this write's catalog_time.
-//
-// See this package's doc comment for the two Recorder-side gap-fixes this
-// method implements: patching the fblock's own catalog entry with the new
-// fcontainer's real UUID/begin/end/channel_bitmap before writing (so a
-// crash after a successful write can still be recovered), and saving the
-// SSD catalog both at BeginWrite and at CompleteWrite (so the SSD-catalog
-// Startup path can detect an in-flight write's success too).
-//
-// ADR-017's incremental flush is not implemented — filler must already be
-// fully populated (its fcontainer closed) before this call.
+// WriteFcontainer performs docs/docs/archive/04-storage-operations.md §7 end
+// to end for one already-filled fcontainer: it's a thin backward-compat
+// wrapper over BeginSegment/Close (the buffer-pool/early-index-assignment/
+// periodic-flush path — see segment.go) — no separate code path, this *is*
+// that path, just fed an already-fully-built Filler in one shot instead of
+// incrementally. now is Unix ns, used for select_next_index's retention
+// check and as this write's catalog_time.
 func (u *Unit) WriteFcontainer(channels []uint16, begin, end uint64, filler *fcontainer.Filler, now uint64) ([16]byte, error) {
-	u.writeMu.Lock()
-	defer u.writeMu.Unlock()
-
-	elems := filler.Elements()
-	contentBuf := mediatree.EncodeContent(elems)
-	_, valueOffsets, err := mediatree.DecodeContentWithOffsets(contentBuf)
-	if err != nil {
-		return [16]byte{}, fmt.Errorf("storage: recorder: re-decode content offsets: %w", err)
-	}
-	columns, err := toc.Build(elems, valueOffsets)
-	if err != nil {
-		return [16]byte{}, fmt.Errorf("storage: recorder: build TOC: %w", err)
-	}
-	tocBuf, err := toc.Encode(columns)
-	if err != nil {
-		return [16]byte{}, fmt.Errorf("storage: recorder: encode TOC: %w", err)
-	}
-
-	uuid, err := newUUIDv4()
+	seg, err := u.beginSegmentWithFiller(channels, filler, begin, end, now)
 	if err != nil {
 		return [16]byte{}, err
 	}
+	return seg.Close(now)
+}
 
-	positions, err := u.mgr.RegisterChannels(channels)
+// beginSegmentWithFiller is BeginSegment's internal variant for a caller
+// that already has a fully-built *fcontainer.Filler and its own known
+// begin/end (WriteFcontainer's only caller) — segmentImpl wraps that
+// Filler directly instead of allocating a fresh one, and its whole tree is
+// pushed as this segment's initial content.
+func (u *Unit) beginSegmentWithFiller(channels []uint16, filler *fcontainer.Filler, begin, end, now uint64) (*segmentImpl, error) {
+	uuid, err := newUUIDv4()
 	if err != nil {
-		return [16]byte{}, fmt.Errorf("storage: recorder: register channels: %w", err)
+		return nil, err
 	}
-
-	params := u.currentParams()
-
-	for {
-		idx, err := u.mgr.SelectNextIndex(now)
-		if err != nil {
-			u.notify.Publish(Event{Name: EventStorageAlert, Severity: "critical", Reason: AlertNoFreeFblocks})
-			return [16]byte{}, err
-		}
-
-		prev := u.mgr.Snapshot()
-		wasReady := prev.State(idx) == fblock.Ready
-		prevUUID := prev.UUID[idx]
-
-		err = u.mgr.BeginWrite(idx)
-		if err != nil {
-			return [16]byte{}, err
-		}
-		u.notify.Publish(Event{Name: EventFblockWriteStarted, Index: idx, UUID: uuid})
-		if wasReady {
-			u.notify.Publish(Event{Name: EventFblockDeleted, Index: idx, UUID: prevUUID})
-		}
-
-		// Gap-fix: patch this write's own catalog entry with its real
-		// identity before it's embedded in the header (see package doc).
-		// The channel bits also need setting on IndexManager's own live
-		// catalog — CompleteWrite below only ever touches state/uuid/
-		// begin/end, never channel_bitmap (see index.Manager.SetChannelBit).
-		for _, pos := range positions {
-			err := u.mgr.SetChannelBit(idx, pos, true)
-			if err != nil {
-				return [16]byte{}, err
-			}
-		}
-		snap := u.mgr.Snapshot()
-		snap.UUID[idx] = uuid
-		snap.Begin[idx] = begin
-		snap.End[idx] = end
-
-		seq := u.nextWriteSequence()
-
-		// Gap-fix: mirror in-flight visibility to the SSD catalog too, so
-		// path 1 can detect this write's success even if the process
-		// crashes before CompleteWrite runs.
-		u.saveSSDCatalogBestEffort(snap, SSDCatalogMeta{WriteSequence: seq, CatalogTime: now, Cursor: idx})
-
-		h := &fblock.Header{
-			Prolog: fblock.FixedProlog{
-				FormatVersionMajor: 1,
-				FormatVersionMinor: 0,
-				MaxChannels:        u.geo.MaxChannels,
-				WriteSequence:      seq,
-				CatalogTime:        now,
-				FblockSize:         u.geo.FblockSize,
-			},
-			Params:  params,
-			Catalog: snap,
-		}
-		buf, err := assembleFblock(h, contentBuf, tocBuf)
-		if err != nil {
-			return [16]byte{}, fmt.Errorf("storage: recorder: assemble fblock %d: %w", idx, err)
-		}
-
-		ticket := u.engine.EnqueueWrite(int64(fblockOffset(u.geo, idx)), buf)
-		res, werr := ticket.Wait()
-		if werr != nil {
-			u.health.RecordWrite(true)
-			return [16]byte{}, fmt.Errorf("storage: recorder: write fblock %d: %w", idx, werr)
-		}
-		if res.Corrupted {
-			u.health.RecordWrite(true)
-			u.notify.Publish(Event{Name: EventFblockWriteFailed, Index: idx, UUID: uuid})
-			err := u.mgr.MarkBad(idx)
-			if err != nil {
-				return [16]byte{}, err
-			}
-			continue // retry: positions/uuid/begin/end/content/toc unchanged
-		}
-
-		u.health.RecordWrite(false)
-		err = u.mgr.CompleteWrite(idx, uuid, begin, end)
-		if err != nil {
-			return [16]byte{}, err
-		}
-		u.saveSSDCatalogBestEffort(u.mgr.Snapshot(), SSDCatalogMeta{WriteSequence: seq, CatalogTime: now, Cursor: idx})
-		u.notify.Publish(Event{Name: EventFblockWriteCompleted, Index: idx, UUID: uuid})
-		u.health.CheckBadRatio(u.mgr)
-		return uuid, nil
+	seg := &segmentImpl{
+		unit:      u,
+		filler:    filler,
+		positions: make(map[uint16]uint16),
+		uuid:      uuid,
+		begin:     begin,
+		end:       end,
+		haveFrame: true,
 	}
+	for _, ch := range channels {
+		err := seg.RegisterChannel(ch)
+		if err != nil {
+			return nil, err
+		}
+	}
+	_, err = u.pool.reserve(seg, now)
+	if err != nil {
+		return nil, err
+	}
+	seg.mu.Lock()
+	err = seg.pushReadyLocked(now)
+	seg.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return seg, nil
 }
 
 // saveSSDCatalogBestEffort persists cat to the SSD mirror if one is

@@ -75,7 +75,10 @@ func DecodeHeader(buf []byte) (h Header, diag HeaderDiagnosis, err error) {
 	fixedBuf := buf[0:FixedPrologSize]
 	diag.FixedValid = true // magic_prolog checked in DecodeFixedProlog; CRC checked below
 
-	offs := ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize)
+	// alignment=1: this function only ever reads ChecksumsOffset (checked
+	// just below) and fields before it, never ContentOffset — unaffected by
+	// the alignment gap either way.
+	offs := ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize, 1)
 	checksumsEnd := offs.ChecksumsOffset + HeaderChecksumsSize
 	if uint64(len(buf)) < checksumsEnd {
 		return Header{}, HeaderDiagnosis{}, fmt.Errorf(

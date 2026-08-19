@@ -1,3 +1,5 @@
+import type { PoolPushMessage } from './pool'
+
 const WS_BASE = '/api/events'
 
 // Mirrors farcd's internal/api/eventpush.go pushMessage JSON shape --
@@ -14,45 +16,17 @@ export type JournalEvent = {
   storage?: string
 }
 
-// Mirrors internal/api/eventpush.go's liveNode/livePushMessage -- the
-// fblock-live page's per-tick growth of a storage's shared fcontainer still
-// being recorded (not yet on disk), covering every channel currently
-// writing into it at once (docs/docs/archive/adr/014-channel-registry.md).
-// Value/size follow the same convention as web/src/api/fblocktree.ts's
-// TreeNode (a decimal string for ns-scale values, a plain number
-// otherwise); unlike TreeNode there's no child_count, since this is a flat
-// delta list, not a "node + its children" listing.
-export type LiveNode = {
-  id: number
-  role: string
-  type: string
-  parent: number
-  value?: string | number
-  size?: number
-}
-
-export type LivePushMessage = {
-  type: 'live'
-  storage: string
-  total: number
-  content_bytes: number
-  estimated_toc_bytes: number
-  nodes: LiveNode[]
-}
-
 const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 15000
 
-// connectEvents opens farcd's EventPushServer WS endpoint, sends body on
-// open, and forwards every parsed frame to onMessage -- the reconnect/
-// backoff loop shared by subscribeJournal and subscribeLive. farcd does no
-// reconnect catch-up (documented v1 limitation): a disconnect gap simply
-// loses events; this only reconnects the socket, it does not replay
-// anything missed while down. Returns a cleanup function that closes the
-// socket and cancels any pending reconnect.
-function connectEvents(
-  body: unknown,
-  onMessage: (msg: { type?: string }) => void,
+// subscribeJournal opens a "global" (storage: '') subscription to farcd's
+// EventPushServer -- unfiltered, so every event kind reaches onEvent.
+// farcd does no reconnect catch-up (documented v1 limitation), so a
+// disconnect gap simply loses events; this only reconnects the socket, it
+// does not replay anything missed while down. Returns a cleanup function
+// that closes the socket and cancels any pending reconnect.
+export function subscribeJournal(
+  onEvent: (e: JournalEvent) => void,
   onStatusChange?: (connected: boolean) => void,
 ): () => void {
   let ws: WebSocket | null = null
@@ -68,11 +42,11 @@ function connectEvents(
     ws.onopen = () => {
       reconnectDelay = RECONNECT_MIN_MS
       onStatusChange?.(true)
-      ws?.send(JSON.stringify(body))
+      ws?.send(JSON.stringify({ storage: '', want: [], channels: [] }))
     }
     ws.onmessage = (ev) => {
       try {
-        onMessage(JSON.parse(ev.data as string))
+        onEvent(JSON.parse(ev.data as string) as JournalEvent)
       } catch {
         // ignore a malformed frame
       }
@@ -95,38 +69,73 @@ function connectEvents(
   }
 }
 
-// subscribeJournal opens a "global" (storage: '') subscription to farcd's
-// EventPushServer -- unfiltered, so every event kind reaches onEvent.
-export function subscribeJournal(
-  onEvent: (e: JournalEvent) => void,
-  onStatusChange?: (connected: boolean) => void,
-): () => void {
-  return connectEvents({ storage: '', want: [], channels: [] }, (msg) => onEvent(msg as JournalEvent), onStatusChange)
+// subscribeStorageEvents opens a per-storage subscription on the same
+// EventPushServer endpoint subscribeJournal uses, but scoped to storageId's
+// own NotificationBus (internal/api/eventpush.go's ServeHTTP, not
+// serveGlobal) -- storage.Event's own names (fblock.write.started/
+// completed/failed/deleted), not the bridged journal names, and crucially
+// including fblock.write.failed ("bad"), which the global feed never
+// bridges (only .started/.completed/EventFblockDeleted are). Used by
+// FblocksGridPage to know when to re-fetch one fblock's info live.
+// PoolOptions opts a per-storage subscription into the pool-status-list
+// live feed (.scratch/fblocks-ui/issues/04-pool-status-list-plan.md) on the
+// same connection/subscribe message, rather than opening a second WS to the
+// same storage -- mirrors farcd's own subscribeMessage.IncludePool.
+export type PoolOptions = {
+  includePool?: boolean
+  onPool?: (msg: PoolPushMessage) => void
 }
 
-// subscribeLive opens a "global" subscription scoped to the given storage
-// via subscribeMessage.LiveStorages -- required for "live" frames to be
-// delivered at all (internal/api/eventpush.go's serveGlobal treats an empty
-// LiveStorages set as "no live subscriber", since unscoped live progress is
-// meaningless). Classic events (fblock.created/fblock.ready, needed to know
-// when to switch from live progress to the finalized tree) are NOT filtered
-// by storage server-side, so onEvent is called for every one and the
-// caller must check its own .storage field.
-export function subscribeLive(
-  storage: string,
-  onLive: (msg: LivePushMessage) => void,
+export function subscribeStorageEvents(
+  storageId: string,
+  want: string[],
   onEvent: (e: JournalEvent) => void,
   onStatusChange?: (connected: boolean) => void,
+  poolOptions?: PoolOptions,
 ): () => void {
-  return connectEvents(
-    { storage: '', want: [], channels: [], live_storages: [storage] },
-    (msg) => {
-      if (msg.type === 'live') {
-        onLive(msg as LivePushMessage)
-      } else {
-        onEvent(msg as JournalEvent)
+  let ws: WebSocket | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = RECONNECT_MIN_MS
+  let stopped = false
+
+  function connect() {
+    if (stopped) return
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    ws = new WebSocket(`${scheme}//${location.host}${WS_BASE}/ws`)
+
+    ws.onopen = () => {
+      reconnectDelay = RECONNECT_MIN_MS
+      onStatusChange?.(true)
+      ws?.send(
+        JSON.stringify({ storage: storageId, want, channels: [], include_pool: poolOptions?.includePool ?? false }),
+      )
+    }
+    ws.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data as string)
+        if (data.type === 'pool') {
+          poolOptions?.onPool?.(data as PoolPushMessage)
+          return
+        }
+        onEvent(data as JournalEvent)
+      } catch {
+        // ignore a malformed frame
       }
-    },
-    onStatusChange,
-  )
+    }
+    ws.onclose = () => {
+      onStatusChange?.(false)
+      if (stopped) return
+      reconnectTimer = setTimeout(connect, reconnectDelay)
+      reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS)
+    }
+    ws.onerror = () => ws?.close()
+  }
+
+  connect()
+
+  return () => {
+    stopped = true
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    ws?.close()
+  }
 }

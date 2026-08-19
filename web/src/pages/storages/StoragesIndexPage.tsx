@@ -65,9 +65,17 @@ export default function StoragesIndexPage() {
                 <td>{formatBytes(s.geometry.FblockSize)}</td>
                 <td>{s.geometry.MaxChannels}</td>
                 <td>
-                  <Link to={`${s.id}/edit`} className="btn btn-outline-secondary btn-sm">
-                    Edit
-                  </Link>
+                  <div className="btn-group btn-group-sm">
+                    <Link to={`${s.id}/edit`} className="btn btn-outline-secondary">
+                      Edit
+                    </Link>
+                    <Link to={`${s.id}/fblocks`} className="btn btn-outline-primary">
+                      fblocks status
+                    </Link>
+                    <Link to={`${s.id}/fblocks-list`} className="btn btn-outline-primary">
+                      fblocks list
+                    </Link>
+                  </div>
                 </td>
               </tr>
             ))}

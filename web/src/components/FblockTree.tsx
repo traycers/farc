@@ -1,333 +1,155 @@
-import { useEffect, useState } from 'react'
-import { getFblockTreeNode, type TreeNode } from '../api/fblocktree'
-import type { LiveNode } from '../api/events'
+import { useState } from 'react'
+import type { TreeNode } from '../api/fblockTree'
 
-// Roles whose individual instances are never shown as their own tree row --
-// there can be millions of them (docs/docs/archive/08-array-trees.md §3.4),
-// so both modes collapse them into a single "N кадров" summary under their
-// "frames(video)"/"frames(audio)" parent instead.
-const FRAME_ROLES = new Set(['frame(video)', 'frame(audio)'])
-const FRAME_LEAF_ROLES = new Set([
-  'frame_data(video)',
-  'frame_data(audio)',
-  'frame_time(video)',
-  'frame_time(audio)',
-  'frame_kind',
-])
-const FRAMES_CONTAINER_ROLES = new Set(['frames(video)', 'frames(audio)'])
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+type FblockTreeProps = {
+  root: TreeNode | null
+  // Newly-arrived node ids (fblock-live's "append" batches) to highlight
+  // green -- fblock-status never passes this (nothing is ever "new" there).
+  newIds?: ReadonlySet<number>
+  // Overrides the raw Value string for display (e.g. formatting a
+  // "timestamp"/"duration" node's raw ns via api/ns.ts). Returning undefined
+  // falls back to node.value as-is.
+  formatValue?: (node: TreeNode) => string | undefined
 }
 
-// nsToLocalDisplay renders a decimal-string ns count as a local date-time --
-// duplicated (not imported) from web/src/api/ns.ts's nsToDisplayString
-// because that one takes a bigint, and re-parsing a decimal string into a
-// bigint just to immediately reformat it is simple enough to inline here.
-function formatTimestamp(nsDecimal: string): string {
-  const ns = BigInt(nsDecimal)
-  const d = new Date(Number(ns / 1_000_000n))
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+// DEFAULT_OPEN_DEPTH: root = depth 0, so levels 0-4 (5 levels) are open by
+// default (settled via grilling, 2026-08-14). A synthetic frame-group node
+// (frameGrouping.ts's type: 'group') always starts closed regardless of
+// depth -- showing its many members expanded by default would defeat the
+// point of grouping them.
+const DEFAULT_OPEN_DEPTH = 5
+
+// ToggleMode is "expand all"/"collapse all"'s effect on every node that
+// hasn't been individually clicked since -- manual per-node clicks (tracked
+// in FblockTree's own `manual` map) always take precedence over this.
+type ToggleMode = 'default' | 'all-open' | 'all-closed'
+
+function nodeLabel(node: TreeNode, formatValue?: (node: TreeNode) => string | undefined): string {
+  const parts = [node.role, `(${node.type})`]
+  if (node.size !== undefined) {
+    parts.push(`size=${node.size}`)
+  } else {
+    const v = formatValue?.(node) ?? node.value
+    if (v) parts.push(`= ${v}`)
+  }
+  return parts.join(' ')
 }
 
-function formatValue(type: string, value: string | number): string {
-  if (type === 'timestamp') return formatTimestamp(String(value))
-  if (type === 'duration') return `${value} ns`
-  return String(value)
+function defaultOpen(node: TreeNode, depth: number): boolean {
+  return depth < DEFAULT_OPEN_DEPTH && node.type !== 'group'
 }
 
-function nodeLabel(role: string, type: string, value: string | number | undefined, size: number | undefined): string {
-  if (value !== undefined) return `${role}: ${formatValue(type, value)}`
-  if (size !== undefined) return `${role} — ${formatBytes(size)}`
-  return role
-}
-
-type RowProps = {
+function TreeLines({
+  node,
+  depth,
+  prefix,
+  isLast,
+  isRoot,
+  newIds,
+  formatValue,
+  mode,
+  manual,
+  onToggle,
+}: {
+  node: TreeNode
+  depth: number
   prefix: string
   isLast: boolean
-  label: string
-  isNew?: boolean
-  expandable?: boolean
-  expanded?: boolean
-  onToggle?: () => void
-  loading?: boolean
-}
-
-function TreeRow({ prefix, isLast, label, isNew, expandable, expanded, onToggle, loading }: RowProps) {
-  const connector = isLast ? '└── ' : '├── '
-  const arrow = expandable ? (expanded ? '▾ ' : '▸ ') : ''
-  return (
-    <div className={`tree-row${isNew ? ' tree-node--new' : ''}${expandable ? ' tree-row--expandable' : ''}`} onClick={onToggle}>
-      <span className="tree-guide">{prefix + connector}</span>
-      <span className="tree-label">
-        {arrow}
-        {label}
-        {loading && ' …'}
-      </span>
-    </div>
-  )
-}
-
-function childPrefix(prefix: string, isLast: boolean): string {
-  return prefix + (isLast ? '    ' : '│   ')
-}
-
-// ---- status mode: lazy, paginated fetch from GET .../tree ----
-
-type NodeState = {
-  children: TreeNode[]
-  total: number
-  loading: boolean
-}
-
-function StatusChildren({
-  storage,
-  uuid,
-  nodes,
-  prefix,
-  states,
-  expanded,
-  onExpand,
-  onLoadMore,
-}: {
-  storage: string
-  uuid: string
-  nodes: TreeNode[]
-  prefix: string
-  states: Map<number, NodeState>
-  expanded: Set<number>
-  onExpand: (id: number) => void
-  onLoadMore: (id: number) => void
+  isRoot: boolean
+  newIds?: ReadonlySet<number>
+  formatValue?: (node: TreeNode) => string | undefined
+  mode: ToggleMode
+  manual: ReadonlyMap<number, boolean>
+  onToggle: (id: number, current: boolean) => void
 }) {
+  const connector = isRoot ? '' : isLast ? '└── ' : '├── '
+  const childPrefix = prefix + (isRoot ? '' : isLast ? '    ' : '│   ')
+  const isNew = newIds?.has(node.id) ?? false
+  const children = node.children ?? []
+  const hasChildren = children.length > 0
+  const open = manual.has(node.id) ? manual.get(node.id)! : mode === 'all-open' ? true : mode === 'all-closed' ? false : defaultOpen(node, depth)
   return (
     <>
-      {nodes.map((n, i) => {
-        const isLast = i === nodes.length - 1
-        const expandable = n.child_count > 0
-        const isOpen = expanded.has(n.id)
-        const st = states.get(n.id)
-        const label = FRAMES_CONTAINER_ROLES.has(n.role)
-          ? `${n.role} [${n.child_count} кадров]`
-          : nodeLabel(n.role, n.type, n.value, n.size)
-        return (
-          <div key={n.id}>
-            <TreeRow
-              prefix={prefix}
-              isLast={isLast}
-              label={label}
-              expandable={expandable}
-              expanded={isOpen}
-              loading={st?.loading}
-              onToggle={expandable ? () => onExpand(n.id) : undefined}
-            />
-            {isOpen && st && (
-              <>
-                <StatusChildren
-                  storage={storage}
-                  uuid={uuid}
-                  nodes={st.children}
-                  prefix={childPrefix(prefix, isLast)}
-                  states={states}
-                  expanded={expanded}
-                  onExpand={onExpand}
-                  onLoadMore={onLoadMore}
-                />
-                {st.children.length < st.total && (
-                  <div className="tree-row tree-row--expandable" onClick={() => onLoadMore(n.id)}>
-                    <span className="tree-guide">{childPrefix(prefix, isLast)}</span>
-                    <span className="tree-label">
-                      … ещё {st.total - st.children.length} (загружено {st.children.length} из {st.total})
-                      {st.loading && ' …'}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )
-      })}
+      <div
+        className={isNew ? 'text-success fw-semibold' : undefined}
+        style={hasChildren ? { cursor: 'pointer' } : undefined}
+        onClick={hasChildren ? () => onToggle(node.id, open) : undefined}
+      >
+        <span style={{ whiteSpace: 'pre' }}>{prefix + connector}</span>
+        {nodeLabel(node, formatValue)}
+        {hasChildren ? ` [${open ? '-' : '+'}]` : ''}
+      </div>
+      {open &&
+        children.map((child, i) => (
+          <TreeLines
+            key={child.id}
+            node={child}
+            depth={depth + 1}
+            prefix={childPrefix}
+            isLast={i === children.length - 1}
+            isRoot={false}
+            newIds={newIds}
+            formatValue={formatValue}
+            mode={mode}
+            manual={manual}
+            onToggle={onToggle}
+          />
+        ))}
     </>
   )
 }
 
-const CHILD_PAGE_LIMIT = 500
+// FblockTree renders a fcontainer's node tree in a GNU-`tree`-style nested
+// layout (├──/└──/│ connectors), shared by fblock-tree (read-only/live).
+// newIds highlights nodes from the most recent WS "append". Nodes below
+// DEFAULT_OPEN_DEPTH start collapsed; clicking any row with children
+// toggles it (TreeLines already computed that row's current open value,
+// so onToggle just flips it -- no need to re-derive state from depth/mode
+// at click time), and "expand all"/"collapse all" reset every node not
+// since individually clicked.
+export default function FblockTree({ root, newIds, formatValue }: FblockTreeProps) {
+  const [mode, setMode] = useState<ToggleMode>('default')
+  const [manual, setManual] = useState<Map<number, boolean>>(new Map())
 
-function FblockStatusTree({ storage, uuid }: { storage: string; uuid: string }) {
-  const [root, setRoot] = useState<TreeNode | null>(null)
-  const [rootChildren, setRootChildren] = useState<TreeNode[]>([])
-  const [rootTotal, setRootTotal] = useState(0)
-  const [states, setStates] = useState<Map<number, NodeState>>(new Map())
-  const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const [error, setError] = useState<string | null>(null)
+  if (!root) {
+    return <div className="text-body-secondary">(empty tree)</div>
+  }
 
-  useEffect(() => {
-    setRoot(null)
-    setRootChildren([])
-    setStates(new Map())
-    setExpanded(new Set())
-    setError(null)
-    getFblockTreeNode(storage, uuid, undefined, { limit: CHILD_PAGE_LIMIT })
-      .then((lvl) => {
-        setRoot(lvl.node)
-        setRootChildren(lvl.children)
-        setRootTotal(lvl.total)
-      })
-      .catch((e) => setError(String(e)))
-  }, [storage, uuid])
-
-  function loadLevel(id: number, offset: number) {
-    setStates((prev) => {
+  function toggle(id: number, current: boolean) {
+    setManual((prev) => {
       const next = new Map(prev)
-      const cur = next.get(id) ?? { children: [], total: 0, loading: false }
-      next.set(id, { ...cur, loading: true })
+      next.set(id, !current)
       return next
     })
-    getFblockTreeNode(storage, uuid, id, { offset, limit: CHILD_PAGE_LIMIT })
-      .then((lvl) => {
-        setStates((prev) => {
-          const next = new Map(prev)
-          const cur = next.get(id) ?? { children: [], total: 0, loading: false }
-          next.set(id, { children: [...cur.children, ...lvl.children], total: lvl.total, loading: false })
-          return next
-        })
-      })
-      .catch((e) => setError(String(e)))
   }
-
-  function onExpand(id: number) {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      next.add(id)
-      return next
-    })
-    if (!states.has(id)) loadLevel(id, 0)
-  }
-
-  function onLoadMore(id: number) {
-    const cur = states.get(id)
-    loadLevel(id, cur?.children.length ?? 0)
-  }
-
-  if (error) return <div className="alert alert-danger">{error}</div>
-  if (!root) return <div className="text-muted">Загрузка…</div>
 
   return (
-    <div className="tree">
-      <div className="tree-row">
-        <span className="tree-label">{nodeLabel(root.role, root.type, root.value, root.size)}</span>
+    <div>
+      <div className="mb-2 btn-group btn-group-sm">
+        <button
+          type="button"
+          className="btn btn-outline-secondary"
+          onClick={() => {
+            setMode('all-open')
+            setManual(new Map())
+          }}
+        >
+          Expand all
+        </button>
+        <button
+          type="button"
+          className="btn btn-outline-secondary"
+          onClick={() => {
+            setMode('all-closed')
+            setManual(new Map())
+          }}
+        >
+          Collapse all
+        </button>
       </div>
-      <StatusChildren
-        storage={storage}
-        uuid={uuid}
-        nodes={rootChildren}
-        prefix=""
-        states={states}
-        expanded={expanded}
-        onExpand={onExpand}
-        onLoadMore={onLoadMore}
-      />
-      {rootChildren.length < rootTotal && <div className="text-muted small">… ещё {rootTotal - rootChildren.length}</div>}
+      <div className="font-monospace" style={{ fontSize: '0.9rem' }}>
+        <TreeLines node={root} depth={0} prefix="" isLast isRoot newIds={newIds} formatValue={formatValue} mode={mode} manual={manual} onToggle={toggle} />
+      </div>
     </div>
   )
-}
-
-// ---- live mode: fully in-memory, pushed via WS ----
-
-export type LiveTreeState = {
-  nodesById: Map<number, LiveNode>
-  frameCounts: Map<number, number>
-  newIds: Set<number>
-}
-
-export function newLiveTreeState(): LiveTreeState {
-  return { nodesById: new Map(), frameCounts: new Map(), newIds: new Set() }
-}
-
-// applyLiveNodes folds a live-progress WS delta into state, returning a new
-// LiveTreeState (state is treated as immutable, matching React's expected
-// update pattern). Frame-role nodes are aggregated into frameCounts rather
-// than stored individually -- see FRAME_ROLES/FRAME_LEAF_ROLES above.
-export function applyLiveNodes(state: LiveTreeState, nodes: LiveNode[]): LiveTreeState {
-  const nodesById = new Map(state.nodesById)
-  const frameCounts = new Map(state.frameCounts)
-  const newIds = new Set(state.newIds)
-  for (const n of nodes) {
-    if (FRAME_ROLES.has(n.role)) {
-      frameCounts.set(n.parent, (frameCounts.get(n.parent) ?? 0) + 1)
-      continue
-    }
-    if (FRAME_LEAF_ROLES.has(n.role)) continue
-    nodesById.set(n.id, n)
-    newIds.add(n.id)
-  }
-  return { nodesById, frameCounts, newIds }
-}
-
-// clearNewIds drops ids from state.newIds (a green highlight is transient --
-// FblockLivePage calls this a few seconds after applyLiveNodes added them,
-// letting index.css's transition fade the color back down).
-export function clearNewIds(state: LiveTreeState, ids: number[]): LiveTreeState {
-  if (ids.length === 0) return state
-  const newIds = new Set(state.newIds)
-  for (const id of ids) newIds.delete(id)
-  return { ...state, newIds }
-}
-
-function LiveChildren({
-  ids,
-  prefix,
-  state,
-}: {
-  ids: number[]
-  prefix: string
-  state: LiveTreeState
-}) {
-  return (
-    <>
-      {ids.map((id, i) => {
-        const n = state.nodesById.get(id)
-        if (!n) return null
-        const isLast = i === ids.length - 1
-        const isFramesContainer = FRAMES_CONTAINER_ROLES.has(n.role)
-        const label = isFramesContainer
-          ? `${n.role} [${state.frameCounts.get(id) ?? 0} кадров]`
-          : nodeLabel(n.role, n.type, n.value, n.size)
-        const childIds = isFramesContainer
-          ? []
-          : [...state.nodesById.values()].filter((c) => c.parent === id && c.id !== id).map((c) => c.id)
-        return (
-          <div key={id}>
-            <TreeRow prefix={prefix} isLast={isLast} label={label} isNew={state.newIds.has(id)} />
-            <LiveChildren ids={childIds} prefix={childPrefix(prefix, isLast)} state={state} />
-          </div>
-        )
-      })}
-    </>
-  )
-}
-
-function FblockLiveTree({ state }: { state: LiveTreeState }) {
-  const root = state.nodesById.get(0)
-  if (!root) return <div className="text-muted">Ожидание данных…</div>
-  const childIds = [...state.nodesById.values()].filter((n) => n.parent === 0 && n.id !== 0).map((n) => n.id)
-  return (
-    <div className="tree">
-      <div className="tree-row">
-        <span className="tree-label">{root.role}</span>
-      </div>
-      <LiveChildren ids={childIds} prefix="" state={state} />
-    </div>
-  )
-}
-
-// ---- public component ----
-
-export type FblockTreeProps = { mode: 'status'; storage: string; uuid: string } | { mode: 'live'; state: LiveTreeState }
-
-export default function FblockTree(props: FblockTreeProps) {
-  if (props.mode === 'status') return <FblockStatusTree storage={props.storage} uuid={props.uuid} />
-  return <FblockLiveTree state={props.state} />
 }

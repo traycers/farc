@@ -3,7 +3,7 @@ package toc
 import (
 	"errors"
 
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/mediatree"
 )
 
 // Build constructs the TOC for a fcontainer's Content, following the DFS

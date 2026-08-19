@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math"
 
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 // StreamKind mirrors internal/fcontainer.StreamKind (not imported --
@@ -57,6 +57,11 @@ type StreamConfig struct {
 	PPS          BytesRef
 	HasVPS       bool
 	VPS          BytesRef
+	// Width/Height are 0 when absent (mirrors fcontainer.StreamParams' own
+	// "0 means absent" convention -- an unparseable SPS at ingest time
+	// never wrote these nodes at all).
+	Width  uint32
+	Height uint32
 
 	// Audio only.
 	SampleRate     uint32
@@ -70,11 +75,11 @@ type StreamConfig struct {
 // recorded — usually exactly one per stream/kind), in TOC row-id order.
 // nil if channel isn't present in c.
 func StreamConfigs(c *toc.Columns, channel uint16) ([]StreamConfig, error) {
-	channelNodeID, ok := findChannelNode(c, channel)
+	channelNodeID, ok := toc.ChannelNode(c, channel)
 	if !ok {
 		return nil, nil
 	}
-	streamsID, ok := findChildByRole(c, channelNodeID, mediatree.RoleStreams)
+	streamsID, ok := toc.ChildByRole(c, channelNodeID, mediatree.RoleStreams)
 	if !ok {
 		return nil, nil
 	}
@@ -91,14 +96,14 @@ func StreamConfigs(c *toc.Columns, channel uint16) ([]StreamConfig, error) {
 		}
 		streamID := uint16(binary.LittleEndian.Uint32(v))
 
-		if videoID, ok := findChildByRole(c, i, mediatree.RoleVideo); ok {
+		if videoID, ok := toc.ChildByRole(c, i, mediatree.RoleVideo); ok {
 			cfgs, err := extractConfigs(c, videoID, streamID, KindVideo)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, cfgs...)
 		}
-		if audioID, ok := findChildByRole(c, i, mediatree.RoleAudio); ok {
+		if audioID, ok := toc.ChildByRole(c, i, mediatree.RoleAudio); ok {
 			cfgs, err := extractConfigs(c, audioID, streamID, KindAudio)
 			if err != nil {
 				return nil, err
@@ -114,7 +119,7 @@ func extractConfigs(c *toc.Columns, kindID uint32, streamID uint16, kind StreamK
 	if kind == KindAudio {
 		configsRole, configRole = mediatree.RoleConfigsAudio, mediatree.RoleConfigAudio
 	}
-	configsID, ok := findChildByRole(c, kindID, configsRole)
+	configsID, ok := toc.ChildByRole(c, kindID, configsRole)
 	if !ok {
 		return nil, nil
 	}
@@ -141,7 +146,7 @@ func extractOneConfig(c *toc.Columns, configID uint32, streamID uint16, kind Str
 	if kind == KindAudio {
 		dataRole = mediatree.RoleDataAudio
 	}
-	dataID, ok := findChildByRole(c, configID, dataRole)
+	dataID, ok := toc.ChildByRole(c, configID, dataRole)
 	if !ok {
 		return sc, fmt.Errorf("vaablocks: config %d has no data child", configID)
 	}
@@ -187,6 +192,14 @@ func extractOneConfig(c *toc.Columns, configID uint32, streamID uint16, kind Str
 		case mediatree.RoleParamAudioConfig:
 			if off, size, ok := toc.ContentOffset(c, i); ok {
 				sc.HasAudioConfig, sc.AudioConfig = true, BytesRef{off, size}
+			}
+		case mediatree.RoleWidth:
+			if v, ok := toc.InlineValue(c, i); ok && len(v) == 4 {
+				sc.Width = binary.LittleEndian.Uint32(v)
+			}
+		case mediatree.RoleHeight:
+			if v, ok := toc.InlineValue(c, i); ok && len(v) == 4 {
+				sc.Height = binary.LittleEndian.Uint32(v)
 			}
 		}
 	}

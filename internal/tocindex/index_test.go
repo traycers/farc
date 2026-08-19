@@ -3,7 +3,7 @@ package tocindex_test
 import (
 	"testing"
 
-	"traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/internal/tocindex"
 )
 
 func TestChannelIndex_InsertRemoveRecords(t *testing.T) {
@@ -77,6 +77,55 @@ func TestIndex_Remove_ClearsChannel(t *testing.T) {
 	}
 	if rec.StorageID != "disk1" || rec.Begin != 300 {
 		t.Fatalf("rec = %+v, want the new disk1 record, not stale disk0 data", rec)
+	}
+}
+
+// TestChannelIndex_Timeline_ConcatenatesAndClips is .scratch/player-redesign/
+// issues/01-hls-server-timeline-endpoint.md's aggregation seam: Timeline
+// gathers VideoSegments from every record overlapping [t1,t2] (in time
+// order, since Records() already sorts by Begin), clipping segments that
+// only partially overlap the requested range.
+func TestChannelIndex_Timeline_ConcatenatesAndClips(t *testing.T) {
+	idx := tocindex.NewIndex()
+	ci := idx.Channel(1)
+
+	uuidA := [16]byte{1}
+	uuidB := [16]byte{2}
+	ci.Insert(tocindex.Record{
+		UUID: uuidA, StorageID: "s1", Begin: 100, End: 200,
+		VideoSegments: []tocindex.Segment{{Begin: 100, End: 200}},
+	})
+	ci.Insert(tocindex.Record{
+		UUID: uuidB, StorageID: "s1", Begin: 400, End: 500,
+		VideoSegments: []tocindex.Segment{{Begin: 400, End: 450}, {Begin: 480, End: 500}},
+	})
+
+	// [150,490] clips A's segment to [150,200] and B's first segment to
+	// [480? no -- 480 is within range] -- concretely: A -> {150,200}, B's
+	// first segment {400,450} falls entirely before t1=150? no, wait: t1=150
+	// only clips the start, A begins at 100 < 150 so its segment is clipped
+	// to {150,200}; B's segments both start >=400 > 150 so only the t2=490
+	// bound matters, clipping B's second segment {480,500} to {480,490}.
+	got := ci.Timeline(150, 490)
+	want := []tocindex.Segment{
+		{Begin: 150, End: 200},
+		{Begin: 400, End: 450},
+		{Begin: 480, End: 490},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Timeline(150,490) = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Timeline(150,490)[%d] = %+v, want %+v (full: got=%+v want=%+v)", i, got[i], want[i], got, want)
+		}
+	}
+
+	ci.Remove(uuidB)
+	got = ci.Timeline(0, 1000)
+	want = []tocindex.Segment{{Begin: 100, End: 200}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("Timeline(0,1000) after Remove(B) = %+v, want %+v", got, want)
 	}
 }
 

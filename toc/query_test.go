@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/mediatree"
 )
 
 func builtSample(t *testing.T) *Columns {
@@ -39,6 +39,22 @@ func TestSubtreeRangeMatchesDocTable(t *testing.T) {
 	}
 }
 
+func TestChildren(t *testing.T) {
+	cols := builtSample(t)
+	if got := Children(cols, 0); !reflect.DeepEqual(got, []uint32{1}) {
+		t.Errorf("Children(root) = %v, want [1]", got)
+	}
+	if got := Children(cols, 2); !reflect.DeepEqual(got, []uint32{3}) {
+		t.Errorf("Children(channel(1)) = %v, want [3]", got)
+	}
+	if got := Children(cols, 3); !reflect.DeepEqual(got, []uint32{4, 7}) {
+		t.Errorf("Children(streams) = %v, want [4,7]", got)
+	}
+	if got := Children(cols, 5); got != nil {
+		t.Errorf("Children(leaf) = %v, want nil", got)
+	}
+}
+
 func TestIsAncestor(t *testing.T) {
 	cols := builtSample(t)
 	if !IsAncestor(cols, 2, 4) { // channel(1)@2 ancestor of stream(0)@4
@@ -61,6 +77,49 @@ func TestScanByRole(t *testing.T) {
 	want := []uint32{5, 8, 12}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ScanByRole(video) = %v, want %v", got, want)
+	}
+}
+
+// TestChannelNode checks against the same sampleTree()/doc-table positions
+// TestSubtreeRangeMatchesDocTable uses: channel(1) sits at position 2,
+// channel(2) at position 9.
+func TestChannelNode(t *testing.T) {
+	cols := builtSample(t)
+	if id, ok := ChannelNode(cols, 1); !ok || id != 2 {
+		t.Errorf("ChannelNode(1) = (%d, %v), want (2, true)", id, ok)
+	}
+	if id, ok := ChannelNode(cols, 2); !ok || id != 9 {
+		t.Errorf("ChannelNode(2) = (%d, %v), want (9, true)", id, ok)
+	}
+	if _, ok := ChannelNode(cols, 3); ok {
+		t.Error("ChannelNode(3) = ok, want not found (no such channel)")
+	}
+}
+
+func TestChildByRole(t *testing.T) {
+	cols := builtSample(t)
+	// channel(1)@2's direct child is its own "streams" node @3 (see
+	// TestSubtreeRangeMatchesDocTable's table).
+	if id, ok := ChildByRole(cols, 2, mediatree.RoleStreams); !ok || id != 3 {
+		t.Errorf("ChildByRole(channel(1), RoleStreams) = (%d, %v), want (3, true)", id, ok)
+	}
+	// channel(1) has no *direct* Video child -- Video is nested two levels
+	// deeper, under streams -> stream.
+	if _, ok := ChildByRole(cols, 2, mediatree.RoleVideo); ok {
+		t.Error("ChildByRole(channel(1), RoleVideo) = ok, want not found (not a direct child)")
+	}
+}
+
+func TestChannelSubtreeRange(t *testing.T) {
+	cols := builtSample(t)
+	if start, end, ok := ChannelSubtreeRange(cols, 1); !ok || start != 2 || end != 9 {
+		t.Errorf("ChannelSubtreeRange(1) = (%d,%d,%v), want (2,9,true)", start, end, ok)
+	}
+	if start, end, ok := ChannelSubtreeRange(cols, 2); !ok || start != 9 || end != 13 {
+		t.Errorf("ChannelSubtreeRange(2) = (%d,%d,%v), want (9,13,true)", start, end, ok)
+	}
+	if _, _, ok := ChannelSubtreeRange(cols, 3); ok {
+		t.Error("ChannelSubtreeRange(3) = ok, want not found (no such channel)")
 	}
 }
 

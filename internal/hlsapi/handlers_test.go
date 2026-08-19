@@ -12,11 +12,11 @@ import (
 
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 
-	"traycers/farc/internal/hlsapi"
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/segmentcache"
-	"traycers/farc/internal/tocindex"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/internal/hlsapi"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/segmentcache"
+	"github.com/traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/mediatree"
 )
 
 // extractSegmentURIs pulls every playable URI out of a rendered .m3u8: the

@@ -1,19 +1,45 @@
 // Package msmconfig implements msm_server's process configuration --
 // entirely from environment variables, unlike internal/config/internal/
 // hlsconfig's env+JSON split: msm_server has no site-specific or
-// runtime-mutable state to persist (it is a stateless, best-effort relay
-// from farcd's WS event feed to an external msm HTTP API -- see internal/msmd's
-// package doc), so there is no JSON config file at all.
+// runtime-mutable state to persist (outbound, it's a stateless, best-effort
+// relay from farcd's WS event feed to an external msm HTTP API; inbound, it
+// translates /api/v1/archives/* calls into farcd HTTP calls with no state
+// of its own either -- see internal/msmd's package doc), so there is no
+// JSON config file at all.
 package msmconfig
 
 import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 )
+
+// Addr is a bare ip:port server address, mirroring internal/hlsconfig.Addr
+// (duplicated rather than imported -- this package's own convention of
+// duplicating small shared shapes across msm_server/hls_server rather than
+// cross-importing).
+type Addr struct {
+	IP   string
+	Port int
+}
+
+func (a Addr) String() string { return fmt.Sprintf("%s:%d", a.IP, a.Port) }
 
 // Config is msm_server's whole process configuration.
 type Config struct {
+	// HTTP is msm_server's own inbound listen address for
+	// /api/v1/archives/* (internal/archivesapi) -- the external msm/
+	// controller's single integration point into this codebase.
+	// MSM_SERVER_HTTP_IP (default "0.0.0.0") / MSM_SERVER_HTTP_PORT
+	// (required).
+	HTTP Addr
+
+	// Metrics is msm_server's Prometheus /metrics listen address.
+	// MSM_SERVER_METRICS_IP (default "0.0.0.0") / MSM_SERVER_METRICS_PORT
+	// (required).
+	Metrics Addr
+
 	// FarcWS is the one farcd EventPushServer msm_server subscribes to
 	// (MSM_SERVER_FARC_WS), e.g. "ws://127.0.0.1:8081" -- like hls_server
 	// (ADR-020), v1 supports exactly one farcd, not a list.
@@ -33,14 +59,38 @@ type Config struct {
 	// params_add/fblocks_add/fblocks_del/status_set/info_set/started_add/
 	// finished_add/vaa_blocks_add call goes.
 	MSMBaseURL string
+
+	// LogDir is MSM_SERVER_LOG_DIR: a directory msm_server additionally
+	// writes its own log lines to (msm_server.log), alongside stderr.
+	// Optional -- empty means stderr only, matching the process's behavior
+	// before this field existed.
+	LogDir string
 }
 
 // Load reads Config from the environment and validates it.
 func Load() (*Config, error) {
+	ip := os.Getenv("MSM_SERVER_HTTP_IP")
+	if ip == "" {
+		ip = "0.0.0.0"
+	}
+	// An unset/invalid MSM_SERVER_HTTP_PORT is left as 0 rather than
+	// rejected here, so validate's own "port is required" error stays the
+	// single place port-missing is reported.
+	port, _ := strconv.Atoi(os.Getenv("MSM_SERVER_HTTP_PORT"))
+
+	metricsIP := os.Getenv("MSM_SERVER_METRICS_IP")
+	if metricsIP == "" {
+		metricsIP = "0.0.0.0"
+	}
+	metricsPort, _ := strconv.Atoi(os.Getenv("MSM_SERVER_METRICS_PORT"))
+
 	cfg := &Config{
+		HTTP:       Addr{IP: ip, Port: port},
+		Metrics:    Addr{IP: metricsIP, Port: metricsPort},
 		FarcWS:     os.Getenv("MSM_SERVER_FARC_WS"),
 		FarcHTTP:   os.Getenv("MSM_SERVER_FARC_HTTP"),
 		MSMBaseURL: os.Getenv("MSM_SERVER_MSM_URL"),
+		LogDir:     os.Getenv("MSM_SERVER_LOG_DIR"),
 	}
 	err := cfg.validate()
 	if err != nil {
@@ -50,6 +100,12 @@ func Load() (*Config, error) {
 }
 
 func (cfg *Config) validate() error {
+	if cfg.HTTP.Port == 0 {
+		return errors.New("MSM_SERVER_HTTP_PORT is required")
+	}
+	if cfg.Metrics.Port == 0 {
+		return errors.New("MSM_SERVER_METRICS_PORT is required")
+	}
 	if cfg.FarcWS == "" {
 		return errors.New("MSM_SERVER_FARC_WS is required")
 	}

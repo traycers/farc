@@ -17,12 +17,11 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4/seekablebuffer"
-	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/tocindex"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 // timeScale is used for both video and audio tracks: farc's own frame
@@ -91,8 +90,8 @@ func resolveAudioConfig(c *toc.Columns, start, stop uint32) (cfg audioConfig, ok
 
 // BuildInit builds the CMAF init segment (init.mp4) for rec's channel: one
 // track per supported codec actually present (video, audio, or both).
-func BuildInit(ctx context.Context, client *hlsclient.Client, rec tocindex.Record, channel uint16) ([]byte, error) {
-	start, stop, ok := channelSubtree(rec.Columns, channel)
+func BuildInit(ctx context.Context, client hlsclient.API, rec tocindex.Record, channel uint16) ([]byte, error) {
+	start, stop, ok := toc.ChannelSubtreeRange(rec.Columns, channel)
 	if !ok {
 		return nil, fmt.Errorf("segment: channel %d not present in fcontainer %x", channel, rec.UUID)
 	}
@@ -126,7 +125,7 @@ func BuildInit(ctx context.Context, client *hlsclient.Client, rec tocindex.Recor
 	if hasVideo {
 		sps, pps := bufs[pos], bufs[pos+1]
 		pos += 2
-		tracks = append(tracks, &fmp4.InitTrack{ID: videoTrackID, TimeScale: timeScale, Codec: &codecs.H264{SPS: sps, PPS: pps}})
+		tracks = append(tracks, &fmp4.InitTrack{ID: videoTrackID, TimeScale: timeScale, Codec: &fmp4.CodecH264{SPS: sps, PPS: pps}})
 	}
 	if hasAudio {
 		asc := bufs[pos]
@@ -135,7 +134,7 @@ func BuildInit(ctx context.Context, client *hlsclient.Client, rec tocindex.Recor
 		if err != nil {
 			return nil, fmt.Errorf("segment: parse AAC AudioSpecificConfig: %w", err)
 		}
-		tracks = append(tracks, &fmp4.InitTrack{ID: audioTrackID, TimeScale: timeScale, Codec: &codecs.MPEG4Audio{Config: ascCfg}})
+		tracks = append(tracks, &fmp4.InitTrack{ID: audioTrackID, TimeScale: timeScale, Codec: &fmp4.CodecMPEG4Audio{Config: ascCfg}})
 	}
 
 	init := fmp4.Init{Tracks: tracks}

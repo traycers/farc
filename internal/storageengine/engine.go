@@ -25,10 +25,22 @@ package storageengine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync"
+	"time"
 
-	"traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/ioengine"
 )
+
+// ErrWriteJobFailed is returned by WriteHandle.Append once its underlying
+// job has already finished (a real I/O error, or a write-verify corruption
+// mismatch) -- an open/continuous job that fails is dequeued by
+// finishWriteLocked exactly like an ordinary one, but nothing else was ever
+// waiting on its ticket to notice, so Append must report it explicitly
+// instead of silently accumulating pendingAppend on a job the engine will
+// never look at again (.scratch/fblocks-ui/issues/08-ingest-stalls-after-rtp-packet-loss.md).
+var ErrWriteJobFailed = errors.New("storageengine: write job already failed")
 
 // Level is the write-queue fill level ADR-011 schedules reads against.
 type Level int
@@ -77,9 +89,95 @@ type writeJob struct {
 	data   []byte
 	pos    int64
 
+	// Open-write fields (zero value = an ordinary, fixed-size job from
+	// EnqueueWrite; behavior below is unchanged for those). An open job is
+	// ADR-017's periodic partial flush: content arrives incrementally via
+	// Append and is physically flushed (fchunk_size reached, or timeout
+	// elapsed, whichever first) as one write-verified batch followed by a
+	// relocatable magic trailer, instead of all at once at EnqueueWrite
+	// time.
+	open          bool
+	closed        bool // Close() called: finish once pos>=len(data), no more flush triggers
+	trailerLen    int64
+	headerPadLen  int64 // zero scratch bytes appended after headerAndMagic to reach Alignment() -- permanent, unlike trailerLen: rewinding into it to reclaim the space would leave the next write starting at an unaligned position, so it's just a small (< Alignment()) one-time waste, always excluded from Written() like the trailer is
+	fchunkSize    int64
+	timeout       time.Duration
+	lastFlush     time.Time
+	pendingAppend []byte
+
 	done chan struct{}
 	res  WriteResult
 	err  error
+}
+
+// WriteHandle is returned by EnqueueOpenWrite.
+type WriteHandle struct {
+	e   *Engine
+	job *writeJob
+}
+
+// Append supplies newContent bytes (already-encoded content, not including
+// header/magic or the trailer) to be flushed by a future batch. Must not be
+// called after Close. Returns ErrWriteJobFailed (or the underlying I/O
+// error) if the job already finished on its own -- a real write error or a
+// write-verify corruption mismatch dequeues an open job exactly like an
+// ordinary one, and the caller must react (mark the fblock Bad, open a
+// fresh segment) instead of continuing to append to a job the engine will
+// never process again.
+func (h *WriteHandle) Append(newContent []byte) error {
+	h.e.mu.Lock()
+	defer h.e.mu.Unlock()
+	select {
+	case <-h.job.done:
+		if h.job.err != nil {
+			return h.job.err
+		}
+		return ErrWriteJobFailed
+	default:
+	}
+	h.job.pendingAppend = append(h.job.pendingAppend, newContent...)
+	h.e.cond.Broadcast()
+	return nil
+}
+
+// Written reports content bytes (including the header/magic prefix, but
+// excluding the trailer and any header alignment padding) physically
+// confirmed so far.
+func (h *WriteHandle) Written() int64 {
+	h.e.mu.Lock()
+	defer h.e.mu.Unlock()
+	excluded := h.job.trailerLen + h.job.headerPadLen
+	if h.job.pos < excluded {
+		return h.job.pos
+	}
+	return h.job.pos - excluded
+}
+
+// TrailerOffset returns the relative offset (from this job's own base
+// offset) where the last confirmed flush's magic trailer currently starts
+// -- i.e. where a caller's own final tail write must land to overwrite it.
+// Unlike Written(), this INCLUDES headerPadLen (the header alignment
+// padding is physically on disk permanently, per EnqueueOpenWrite's own
+// doc comment, so any write positioned after the last confirmed content
+// must account for it, not just for the trailer being overwritten).
+func (h *WriteHandle) TrailerOffset() int64 {
+	h.e.mu.Lock()
+	defer h.e.mu.Unlock()
+	return h.job.pos - h.job.trailerLen
+}
+
+// Close marks that no more Append calls will come. Once whatever's already
+// in the job's data (the last confirmed flush, if any) is fully written,
+// the job finishes exactly like a plain EnqueueWrite job — Close does not
+// itself force one more sub-alignment flush; any leftover, never-flushed
+// pendingAppend bytes are the caller's own responsibility (its final tail
+// write, which overwrites the last trailer).
+func (h *WriteHandle) Close() *WriteTicket {
+	h.e.mu.Lock()
+	h.job.closed = true
+	h.e.cond.Broadcast()
+	h.e.mu.Unlock()
+	return &WriteTicket{job: h.job}
 }
 
 type readJob struct {
@@ -144,6 +242,44 @@ func (e *Engine) EnqueueWrite(offset int64, data []byte) *WriteTicket {
 	return &WriteTicket{job: job}
 }
 
+// EnqueueOpenWrite starts a periodic-flush job at offset (the fblock's own
+// absolute base offset — writes chunk by raw byte-offset-from-fblock-start,
+// regardless of logical section boundaries, docs/docs/archive/
+// 03-storage-format.md §10). headerAndMagic is written immediately as the
+// job's first bytes. The engine itself decides *when* to physically flush
+// pending Append data (fchunk_size accumulated since the last flush, OR
+// timeout elapsed, whichever first — ADR-017 assigns this comparison to
+// StorageEngine, not the caller) and appends a magic trailer
+// (fblock.EncodeTrailer) after every flushed batch, relocating it forward
+// each time. timeout <= 0 disables the timeout trigger (fchunk_size-only
+// pacing — used under backlog, per the ticket's "T ignored entirely while
+// catching up" decision).
+func (e *Engine) EnqueueOpenWrite(offset int64, headerAndMagic []byte, timeout time.Duration) *WriteHandle {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	data := append([]byte(nil), headerAndMagic...)
+	alignment := e.alignmentLocked()
+	var padLen int64
+	if rem := int64(len(data)) % alignment; rem != 0 {
+		padLen = alignment - rem
+		data = append(data, make([]byte, padLen)...)
+	}
+	job := &writeJob{
+		offset:       offset,
+		data:         data,
+		open:         true,
+		headerPadLen: padLen,
+		fchunkSize:   e.cfg.FchunkSize,
+		timeout:      timeout,
+		lastFlush:    time.Now(),
+		done:         make(chan struct{}),
+	}
+	e.writeQueue = append(e.writeQueue, job)
+	e.cond.Broadcast()
+	return &WriteHandle{e: e, job: job}
+}
+
 // EnqueueRead queues a read of length bytes starting at offset.
 func (e *Engine) EnqueueRead(offset, length int64) *ReadTicket {
 	job := &readJob{offset: offset, length: length, buf: make([]byte, length), done: make(chan struct{})}
@@ -182,14 +318,90 @@ func (e *Engine) levelLocked() Level {
 	}
 }
 
+// writeActionableLocked reports whether the write queue's head job has
+// something Step can actually do right now: an ordinary job is always
+// actionable until finished; an open job is actionable while a previously
+// confirmed flush is still being written, once Close has been called (it
+// only needs to finish), or once its flush trigger (fchunk_size or
+// timeout) fires with at least one alignment unit ready. An open job
+// sitting idle below its trigger is not actionable — Step must report
+// false for it rather than busy-spin, so Run can sleep (bounded by the
+// timeout) instead.
+func (e *Engine) writeActionableLocked() bool {
+	if len(e.writeQueue) == 0 {
+		return false
+	}
+	job := e.writeQueue[0]
+	if !job.open {
+		return true
+	}
+	if job.pos < int64(len(job.data)) {
+		return true
+	}
+	if job.closed {
+		return true
+	}
+	return e.flushTriggerReadyLocked(job)
+}
+
+// flushTriggerReadyLocked reports whether job's pending content should be
+// physically flushed now: fchunk_size worth accumulated, or (if job.timeout
+// > 0) the timeout has elapsed since the last flush — but only if at least
+// one alignment unit is actually writable (ADR-017: "если writable == 0,
+// ничего не пишем, остаток продолжает копиться").
+func (e *Engine) flushTriggerReadyLocked(job *writeJob) bool {
+	if len(job.pendingAppend) == 0 {
+		return false
+	}
+	alignment := e.alignmentLocked()
+	writable := (int64(len(job.pendingAppend)) / alignment) * alignment
+	if writable <= 0 {
+		return false
+	}
+	if int64(len(job.pendingAppend)) >= job.fchunkSize {
+		return true
+	}
+	return job.timeout > 0 && time.Since(job.lastFlush) >= job.timeout
+}
+
+func (e *Engine) alignmentLocked() int64 {
+	a := int64(e.backend.Alignment())
+	if a <= 0 {
+		return 1
+	}
+	return a
+}
+
+// applyFlushLocked physically extends job.data with the next writable batch
+// of pendingAppend content plus a relocated magic trailer, as one combined
+// unit for the normal write-verify loop below to pick up — the trailer
+// from the previous flush (if any) is trimmed off first and job.pos
+// rewound to match, so the write-verify loop overwrites it rather than
+// appending after it (only the single most recent trailer ever exists on
+// disk).
+func (e *Engine) applyFlushLocked(job *writeJob) {
+	alignment := e.alignmentLocked()
+	writable := (int64(len(job.pendingAppend)) / alignment) * alignment
+	if job.trailerLen > 0 {
+		job.data = job.data[:int64(len(job.data))-job.trailerLen]
+		job.pos -= job.trailerLen
+	}
+	job.data = append(job.data, job.pendingAppend[:writable]...)
+	trailer := fblock.EncodeTrailer(int(alignment))
+	job.data = append(job.data, trailer...)
+	job.trailerLen = int64(len(trailer))
+	job.pendingAppend = job.pendingAppend[writable:]
+	job.lastFlush = time.Now()
+}
+
 // Step performs exactly one fchunk write-verify or one read portion,
 // choosing per ADR-005/ADR-011, and reports whether it did anything (false
-// means both queues are empty).
+// means there's nothing actionable in either queue right now).
 func (e *Engine) Step() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	haveWrite := len(e.writeQueue) > 0
+	haveWrite := e.writeActionableLocked()
 	haveRead := len(e.readQueue) > 0
 	if !haveWrite && !haveRead {
 		return false
@@ -220,6 +432,22 @@ func (e *Engine) Step() bool {
 
 func (e *Engine) stepWriteLocked(level Level) {
 	job := e.writeQueue[0]
+
+	if job.open && job.pos >= int64(len(job.data)) {
+		// The previous flush (if any) is fully confirmed. An open job never
+		// finishes just because it caught up -- only Close (finish now) or
+		// a fired flush trigger (extend job.data, then fall through to the
+		// normal write-verify below) make progress here.
+		if job.closed {
+			e.finishWriteLocked(job, WriteResult{}, nil)
+			return
+		}
+		if !e.flushTriggerReadyLocked(job) {
+			return
+		}
+		e.applyFlushLocked(job)
+	}
+
 	chunkLen := e.cfg.FchunkSize
 	if remaining := int64(len(job.data)) - job.pos; remaining < chunkLen {
 		chunkLen = remaining
@@ -251,7 +479,7 @@ func (e *Engine) stepWriteLocked(level Level) {
 			e.quotaRemaining = e.cfg.QuotaPortions
 		}
 	}
-	if job.pos >= int64(len(job.data)) {
+	if job.pos >= int64(len(job.data)) && (!job.open || job.closed) {
 		e.finishWriteLocked(job, WriteResult{}, nil)
 	}
 }
@@ -284,9 +512,43 @@ func (e *Engine) stepReadLocked() {
 	}
 }
 
+// nextDeadlineLocked returns the time at which the head write job's open,
+// not-yet-triggered flush timeout will fire, if any is pending. Only one
+// open job ever exists per Engine (one active segment at a time), so this
+// is a single deadline, not a heap.
+func (e *Engine) nextDeadlineLocked() (time.Time, bool) {
+	if len(e.writeQueue) == 0 {
+		return time.Time{}, false
+	}
+	job := e.writeQueue[0]
+	if !job.open || job.closed || job.timeout <= 0 || len(job.pendingAppend) == 0 {
+		return time.Time{}, false
+	}
+	if job.pos < int64(len(job.data)) {
+		return time.Time{}, false // still writing the previous batch; Step keeps this busy without a timer
+	}
+	return job.lastFlush.Add(job.timeout), true
+}
+
+// waitUntilLocked blocks on e.cond (releasing e.mu meanwhile, per
+// sync.Cond's contract) until either a broadcast arrives or deadline
+// passes, whichever first — used so a quiet, low-bitrate open job's
+// timeout still fires with zero new Append/EnqueueWrite calls.
+func (e *Engine) waitUntilLocked(deadline time.Time) {
+	timer := time.AfterFunc(time.Until(deadline), func() {
+		e.mu.Lock()
+		e.cond.Broadcast()
+		e.mu.Unlock()
+	})
+	defer timer.Stop()
+	e.cond.Wait()
+}
+
 // Run drives Step in a loop on the calling goroutine until ctx is done,
-// sleeping only when both queues are empty. Intended to be started as
-// StorageEngine's single disk-owning goroutine (`go engine.Run(ctx)`).
+// sleeping only when there's nothing actionable in either queue (bounded by
+// an open write job's pending flush timeout, if any). Intended to be
+// started as StorageEngine's single disk-owning goroutine
+// (`go engine.Run(ctx)`).
 func (e *Engine) Run(ctx context.Context) {
 	stopped := make(chan struct{})
 	go func() {
@@ -308,8 +570,12 @@ func (e *Engine) Run(ctx context.Context) {
 			continue
 		}
 		e.mu.Lock()
-		for len(e.writeQueue) == 0 && len(e.readQueue) == 0 && ctx.Err() == nil {
-			e.cond.Wait()
+		for !e.writeActionableLocked() && len(e.readQueue) == 0 && ctx.Err() == nil {
+			if deadline, ok := e.nextDeadlineLocked(); ok {
+				e.waitUntilLocked(deadline)
+			} else {
+				e.cond.Wait()
+			}
 		}
 		e.mu.Unlock()
 	}

@@ -1,181 +1,179 @@
-import Hls from 'hls.js'
 import { useEffect, useRef, useState } from 'react'
-import { candidates, listStorages, setProtected, type StorageInfo } from '../api/farcd'
-import { nsFromLocalInputValue, nsToDisplayString, nsToLocalInputValue, type Candidate } from '../api/ns'
+import ChannelChecklist from '../components/ChannelChecklist'
+import TimelineBar from '../components/TimelineBar'
+import VideoGrid from '../components/VideoGrid'
+import { listChannels, type ChannelInfo } from '../api/farcd'
+import { getTimeline, playlistUrl, type ChannelTimeline } from '../api/hls'
+import { nsFromLocalInputValue, nsToDisplayString, nsToLocalInputValue } from '../api/ns'
+import { advance, computeDataRange, nextSegmentStart, prevSegmentStart } from './playerTimeline'
 
 const ONE_HOUR_NS = 3_600_000_000_000n
+const TICK_MS = 200
 
+function segmentAt(ct: ChannelTimeline | undefined, t: bigint) {
+  return ct?.segments.find((s) => s.begin <= t && t <= s.end) ?? null
+}
+
+// PlayerPage: multi-channel archive player (.scratch/player-redesign/
+// spec.md) -- fully replaces the old single-channel page. Orchestration
+// only: search form, checklist, the one shared playhead, play/stop/prev/
+// next. Anything beyond gluing ChannelChecklist/TimelineBar/VideoGrid
+// together belongs in one of pages/playerLayout.ts, pages/playerTimeline.ts
+// or pages/timelineGeometry.ts instead.
 export default function PlayerPage() {
-  const [storages, setStorages] = useState<StorageInfo[]>([])
-  const [storage, setStorage] = useState('')
-  const [channel, setChannel] = useState(1)
+  const [channels, setChannels] = useState<ChannelInfo[]>([])
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+
   const now = BigInt(Date.now()) * 1_000_000n
   const [from, setFrom] = useState(nsToLocalInputValue(now - ONE_HOUR_NS))
   const [to, setTo] = useState(nsToLocalInputValue(now))
-  const [rows, setRows] = useState<Candidate[]>([])
+
+  const [timelines, setTimelines] = useState<ChannelTimeline[] | null>(null)
+  const [rangeStart, setRangeStart] = useState(0n)
+  const [rangeEnd, setRangeEnd] = useState(0n)
+  const [playheadNs, setPlayheadNs] = useState(0n)
+  const [playing, setPlaying] = useState(false)
+  const [activeChannel, setActiveChannel] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const videoRef = useRef<HTMLVideoElement | null>(null)
-  const hlsRef = useRef<Hls | null>(null)
+  const lastTickRef = useRef(0)
 
   useEffect(() => {
-    listStorages()
-      .then((s) => {
-        setStorages(s)
-        if (s.length > 0) setStorage((cur) => cur || s[0].id)
-      })
-      .catch((e) => setError(String(e)))
-    return () => hlsRef.current?.destroy()
+    listChannels().then(setChannels, (e) => setError(String(e)))
   }, [])
+
+  useEffect(() => {
+    if (!playing || !timelines) return
+    lastTickRef.current = Date.now()
+    const id = setInterval(() => {
+      const now = Date.now()
+      const deltaNs = BigInt(now - lastTickRef.current) * 1_000_000n
+      lastTickRef.current = now
+      setPlayheadNs((prev) => {
+        const t = prev + deltaNs
+        const step = advance(timelines, t)
+        if (step.kind === 'end') {
+          setPlaying(false)
+          return prev
+        }
+        if (step.kind === 'skip') return step.to
+        return t
+      })
+    }, TICK_MS)
+    return () => clearInterval(id)
+  }, [playing, timelines])
+
+  function toggleChannel(channel: number) {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      if (next.has(channel)) next.delete(channel)
+      else next.add(channel)
+      return next
+    })
+  }
 
   async function onSearch(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
+    setPlaying(false)
     try {
       const t1 = nsFromLocalInputValue(from)
       const t2 = nsFromLocalInputValue(to)
-      setRows(await candidates(storage, channel, t1, t2, true))
+      const result = await getTimeline(Array.from(checked), t1, t2)
+      setTimelines(result)
+      const range = computeDataRange(result, t1, t2)
+      setRangeStart(range.start)
+      setRangeEnd(range.end)
+      setPlayheadNs(range.start)
     } catch (e) {
       setError(String(e))
     }
   }
 
-  async function onToggleProtected(c: Candidate, value: boolean) {
-    setError(null)
-    try {
-      await setProtected(storage, c.uuid, value)
-    } catch (e) {
-      setError(String(e))
-    }
+  function jumpTo(ns: bigint | null) {
+    if (ns !== null) setPlayheadNs(ns)
   }
 
-  function play(c: Candidate) {
-    const url = `/api/hls/channels/${channel}/hls/${c.begin}/${c.end}/playlist.m3u8`
-    const video = videoRef.current
-    if (!video) return
-    hlsRef.current?.destroy()
-    setError(null)
-    if (Hls.isSupported()) {
-      const hls = new Hls()
-      hlsRef.current = hls
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) {
-          setError(`Playback failed (${data.type}/${data.details})`)
-          hls.destroy()
-        }
-      })
-      hls.loadSource(url)
-      hls.attachMedia(video)
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = url
-      video.onerror = () => setError(`Playback failed: ${video.error?.message ?? 'unknown error'}`)
-    } else {
-      setError('This browser supports neither MSE (hls.js) nor native HLS playback.')
-    }
-  }
+  const channelIds = Array.from(checked)
 
   return (
     <section>
       <h1 className="mb-3">Player</h1>
 
-      <div className="card mb-3">
-        <div className="card-body">
-          <form onSubmit={onSearch} className="row g-3 align-items-end">
-            <div className="col-sm-6 col-md-3">
-              <label className="form-label">
-                storage
-                <select className="form-select" value={storage} onChange={(e) => setStorage(e.target.value)}>
-                  {storages.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="col-sm-6 col-md-2">
-              <label className="form-label">
-                channel id
-                <input
-                  type="number"
-                  className="form-control"
-                  value={channel}
-                  onChange={(e) => setChannel(Number(e.target.value))}
-                />
-              </label>
-            </div>
-            <div className="col-sm-6 col-md-3">
-              <label className="form-label">
-                from
-                <input
-                  type="datetime-local"
-                  className="form-control"
-                  value={from}
-                  onChange={(e) => setFrom(e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="col-sm-6 col-md-3">
-              <label className="form-label">
-                to
-                <input
-                  type="datetime-local"
-                  className="form-control"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="col-md-1">
-              <button type="submit" className="btn btn-primary w-100">
-                Search
-              </button>
-            </div>
+      <div className="row g-3">
+        <div className="col-md-3">
+          <ChannelChecklist channels={channels} checked={checked} onToggle={toggleChannel} />
+
+          <form onSubmit={onSearch} className="mt-3">
+            <label className="form-label">
+              from
+              <input
+                type="datetime-local"
+                className="form-control"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+              />
+            </label>
+            <label className="form-label">
+              to
+              <input type="datetime-local" className="form-control" value={to} onChange={(e) => setTo(e.target.value)} />
+            </label>
+            <button type="submit" className="btn btn-primary w-100 mt-2">
+              Search
+            </button>
           </form>
         </div>
+
+        <div className="col-md-9 player-page">
+          {error && <div className="alert alert-danger">{error}</div>}
+
+          <VideoGrid
+            channelIds={channelIds}
+            getTileProps={(channel) => {
+              const ct = timelines?.find((t) => t.channel === channel)
+              const segment = segmentAt(ct, playheadNs)
+              return {
+                channel,
+                segmentUrl: segment ? playlistUrl(channel, segment.begin, segment.end) : null,
+                seekToSec: segment ? Number(playheadNs - segment.begin) / 1e9 : 0,
+                playing,
+                muted: activeChannel !== channel,
+                active: activeChannel === channel,
+                onClick: () => setActiveChannel(channel),
+              }
+            }}
+          />
+
+          {timelines && (
+            <>
+              <div className="mt-2" data-testid="player-current-time" data-playhead-ns={playheadNs.toString()}>
+                текущее время: {nsToDisplayString(playheadNs)}
+              </div>
+              <TimelineBar
+                timelines={timelines}
+                rangeStart={rangeStart}
+                rangeEnd={rangeEnd}
+                playheadNs={playheadNs}
+                onSeek={setPlayheadNs}
+              />
+              <div className="btn-group mt-2">
+                <button type="button" className="btn btn-secondary" onClick={() => jumpTo(prevSegmentStart(timelines, playheadNs))}>
+                  Prev
+                </button>
+                <button type="button" className="btn btn-primary" onClick={() => setPlaying(true)}>
+                  Play
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => setPlaying(false)}>
+                  Stop
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => jumpTo(nextSegmentStart(timelines, playheadNs))}>
+                  Next
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
-
-      {error && <div className="alert alert-danger">{error}</div>}
-
-      <div className="table-responsive mb-3">
-        <table className="table table-striped table-hover align-middle">
-          <thead>
-            <tr>
-              <th>uuid</th>
-              <th>begin</th>
-              <th>end</th>
-              <th>protected</th>
-              <th>play</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((c) => (
-              <tr key={c.uuid}>
-                <td>{c.uuid}</td>
-                <td>{nsToDisplayString(c.begin)}</td>
-                <td>{nsToDisplayString(c.end)}</td>
-                <td>
-                  <div className="btn-group btn-group-sm">
-                    <button type="button" className="btn btn-outline-secondary" onClick={() => onToggleProtected(c, true)}>
-                      set
-                    </button>
-                    <button type="button" className="btn btn-outline-secondary" onClick={() => onToggleProtected(c, false)}>
-                      clear
-                    </button>
-                  </div>
-                </td>
-                <td>
-                  <button type="button" className="btn btn-sm btn-primary" onClick={() => play(c)}>
-                    play
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <video ref={videoRef} controls className="rounded" />
     </section>
   )
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"traycers/farc/internal/segmentcache"
+	"github.com/traycers/farc/internal/segmentcache"
 )
 
 func TestCache_PutGetRoundTrip(t *testing.T) {

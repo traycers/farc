@@ -1,11 +1,13 @@
 // Package vaablocks computes vaa-blocks from a fblock's already-decoded TOC
 // (internal/msmclient delivers the raw bytes, this package calls toc.Decode
 // and walks the result) -- internal/msmd's only consumer. A vaa-block is a
-// contiguous-in-time run of one channel's VIDEO frames within a single
-// fblock; a gap of at least GapThresholdNS between two consecutive frames
-// starts a new one, even though both sides are still the same channel in
-// the same fblock. Audio is never grouped into vaa-blocks (msm's own
-// requirement) -- only mediatree.RoleFrameTimeVideo nodes are scanned.
+// contiguous-in-time run of one channel's frames of a given StreamKind
+// within a single fblock; a gap of at least GapThresholdNS between two
+// consecutive frames starts a new one, even though both sides are still the
+// same channel in the same fblock. Video and audio each get their own,
+// entirely independent vaa-block timeline (.scratch/msm-integration/issues/
+// 01-audio-vaa-blocks.md) -- Compute takes a StreamKind and scans only that
+// kind's frame_time role.
 //
 // A vaa-block never spans two fblocks: models.vaa_block.Id (temp/msm/
 // openapi.yaml) is keyed by a single fnum, and this package only ever sees
@@ -16,8 +18,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 // GapThresholdNS is msm's vaa-block boundary rule (ns): 2 seconds.
@@ -65,40 +67,41 @@ func Channels(c *toc.Columns) []uint16 {
 	return out
 }
 
-// findChannelNode finds the RoleChannel node whose inline uint32 value is
-// channel -- duplicated from internal/api/query.go's own unexported helper
-// of the same name/shape (not importable across packages, and small enough
-// not to warrant promoting to a shared package of its own).
-func findChannelNode(c *toc.Columns, channel uint16) (uint32, bool) {
-	for _, id := range toc.ScanByRole(c, mediatree.RoleChannel) {
-		v, ok := toc.InlineValue(c, id)
-		if ok && len(v) == 4 && binary.LittleEndian.Uint32(v) == uint32(channel) {
-			return id, true
-		}
+// frameTimeRole/frameDataRole/configRole/configsRole/kindRole return kind's
+// role codes for the tree shape internal/fcontainer/filler.go's
+// AddStreamParams builds: frame_time -> frame -> frames -> config ->
+// configs -> [video|audio] -> stream(uint32 inline value). Video and audio
+// each have their own role codes for these structurally-identical
+// positions (mediatree.Role's own doc comment).
+func frameTimeRole(kind StreamKind) mediatree.Role {
+	if kind == KindAudio {
+		return mediatree.RoleFrameTimeAudio
 	}
-	return 0, false
+	return mediatree.RoleFrameTimeVideo
 }
 
-// findChildByRole scans parentID's own subtree for a direct child with the
-// given role -- duplicated from internal/api/query.go's own helper.
-func findChildByRole(c *toc.Columns, parentID uint32, role mediatree.Role) (uint32, bool) {
-	_, end := toc.SubtreeRange(c, parentID)
-	for i := parentID + 1; i < end; i++ {
-		if c.Parent[i] == parentID && c.Role[i] == role {
-			return i, true
-		}
+func frameDataRole(kind StreamKind) mediatree.Role {
+	if kind == KindAudio {
+		return mediatree.RoleFrameDataAudio
 	}
-	return 0, false
+	return mediatree.RoleFrameDataVideo
 }
 
-// videoFrameSpan returns the content byte offset/size of the video frame
-// owning frameTimeID (i.e. its RoleFrameDataVideo sibling under the same
-// RoleFrameVideo parent).
-func videoFrameSpan(c *toc.Columns, frameTimeID uint32) (offset, size uint64, err error) {
+func kindRole(kind StreamKind) mediatree.Role {
+	if kind == KindAudio {
+		return mediatree.RoleAudio
+	}
+	return mediatree.RoleVideo
+}
+
+// frameSpan returns the content byte offset/size of the frame owning
+// frameTimeID (i.e. its frame-data role sibling under the same frame
+// parent).
+func frameSpan(c *toc.Columns, frameTimeID uint32, kind StreamKind) (offset, size uint64, err error) {
 	frameID := c.Parent[frameTimeID]
-	dataID, ok := findChildByRole(c, frameID, mediatree.RoleFrameDataVideo)
+	dataID, ok := toc.ChildByRole(c, frameID, frameDataRole(kind))
 	if !ok {
-		return 0, 0, fmt.Errorf("vaablocks: frame %d has no video data child", frameID)
+		return 0, 0, fmt.Errorf("vaablocks: frame %d has no %v data child", frameID, kind)
 	}
 	offset, size, ok = toc.ContentOffset(c, dataID)
 	if !ok {
@@ -107,17 +110,17 @@ func videoFrameSpan(c *toc.Columns, frameTimeID uint32) (offset, size uint64, er
 	return offset, size, nil
 }
 
-// configAndStreamOf walks up from a frame_time(video) node to the
-// RoleConfigVideo node governing it and the RoleStream node's inline stream
-// number -- the tree shape internal/fcontainer/filler.go's AddStreamParams
-// builds: frame_time -> frame(video) -> frames(video) -> config(video) ->
-// configs(video) -> video -> stream(uint32 inline value).
-func configAndStreamOf(c *toc.Columns, frameTimeID uint32) (configID uint32, streamID uint16, err error) {
+// configAndStreamOf walks up from a frame_time node to the config node
+// governing it and the RoleStream node's inline stream number.
+func configAndStreamOf(c *toc.Columns, frameTimeID uint32, kind StreamKind) (configID uint32, streamID uint16, err error) {
 	frameID := c.Parent[frameTimeID]
 	framesID := c.Parent[frameID]
 	configID = c.Parent[framesID]
 	configsID := c.Parent[configID]
 	kindID := c.Parent[configsID]
+	if c.Role[kindID] != kindRole(kind) {
+		return 0, 0, fmt.Errorf("vaablocks: frame %d: expected a %v ancestor, got role %s", frameID, kind, c.Role[kindID])
+	}
 	streamNodeID := c.Parent[kindID]
 	if c.Role[streamNodeID] != mediatree.RoleStream {
 		return 0, 0, fmt.Errorf("vaablocks: frame %d: expected a stream ancestor, got role %s", frameID, c.Role[streamNodeID])
@@ -129,15 +132,16 @@ func configAndStreamOf(c *toc.Columns, frameTimeID uint32) (configID uint32, str
 	return configID, uint16(binary.LittleEndian.Uint32(v)), nil
 }
 
-// Compute returns channel's video vaa-blocks from c, in increasing-time
-// order -- nil if channel isn't present in c or has no video frames.
-func Compute(c *toc.Columns, channel uint16) ([]Block, error) {
-	channelNodeID, ok := findChannelNode(c, channel)
+// Compute returns channel's kind vaa-blocks from c, in increasing-time
+// order -- nil if channel isn't present in c or has no frames of kind.
+// Video and audio are computed entirely independently: each has its own
+// gap-splitting timeline, never merged or cross-referenced.
+func Compute(c *toc.Columns, channel uint16, kind StreamKind) ([]Block, error) {
+	start, end, ok := toc.ChannelSubtreeRange(c, channel)
 	if !ok {
 		return nil, nil
 	}
-	start, end := toc.SubtreeRange(c, channelNodeID)
-	timeIDs := toc.InRange(toc.ScanByRole(c, mediatree.RoleFrameTimeVideo), start, end)
+	timeIDs := toc.InRange(toc.ScanByRole(c, frameTimeRole(kind)), start, end)
 	if len(timeIDs) == 0 {
 		return nil, nil
 	}
@@ -149,15 +153,15 @@ func Compute(c *toc.Columns, channel uint16) ([]Block, error) {
 			continue
 		}
 		run := timeIDs[runStart:i]
-		firstOffset, _, err := videoFrameSpan(c, run[0])
+		firstOffset, _, err := frameSpan(c, run[0], kind)
 		if err != nil {
 			return nil, err
 		}
-		lastOffset, lastSize, err := videoFrameSpan(c, run[len(run)-1])
+		lastOffset, lastSize, err := frameSpan(c, run[len(run)-1], kind)
 		if err != nil {
 			return nil, err
 		}
-		configID, streamID, err := configAndStreamOf(c, run[0])
+		configID, streamID, err := configAndStreamOf(c, run[0], kind)
 		if err != nil {
 			return nil, err
 		}

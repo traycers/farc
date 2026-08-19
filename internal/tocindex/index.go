@@ -10,7 +10,7 @@ import (
 	"sort"
 	"sync"
 
-	"traycers/farc/toc"
+	"github.com/traycers/farc/toc"
 )
 
 // Record is one fcontainer entry in a channel's index: the fcontainer's
@@ -24,6 +24,11 @@ type Record struct {
 	Begin     uint64
 	End       uint64
 	Columns   *toc.Columns
+
+	// VideoSegments is this record's own video-presence segments
+	// (VideoPresenceSegments(Columns, channel)), precomputed once when the
+	// record is indexed rather than recomputed per Timeline call.
+	VideoSegments []Segment
 }
 
 // ChannelIndex is one channel's set of known fcontainer records, keyed by
@@ -76,6 +81,31 @@ func (c *ChannelIndex) Records(t1, t2 uint64) []Record {
 		out = append(out, rec)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Begin < out[j].Begin })
+	return out
+}
+
+// Timeline returns every video-presence segment (across every record
+// overlapping [t1,t2]) clipped to [t1,t2], in increasing-time order. Records
+// contributing to different, non-adjacent fcontainers are not merged into
+// each other -- two segments from different records may end up flush
+// against each other with no visible gap, and that's fine (.scratch/
+// player-redesign/spec.md).
+func (c *ChannelIndex) Timeline(t1, t2 uint64) []Segment {
+	var out []Segment
+	for _, rec := range c.Records(t1, t2) {
+		for _, seg := range rec.VideoSegments {
+			if seg.End < t1 || seg.Begin > t2 {
+				continue
+			}
+			if seg.Begin < t1 {
+				seg.Begin = t1
+			}
+			if seg.End > t2 {
+				seg.End = t2
+			}
+			out = append(out, seg)
+		}
+	}
 	return out
 }
 

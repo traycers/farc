@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/mediatree"
 )
 
 func videoParams() StreamParams {
@@ -87,69 +87,6 @@ func TestAddStreamParamsAndFramesVideo(t *testing.T) {
 	}
 }
 
-func TestElementsSince(t *testing.T) {
-	f := New()
-	configID, err := f.AddStreamParams(1, 0, KindVideo, videoParams())
-	if err != nil {
-		t.Fatalf("AddStreamParams: %v", err)
-	}
-	n0 := f.Len()
-
-	err = f.AddFrames(configID, []Frame{
-		{Data: []byte("keyframe"), Time: 100, Kind: mediatree.FrameKindI},
-	})
-	if err != nil {
-		t.Fatalf("AddFrames: %v", err)
-	}
-	n1 := f.Len()
-
-	delta := f.ElementsSince(n0)
-	if len(delta) != n1-n0 {
-		t.Fatalf("ElementsSince(%d) len = %d, want %d", n0, len(delta), n1-n0)
-	}
-	full := f.Elements()
-	if len(delta) == 0 || full[n0].Role != delta[0].Role {
-		t.Fatalf("ElementsSince(%d)[0] = %+v, want elems[%d] = %+v", n0, delta[0], n0, full[n0])
-	}
-
-	if got := f.ElementsSince(n1); len(got) != 0 {
-		t.Fatalf("ElementsSince(%d) (cursor at Len()) = %d elements, want 0", n1, len(got))
-	}
-	if got := f.ElementsSince(0); len(got) != n1 {
-		t.Fatalf("ElementsSince(0) = %d elements, want %d", len(got), n1)
-	}
-}
-
-func TestContentBytes(t *testing.T) {
-	f := New()
-	if got := f.ContentBytes(); got != 0 {
-		t.Fatalf("ContentBytes() of an empty Filler = %d, want 0", got)
-	}
-
-	configID, err := f.AddStreamParams(1, 0, KindVideo, videoParams())
-	if err != nil {
-		t.Fatalf("AddStreamParams: %v", err)
-	}
-	afterParams := f.ContentBytes()
-	if afterParams != len(mediatree.EncodeContent(f.Elements())) {
-		t.Fatalf("ContentBytes() = %d, want %d (len of the real encoding)", afterParams, len(mediatree.EncodeContent(f.Elements())))
-	}
-
-	err = f.AddFrames(configID, []Frame{
-		{Data: []byte("keyframe-payload"), Time: 100, Kind: mediatree.FrameKindI},
-	})
-	if err != nil {
-		t.Fatalf("AddFrames: %v", err)
-	}
-	afterFrame := f.ContentBytes()
-	if afterFrame <= afterParams {
-		t.Fatalf("ContentBytes() after a frame = %d, want > %d", afterFrame, afterParams)
-	}
-	if afterFrame != len(mediatree.EncodeContent(f.Elements())) {
-		t.Fatalf("ContentBytes() = %d, want %d (len of the real encoding)", afterFrame, len(mediatree.EncodeContent(f.Elements())))
-	}
-}
-
 func TestAddStreamParamsAndFramesAudio(t *testing.T) {
 	f := New()
 	configID, err := f.AddStreamParams(5, 2, KindAudio, audioParams())
@@ -196,10 +133,12 @@ func TestStreamParamsValidation(t *testing.T) {
 		{"video missing sps", KindVideo, StreamParams{CodecVideo: mediatree.CodecH264, ParamPPS: []byte{1}}},
 		{"video missing pps", KindVideo, StreamParams{CodecVideo: mediatree.CodecH264, ParamSPS: []byte{1}}},
 		{"video bad codec", KindVideo, StreamParams{CodecVideo: 99, ParamSPS: []byte{1}, ParamPPS: []byte{1}}},
+		{"video codec unset (zero value)", KindVideo, StreamParams{CodecVideo: mediatree.CodecUninitialized, ParamSPS: []byte{1}, ParamPPS: []byte{1}}},
 		{"video vps on h264", KindVideo, StreamParams{CodecVideo: mediatree.CodecH264, ParamSPS: []byte{1}, ParamPPS: []byte{1}, ParamVPS: []byte{1}}},
 		{"audio missing sample rate", KindAudio, StreamParams{CodecAudio: mediatree.CodecAAC, ChannelCount: 1}},
 		{"audio missing channel count", KindAudio, StreamParams{CodecAudio: mediatree.CodecAAC, SampleRate: 8000}},
 		{"audio bad codec", KindAudio, StreamParams{CodecAudio: 99, SampleRate: 8000, ChannelCount: 1}},
+		{"audio codec unset (zero value)", KindAudio, StreamParams{CodecAudio: mediatree.CodecUninitialized, SampleRate: 8000, ChannelCount: 1}},
 		{"audio config on non-aac", KindAudio, StreamParams{CodecAudio: mediatree.CodecPCM, SampleRate: 8000, ChannelCount: 1, ParamAudioConfig: []byte{1}}},
 	}
 	for _, c := range cases {
@@ -308,5 +247,72 @@ func TestContentRoundTripsThroughMediatree(t *testing.T) {
 	}
 	if len(got) != f.Len() {
 		t.Fatalf("decoded %d elements, Len() = %d", len(got), f.Len())
+	}
+}
+
+// TestElementsFrom_IncrementalTailMatchesFullContent verifies that calling
+// AddFrames twice and reading only the tail via ElementsFrom(upto) after
+// the first call, plus the tail after the second, together reconstruct
+// exactly what Content() gives for the whole tree -- this backs Segment's
+// (internal/storage) incremental push to StorageEngine, which must never
+// re-encode nodes it already sent.
+func TestElementsFrom_IncrementalTailMatchesFullContent(t *testing.T) {
+	f := New()
+	configID, err := f.AddStreamParams(1, 0, KindVideo, videoParams())
+	if err != nil {
+		t.Fatalf("AddStreamParams: %v", err)
+	}
+
+	tail1, upto1 := f.ElementsFrom(0)
+	if len(tail1) == 0 {
+		t.Fatal("ElementsFrom(0) before any frames should still include the stream-params nodes")
+	}
+
+	err = f.AddFrames(configID, []Frame{{Data: []byte("keyframe"), Time: 100, Kind: mediatree.FrameKindI}})
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	tail2, upto2 := f.ElementsFrom(upto1)
+	if len(tail2) == 0 {
+		t.Fatal("ElementsFrom(upto1) after AddFrames should return the new frame nodes")
+	}
+	if upto2 != f.Len() {
+		t.Fatalf("upto2 = %d, want Len() = %d", upto2, f.Len())
+	}
+
+	err = f.AddFrames(configID, []Frame{{Data: []byte("pframe"), Time: 133, Kind: mediatree.FrameKindP}})
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	tail3, upto3 := f.ElementsFrom(upto2)
+	if upto3 != f.Len() {
+		t.Fatalf("upto3 = %d, want Len() = %d", upto3, f.Len())
+	}
+
+	reassembled := append(append(append([]mediatree.Element{}, tail1...), tail2...), tail3...)
+	want := f.Elements()
+	if len(reassembled) != len(want) {
+		t.Fatalf("reassembled %d elements from tails, want %d (Elements())", len(reassembled), len(want))
+	}
+	for i := range want {
+		if reassembled[i].Type != want[i].Type || reassembled[i].Role != want[i].Role ||
+			reassembled[i].Parent != want[i].Parent || reassembled[i].Sibling != want[i].Sibling ||
+			string(reassembled[i].Value) != string(want[i].Value) {
+			t.Errorf("element %d mismatch: got %+v, want %+v", i, reassembled[i], want[i])
+		}
+	}
+
+	// Content() built from the reassembled tails must match Content()
+	// built from the full tree directly -- what Segment actually feeds
+	// StorageEngine incrementally must equal the whole-tree encoding.
+	if string(mediatree.EncodeContent(reassembled)) != string(f.Content()) {
+		t.Fatal("EncodeContent(reassembled tails) != f.Content()")
+	}
+
+	// Calling ElementsFrom with the current high-water mark returns nothing
+	// new until more nodes are appended.
+	tailEmpty, uptoEmpty := f.ElementsFrom(upto3)
+	if len(tailEmpty) != 0 || uptoEmpty != upto3 {
+		t.Fatalf("ElementsFrom(upto3) with nothing new = (%v, %d), want (empty, %d)", tailEmpty, uptoEmpty, upto3)
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/mediatree"
 )
 
 func TestHandleCandidates(t *testing.T) {

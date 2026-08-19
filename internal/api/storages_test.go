@@ -7,8 +7,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/traycers/farc/internal/ingest"
 )
 
 func postJSON(t *testing.T, srv *httptest.Server, path string, body any) *http.Response {
@@ -226,6 +230,204 @@ func TestHandlePatchStorage_RetentionDays(t *testing.T) {
 	}
 	if got := u.Index().RetentionDays(); got != days {
 		t.Fatalf("RetentionDays = %d, want %d", got, days)
+	}
+}
+
+func TestHandleRemoveStorage_UnregistersAndCloses(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("a", u, "a.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	httpReq, err := http.NewRequest(http.MethodDelete, srv.URL+"/storages/a", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	if _, ok := reg.Get("a"); ok {
+		t.Fatalf("storage still registered after DELETE")
+	}
+}
+
+// TestHandleRemoveStorage_LeavesTheBackingFileOnDisk proves DELETE
+// /storages/{id} is a detach, not a delete: it never touches the
+// underlying image file, only the in-memory registration and the open fd
+// (mirroring how POST /storages never creates more than that file either --
+// see createStorage's own doc comment). No package under internal/storage,
+// internal/storageengine, internal/ioengine, or this one calls
+// os.Remove/unix.Unlink on a storage's backing file anywhere in this path.
+func TestHandleRemoveStorage_LeavesTheBackingFileOnDisk(t *testing.T) {
+	reg := NewStorageRegistry()
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	imgPath := filepath.Join(t.TempDir(), "storage.img")
+	resp := postJSON(t, srv, "/storages", createStorageRequest{
+		ID: "a", Path: imgPath, Geometry: smallGeometry(), Params: smallParams(), Backend: "standard",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	if _, err := os.Stat(imgPath); err != nil {
+		t.Fatalf("backing file missing right after create: %v", err)
+	}
+
+	httpReq, err := http.NewRequest(http.MethodDelete, srv.URL+"/storages/a", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	delResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", delResp.StatusCode)
+	}
+
+	if _, err := os.Stat(imgPath); err != nil {
+		t.Fatalf("backing file %s gone after DELETE /storages/a (want detach, not delete): %v", imgPath, err)
+	}
+}
+
+func TestHandleRemoveStorage_RefusesWhileChannelsStillAttached(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("a", u, "a.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	im := ingest.NewIngestManager()
+	im.Start([]ingest.ChannelConfig{{
+		Channel: 1, RTSPURL: "rtsp://127.0.0.1:1/nonexistent", StorageID: "a", SegmentBackend: fakeSegmentBackend{},
+		QueueDepth: uint64(time.Second), PolicyType: ingest.PolicyContinuous,
+		ReadTimeout: time.Second, WriteTimeout: time.Second,
+	}})
+	t.Cleanup(im.Stop)
+
+	s := NewHttpApiServer(reg, im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	httpReq, err := http.NewRequest(http.MethodDelete, srv.URL+"/storages/a", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (storage still has an attached channel)", resp.StatusCode)
+	}
+	if _, ok := reg.Get("a"); !ok {
+		t.Fatalf("storage should stay registered when removal is refused")
+	}
+}
+
+func TestHandleRemoveStorage_CallsOnStorageRemovedHookBeforeClosing(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("a", u, "a.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+
+	var calledWith string
+	var stillRegisteredWhenHookRan bool
+	s.SetOnStorageRemoved(func(id string) error {
+		calledWith = id
+		_, stillRegisteredWhenHookRan = reg.Get(id)
+		return nil
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	httpReq, err := http.NewRequest(http.MethodDelete, srv.URL+"/storages/a", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if calledWith != "a" {
+		t.Fatalf("onStorageRemoved called with %q, want %q", calledWith, "a")
+	}
+	if !stillRegisteredWhenHookRan {
+		t.Fatalf("onStorageRemoved must run before the storage is unregistered")
+	}
+}
+
+func TestHandleRemoveStorage_OnStorageRemovedErrorKeepsStorageRegistered(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("a", u, "a.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+	s.SetOnStorageRemoved(func(id string) error {
+		return errors.New("persist failed")
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	httpReq, err := http.NewRequest(http.MethodDelete, srv.URL+"/storages/a", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	if _, ok := reg.Get("a"); !ok {
+		t.Fatalf("storage should stay registered when persisting its removal fails")
+	}
+}
+
+func TestHandleRemoveStorage_UnknownID(t *testing.T) {
+	reg := NewStorageRegistry()
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	httpReq, err := http.NewRequest(http.MethodDelete, srv.URL+"/storages/nope", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }
 

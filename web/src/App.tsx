@@ -7,9 +7,9 @@ import ChannelNewPage from './pages/channels/ChannelNewPage'
 import ChannelEditPage from './pages/channels/ChannelEditPage'
 import PlayerPage from './pages/PlayerPage'
 import JournalPage from './pages/JournalPage'
-import FblockLivePage from './pages/FblockLivePage'
-import FblockListPage from './pages/FblockListPage'
-import FblockStatusPage from './pages/FblockStatusPage'
+import FblockTreePage from './pages/FblockTreePage'
+import FblocksGridPage from './pages/FblocksGridPage'
+import FblocksListPage from './pages/FblocksListPage'
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
   return `nav-link${isActive ? ' active' : ''}`
@@ -34,12 +34,6 @@ export default function App() {
             <NavLink to="/journal" className={navLinkClass}>
               Журнал
             </NavLink>
-            <NavLink to="/fblock-live" className={navLinkClass}>
-              Fblock (live)
-            </NavLink>
-            <NavLink to="/fblocks" className={navLinkClass}>
-              Fblocks
-            </NavLink>
           </div>
         </div>
       </nav>
@@ -58,9 +52,9 @@ export default function App() {
           </Route>
           <Route path="/player" element={<PlayerPage />} />
           <Route path="/journal" element={<JournalPage />} />
-          <Route path="/fblock-live" element={<FblockLivePage />} />
-          <Route path="/fblocks" element={<FblockListPage />} />
-          <Route path="/fblock-status" element={<FblockStatusPage />} />
+          <Route path="/storages/:id/fblocks" element={<FblocksGridPage />} />
+          <Route path="/storages/:id/fblocks-list" element={<FblocksListPage />} />
+          <Route path="/storages/:id/fblocks/:index/tree" element={<FblockTreePage />} />
         </Routes>
       </main>
     </>

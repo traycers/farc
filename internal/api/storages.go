@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"time"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storage"
+	"github.com/gorilla/mux"
+
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storage"
 )
 
 // errIDAndPathRequired is handleCreateStorage's 400 response for its two
@@ -37,11 +39,9 @@ type createStorageRequest struct {
 }
 
 // createStorage is handleCreateStorage's HTTP-free core: Init+Open+Register
-// a new Storage and persist it via onStorageCreated. Shared with
-// archives.go's archives_setup, which runs the exact same sequence before
-// going on to add channels/set ttl in the same request. A returned error may
-// be an *apiError requesting a specific status (400/409); callers should
-// render it through writeAPIError with 500 as the default.
+// a new Storage and persist it via onStorageCreated. A returned error may be
+// an *apiError requesting a specific status (400/409); callers should render
+// it through writeAPIError with 500 as the default.
 func (s *HttpApiServer) createStorage(req createStorageRequest) (StorageInfo, error) {
 	if req.ID == "" || req.Path == "" {
 		return StorageInfo{}, apiErr(http.StatusBadRequest, errIDAndPathRequired)
@@ -114,18 +114,64 @@ func (s *HttpApiServer) handleCreateStorage(w http.ResponseWriter, r *http.Reque
 }
 
 // removeStorage tears down an already-registered Storage: unregisters it
-// from reg and closes the underlying Unit. It does not touch any channel or
-// config-file state -- callers (archives.go's archives_detach) are
-// responsible for removing the Storage's channels first and persisting the
-// removal via onStorageRemoved before calling this, mirroring how
-// handleRemoveChannel's caller ordering keeps IngestManager and the config
-// file from ever disagreeing about what exists.
+// from reg and closes the underlying Unit. It does not persist anything
+// itself -- handleRemoveStorage calls onStorageRemoved first and only then
+// this, mirroring how handleRemoveChannel's caller ordering keeps
+// IngestManager and the config file from ever disagreeing about what exists.
 func (s *HttpApiServer) removeStorage(id string) error {
 	unit, ok := s.reg.Unregister(id)
 	if !ok {
 		return apiErr(http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))
 	}
 	return unit.Close()
+}
+
+// handleRemoveStorage is DELETE /storages/{id}: persists the removal via
+// onStorageRemoved first (same ordering removeStorage's own doc comment
+// requires of every caller), then tears the Storage down. A persist
+// failure leaves the Storage fully intact rather than half torn down.
+//
+// Refuses (409) while any channel still targets this storage: storage.Unit.
+// Close's own doc comment requires no WriteFcontainer call be in flight when
+// it's called, and a still-running channel's ChannelIngest goroutine can
+// call it (via Recorder) at any time -- callers must remove every such
+// channel first (DELETE /channels/{id}). archivesapi's own archives_detach
+// translation does exactly that (removing every attached channel, then
+// calling this) rather than relying on the 409 -- this handler's own
+// refusal is the last-resort guard for any other caller, not the intended
+// primary path.
+//
+// This check is a best-effort snapshot, not a lock spanning
+// StorageRegistry and IngestManager: a channel attaching to id concurrently
+// with this call can still race past it. Acceptable for now given the only
+// expected caller (archivesapi) always removes channels first through the
+// same instance of this HttpApiServer; revisit with real cross-manager
+// coordination if concurrent unrelated callers become a real scenario.
+func (s *HttpApiServer) handleRemoveStorage(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if _, ok := s.reg.Get(id); !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))
+		return
+	}
+	if s.ing != nil {
+		for _, c := range s.ing.List() {
+			if c.StorageID == id {
+				writeError(w, http.StatusConflict, fmt.Errorf("api: storage %q still has channel %d attached", id, c.Channel))
+				return
+			}
+		}
+	}
+	err := s.onStorageRemoved(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q removal: %w", id, err))
+		return
+	}
+	err = s.removeStorage(id)
+	if err != nil {
+		writeAPIError(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *HttpApiServer) handleListStorages(w http.ResponseWriter, r *http.Request) {
@@ -143,10 +189,8 @@ type patchStorageRequest struct {
 }
 
 func (s *HttpApiServer) handlePatchStorage(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	unit, ok := s.reg.Get(id)
+	unit, id, ok := s.resolveUnit(w, r)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))
 		return
 	}
 	var req patchStorageRequest

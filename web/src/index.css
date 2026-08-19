@@ -25,38 +25,216 @@ video {
   background: #000;
 }
 
-/* GNU tree-like fblock tree (FblockTree.tsx) */
-.tree {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
-  white-space: pre;
-  overflow-x: auto;
+.fblock-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 14px);
+  gap: 3px;
 }
 
-.tree-row {
+.fblock-square {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: 2px solid transparent;
+  background-color: #6c757d; /* uninitialized */
+  text-decoration: none;
+}
+
+.fblock-square.state-in_progress {
+  background-color: #0d6efd;
+}
+
+.fblock-square.state-ready {
+  background-color: #198754;
+}
+
+.fblock-square.state-bad {
+  background-color: #ffc107;
+}
+
+.fblock-square.protected {
+  border-color: #6f42c1;
+}
+
+/* Pool-status-list (.scratch/fblocks-ui/issues/04-pool-status-list-plan.md):
+   one row per pool slot, above the fblock-grid squares -- a status square
+   (which of Pool's 4 states this slot is in) plus a stacked bar of the 5
+   fblock sections, each sized proportionally to the Storage's FblockSize
+   so unused capacity shows as visible remainder (PoolStatusList.tsx). */
+.pool-status-list {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 1rem;
 }
 
-.tree-row--expandable {
+.pool-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pool-slot-square {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  background-color: #6c757d; /* free */
+}
+
+.pool-slot-square.state-queued {
+  background-color: #ffc107;
+}
+
+.pool-slot-square.state-active {
+  background-color: #0d6efd;
+}
+
+.pool-slot-square.state-closing {
+  background-color: #dc3545;
+}
+
+.pool-section-bar {
+  position: relative;
+  flex: 1 1 auto;
+  height: 14px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+/* Each .pool-section is positioned via absolute left/right (set inline by
+   PoolStatusList.tsx) directly against .pool-section-bar -- prolog/catalog/
+   content anchored via `left` (growing left-to-right from the start),
+   toc/epilog anchored via `right` (growing right-to-left from the end),
+   meeting in a shrinking free-space gap in the middle (mirrors the on-disk
+   layout's prologue/catalog/content/.../toc/epilogue ordering). Deliberately
+   NOT nested in an intermediate flex wrapper per section group: a wrapper
+   with no explicit width has an indeterminate size, against which a
+   percentage-width child resolves to 0 in every browser -- see
+   PoolStatusList.tsx's own comment and .scratch/fblocks-ui/issues/
+   11-pool-bar-nested-percentage-collapses-to-zero.md. */
+.pool-section {
+  position: absolute;
+  top: 0;
+  height: 100%;
+}
+
+.pool-section-prolog {
+  background-color: #6f42c1;
+}
+
+.pool-section-catalog {
+  background-color: #0dcaf0;
+}
+
+.pool-section-content {
+  background-color: #0d6efd;
+}
+
+.pool-section-toc {
+  background-color: #fd7e14;
+}
+
+.pool-section-epilog {
+  background-color: #adb5bd;
+}
+
+/* Player page (.scratch/player-redesign/): a 3x3+ video grid needs more
+   width than main's default 960px cap, so scope the override to this page
+   only rather than widening every page. */
+.player-page {
+  max-width: 1400px;
+}
+
+.player-channel-checklist {
+  margin: 0;
+  padding: 0;
+}
+
+/* One row per channel plus a single shared cursor -- both segments and the
+   cursor are direct position:absolute children of their position:relative
+   parent, no intermediate wrapper, same reasoning as .pool-section-bar
+   above (.scratch/fblocks-ui/issues/
+   11-pool-bar-nested-percentage-collapses-to-zero.md). */
+.player-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   cursor: pointer;
+  padding: 4px 0;
 }
 
-.tree-row--expandable:hover {
-  background: rgba(255, 255, 255, 0.06);
+.player-timeline-row {
+  position: relative;
+  height: 16px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
 }
 
-.tree-guide {
-  color: #888;
-  flex-shrink: 0;
+.player-timeline-segment {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background-color: #0d6efd;
+  border-radius: 2px;
 }
 
-/* transition lives on the persistent base class, not --new itself, so
-   removing --new (the page's own fade-out timer) animates the color back
-   down instead of snapping. */
-.tree-label {
-  transition: color 3s ease-out;
+.player-timeline-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: #dc3545;
+  pointer-events: none;
 }
 
-.tree-node--new .tree-label {
-  color: #3fd15e;
+/* Non-clickable, below .player-timeline -- ticks are direct
+   position:absolute children of this position:relative row, same
+   no-intermediate-wrapper reasoning as above. */
+.player-timeline-axis {
+  position: relative;
+  height: 16px;
+  margin-top: 2px;
+}
+
+.player-timeline-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color, #6c757d);
+}
+
+.player-video-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.player-video-tile {
+  position: relative;
+  background: #000;
+  aspect-ratio: 16 / 9;
+}
+
+.player-video-tile video {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+
+.player-video-tile.player-video-tile-active {
+  outline: 2px solid #0d6efd;
+}
+
+.player-video-tile-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6c757d;
+  font-size: 0.85rem;
 }

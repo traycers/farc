@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storage"
-	"traycers/farc/internal/vaablocks"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/internal/vaablocks"
+	"github.com/traycers/farc/mediatree"
 )
 
 // Recreated from internal/api/testutil_test.go, same as internal/hlsclient's
@@ -95,6 +95,32 @@ func writeChannelVideo(t *testing.T, unit *storage.Unit, channel uint16, times [
 	return uuid
 }
 
+// writeChannelAudio writes one channel's audio frames (only) at the given
+// times into a fresh fcontainer/fblock, returning its UUID.
+func writeChannelAudio(t *testing.T, unit *storage.Unit, channel uint16, times []uint64) [16]byte {
+	t.Helper()
+	f := fcontainer.New()
+	cid, err := f.AddStreamParams(uint32(channel), 0, fcontainer.KindAudio, fcontainer.StreamParams{
+		Time: times[0], CodecAudio: mediatree.CodecG711A, SampleRate: 8000, ChannelCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("AddStreamParams: %v", err)
+	}
+	frames := make([]fcontainer.Frame, len(times))
+	for i, tm := range times {
+		frames[i] = fcontainer.Frame{Data: []byte(fmt.Sprintf("frame-%d-payload", i)), Time: tm}
+	}
+	err = f.AddFrames(cid, frames)
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	uuid, err := unit.WriteFcontainer([]uint16{channel}, times[0], times[len(times)-1], f, 1000)
+	if err != nil {
+		t.Fatalf("WriteFcontainer: %v", err)
+	}
+	return uuid
+}
+
 const second = uint64(1_000_000_000)
 
 func TestCompute_SplitsOnGap(t *testing.T) {
@@ -108,7 +134,7 @@ func TestCompute_SplitsOnGap(t *testing.T) {
 		t.Fatalf("ReadTOC: %v", err)
 	}
 
-	blocks, err := vaablocks.Compute(columns, 1)
+	blocks, err := vaablocks.Compute(columns, 1, vaablocks.KindVideo)
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
@@ -134,6 +160,36 @@ func TestCompute_SplitsOnGap(t *testing.T) {
 	}
 }
 
+// TestCompute_Audio_SplitsOnGap is .scratch/msm-integration/issues/
+// 01-audio-vaa-blocks.md: audio gets its own vaa-blocks, computed
+// independently of video, using the same gap-splitting rule.
+func TestCompute_Audio_SplitsOnGap(t *testing.T) {
+	unit := newTestUnit(t)
+	times := []uint64{0, second, 2 * second, 5 * second, 6 * second}
+	uuid := writeChannelAudio(t, unit, 1, times)
+	columns, err := unit.ReadTOC(uuid)
+	if err != nil {
+		t.Fatalf("ReadTOC: %v", err)
+	}
+
+	blocks, err := vaablocks.Compute(columns, 1, vaablocks.KindAudio)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %+v, want 2", blocks)
+	}
+	if blocks[0].Channel != 1 || blocks[0].Begin != times[0] || blocks[0].End != times[2] || blocks[0].StreamID != 0 {
+		t.Fatalf("blocks[0] = %+v", blocks[0])
+	}
+	if blocks[1].Channel != 1 || blocks[1].Begin != times[3] || blocks[1].End != times[4] || blocks[1].StreamID != 0 {
+		t.Fatalf("blocks[1] = %+v", blocks[1])
+	}
+	if blocks[0].Size == 0 || blocks[1].Size == 0 {
+		t.Fatalf("blocks = %+v, want non-zero sizes", blocks)
+	}
+}
+
 func TestCompute_NoGapIsOneBlock(t *testing.T) {
 	unit := newTestUnit(t)
 	times := []uint64{0, second, 2 * second}
@@ -143,7 +199,7 @@ func TestCompute_NoGapIsOneBlock(t *testing.T) {
 		t.Fatalf("ReadTOC: %v", err)
 	}
 
-	blocks, err := vaablocks.Compute(columns, 1)
+	blocks, err := vaablocks.Compute(columns, 1, vaablocks.KindVideo)
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
@@ -160,7 +216,7 @@ func TestCompute_UnknownChannelReturnsNil(t *testing.T) {
 		t.Fatalf("ReadTOC: %v", err)
 	}
 
-	blocks, err := vaablocks.Compute(columns, 99)
+	blocks, err := vaablocks.Compute(columns, 99, vaablocks.KindVideo)
 	if err != nil || blocks != nil {
 		t.Fatalf("blocks = %+v, err = %v, want nil, nil", blocks, err)
 	}
@@ -198,12 +254,51 @@ func TestStreamConfigs(t *testing.T) {
 		t.Fatalf("HasVPS = true, want false (writeChannelVideo never sets VPS)")
 	}
 
-	blocks, err := vaablocks.Compute(columns, 1)
+	blocks, err := vaablocks.Compute(columns, 1, vaablocks.KindVideo)
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
 	if len(blocks) != 1 || blocks[0].ConfigID != sc.ConfigID {
 		t.Fatalf("blocks = %+v, sc.ConfigID = %d", blocks, sc.ConfigID)
+	}
+}
+
+// TestStreamConfigs_VideoWidthHeight is .scratch/rtsp-reconnect-config-dedup/
+// issues/01-vaablocks-hls-width-height.md: a video config's resolution
+// (fcontainer.StreamParams' Width/Height, RoleWidth/RoleHeight nodes) must
+// come back out through StreamConfigs, not just be write-only.
+func TestStreamConfigs_VideoWidthHeight(t *testing.T) {
+	unit := newTestUnit(t)
+	f := fcontainer.New()
+	cid, err := f.AddStreamParams(1, 0, fcontainer.KindVideo, fcontainer.StreamParams{
+		Time: 0, CodecVideo: mediatree.CodecH264, ParamSPS: []byte{1, 2, 3}, ParamPPS: []byte{4, 5},
+		Width: 1920, Height: 1080,
+	})
+	if err != nil {
+		t.Fatalf("AddStreamParams: %v", err)
+	}
+	err = f.AddFrames(cid, []fcontainer.Frame{{Data: []byte("frame-0-payload"), Time: 0, Kind: mediatree.FrameKindI}})
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	uuid, err := unit.WriteFcontainer([]uint16{1}, 0, 0, f, 1000)
+	if err != nil {
+		t.Fatalf("WriteFcontainer: %v", err)
+	}
+	columns, err := unit.ReadTOC(uuid)
+	if err != nil {
+		t.Fatalf("ReadTOC: %v", err)
+	}
+
+	configs, err := vaablocks.StreamConfigs(columns, 1)
+	if err != nil {
+		t.Fatalf("StreamConfigs: %v", err)
+	}
+	if len(configs) != 1 {
+		t.Fatalf("configs = %+v, want 1", configs)
+	}
+	if configs[0].Width != 1920 || configs[0].Height != 1080 {
+		t.Fatalf("config = %+v, want Width=1920 Height=1080", configs[0])
 	}
 }
 

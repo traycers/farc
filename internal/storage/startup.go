@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/index"
-	"traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/index"
+	"github.com/traycers/farc/internal/ioengine"
 )
 
 // ErrStorageCorrupted means every candidate fblock failed validation —
@@ -78,6 +78,7 @@ type OpenConfig struct {
 	Backend     ioengine.Backend
 	CatalogPath string // optional SSD catalog mirror (ADR-007)
 	Tuning      EngineTuning
+	PoolTuning  PoolTuning
 }
 
 // Open runs Startup end to end: path 1 (SSD catalog) with a fallback to
@@ -122,7 +123,16 @@ func Open(cfg OpenConfig) (*Unit, error) {
 	}
 	params := hCursor.Params
 
-	mgr := index.New(cat, cursor, params.WriteMode, params.Retention.Days)
+	// If the freshest-write_sequence fblock is still Uninitialized in the
+	// catalog, it's fblock 0's bootstrap write (Init never counts it as
+	// real content) — the write cursor must behave as if nothing has been
+	// written yet, so SelectNextIndex's circular walk from cursor+1 starts
+	// at index 0 instead of skipping straight past it.
+	mgrCursor := cursor
+	if cat.State(cursor) == fblock.Uninitialized {
+		mgrCursor = geo.N - 1
+	}
+	mgr := index.New(cat, mgrCursor, params.WriteMode, params.Retention.Days)
 
 	err = ConsistencyCheck(cfg.Backend, geo, mgr)
 	if err != nil {
@@ -136,7 +146,7 @@ func Open(cfg OpenConfig) (*Unit, error) {
 		}
 	}
 
-	return newUnit(cfg.Backend, geo, params, mgr, cfg.CatalogPath, cfg.Tuning, hCursor.Prolog.WriteSequence), nil
+	return newUnit(cfg.Backend, geo, params, mgr, cfg.CatalogPath, cfg.Tuning, cfg.PoolTuning, hCursor.Prolog.WriteSequence), nil
 }
 
 // syncSSDCatalog saves mgr's current snapshot to path, tagged with

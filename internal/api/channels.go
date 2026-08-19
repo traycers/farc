@@ -7,8 +7,10 @@ import (
 	"strconv"
 	"time"
 
-	"traycers/farc/internal/ingest"
-	"traycers/farc/internal/storageengine"
+	"github.com/gorilla/mux"
+
+	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/storage"
 )
 
 // channelTimeout is ChannelIngest's RTSP read/write timeout for a channel
@@ -36,18 +38,17 @@ var errChannelIDReserved = errors.New("api: channel id 0 is reserved (ADR-014), 
 var errRTSPURLRequired = errors.New("api: rtsp_url is required")
 
 func parseChannelID(r *http.Request) (uint16, error) {
-	ch, err := strconv.ParseUint(r.PathValue("id"), 10, 16)
+	ch, err := strconv.ParseUint(mux.Vars(r)["id"], 10, 16)
 	if err != nil {
-		return 0, fmt.Errorf("api: invalid channel id %q: %w", r.PathValue("id"), err)
+		return 0, fmt.Errorf("api: invalid channel id %q: %w", mux.Vars(r)["id"], err)
 	}
 	return uint16(ch), nil
 }
 
 // parsePolicyTypeString is every capture_policy-type-accepting handler's
-// validation core (set-policy, create channel, update channel, and
-// archives.go's channels_add): ok is false for both the "not implemented"
-// and "unknown" cases -- use policyTypeErr(s) to render the right status for
-// whichever it was.
+// validation core (set-policy, create channel, update channel): ok is false
+// for both the "not implemented" and "unknown" cases -- use policyTypeErr(s)
+// to render the right status for whichever it was.
 func parsePolicyTypeString(s string) (ingest.PolicyType, bool) {
 	switch s {
 	case "continuous":
@@ -90,10 +91,6 @@ type setCapturePolicyRequest struct {
 }
 
 func (s *HttpApiServer) handleSetCapturePolicy(w http.ResponseWriter, r *http.Request) {
-	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, errNoIngestManager)
-		return
-	}
 	channel, err := parseChannelID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -127,10 +124,6 @@ type triggerEventRequest struct {
 }
 
 func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Request) {
-	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, errNoIngestManager)
-		return
-	}
 	channel, err := parseChannelID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -151,11 +144,7 @@ func (s *HttpApiServer) handleTriggerEvent(w http.ResponseWriter, r *http.Reques
 	}
 	err = s.ing.TriggerEvent(channel, now, eventTime)
 	if err != nil {
-		status := http.StatusNotFound
-		if errors.Is(err, ingest.ErrWrongPolicyType) {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err)
+		writeCommandError(w, err)
 		return
 	}
 	if s.push != nil {
@@ -169,10 +158,6 @@ type startRecordingRequest struct {
 }
 
 func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Request) {
-	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, errNoIngestManager)
-		return
-	}
 	channel, err := parseChannelID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -189,11 +174,7 @@ func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Requ
 	now := uint64(time.Now().UnixNano())
 	err = s.ing.StartRecording(channel, now, req.FromTimeNS)
 	if err != nil {
-		status := http.StatusNotFound
-		if errors.Is(err, ingest.ErrWrongPolicyType) {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err)
+		writeCommandError(w, err)
 		return
 	}
 	if s.push != nil {
@@ -203,10 +184,6 @@ func (s *HttpApiServer) handleStartRecording(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *HttpApiServer) handleStopRecording(w http.ResponseWriter, r *http.Request) {
-	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, errNoIngestManager)
-		return
-	}
 	channel, err := parseChannelID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -215,30 +192,13 @@ func (s *HttpApiServer) handleStopRecording(w http.ResponseWriter, r *http.Reque
 	now := uint64(time.Now().UnixNano())
 	err = s.ing.StopRecording(channel, now)
 	if err != nil {
-		status := http.StatusNotFound
-		if errors.Is(err, ingest.ErrWrongPolicyType) {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err)
+		writeCommandError(w, err)
 		return
 	}
 	if s.push != nil {
 		s.push.Publish(JournalEvent{Name: EventRecordingCommandStop, Channel: channel})
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// findChannel returns the running ChannelInfo for channel, if any -- used by
-// archives.go's config_update, which (unlike PUT /channels/{id}) only
-// carries pre_record/post_record and needs the channel's current
-// PolicyType to call SetPolicy without disturbing it.
-func (s *HttpApiServer) findChannel(channel uint16) (ingest.ChannelInfo, bool) {
-	for _, c := range s.ing.List() {
-		if c.Channel == channel {
-			return c, true
-		}
-	}
-	return ingest.ChannelInfo{}, false
 }
 
 // channelInfo is GET /channels' listing shape -- a plain projection of
@@ -254,21 +214,39 @@ type channelInfo struct {
 	PrerecordNS  uint64 `json:"prerecord_ns"`
 	PostrecordNS uint64 `json:"postrecord_ns"`
 	Name         string `json:"name,omitempty"`
+	// Connected is whether this channel's RTSP session is currently
+	// established (ingest.ChannelInfo.Connected) -- so a client doesn't
+	// have to have been listening on /events/ws for the relevant
+	// channel.rtsp.connected/disconnected transition to know current
+	// status. Only populated by handleListChannels (a live List() query);
+	// create/update responses below leave it at its zero value (false),
+	// which is simply true right after AddChannel -- the RTSP session
+	// hasn't dialed yet.
+	Connected bool `json:"connected"`
 }
 
+// handleListChannels is GET /channels, optionally filtered to one storage
+// via ?storage= -- used by msm_server's archivesapi to find every channel
+// belonging to one archive/storage without a farcd-side archive concept
+// (mirrors what internal/ingest.IngestManager.List() filtered by StorageID
+// already gives an in-process caller).
 func (s *HttpApiServer) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
 		writeJSON(w, http.StatusOK, []channelInfo{})
 		return
 	}
+	storage := r.URL.Query().Get("storage")
 	list := s.ing.List()
-	out := make([]channelInfo, len(list))
-	for i, c := range list {
-		out[i] = channelInfo{
+	out := make([]channelInfo, 0, len(list))
+	for _, c := range list {
+		if storage != "" && c.StorageID != storage {
+			continue
+		}
+		out = append(out, channelInfo{
 			Channel: c.Channel, RTSPURL: c.RTSPURL, Storage: c.StorageID,
 			PolicyType: c.PolicyType.String(), PrerecordNS: c.PolicyParams.Prerecord, PostrecordNS: c.PolicyParams.Postrecord,
-			Name: c.Name,
-		}
+			Name: c.Name, Connected: c.Connected,
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -292,6 +270,28 @@ func queueDepthFor(policyType ingest.PolicyType, req channelCapturePolicyRequest
 		return req.PrerecordNS
 	}
 	return req.MaxDeferredStartNS
+}
+
+// buildChannelConfig assembles the ingest.ChannelConfig a create or update
+// request wants -- factored out because createChannel and
+// handleUpdateChannel used to each build this struct literal by hand,
+// identically except for how they got their fields.
+func buildChannelConfig(channel uint16, rtspURL, storageID string, unit *storage.Unit, policyType ingest.PolicyType, cp channelCapturePolicyRequest, name string) ingest.ChannelConfig {
+	return ingest.ChannelConfig{
+		Channel:        channel,
+		RTSPURL:        rtspURL,
+		StorageID:      storageID,
+		SegmentBackend: unit,
+		QueueDepth:     queueDepthFor(policyType, cp),
+		PolicyType:     policyType,
+		PolicyParams: ingest.PolicyParams{
+			Prerecord: cp.PrerecordNS, Postrecord: cp.PostrecordNS,
+		},
+		ReadTimeout:        channelTimeout,
+		WriteTimeout:       channelTimeout,
+		BackpressureSignal: func() bool { return unit.PoolStatus() == storage.PoolBackpressure },
+		Name:               name,
+	}
 }
 
 // ChannelSpec is the config-file-relevant subset of a channel's fields,
@@ -327,10 +327,9 @@ type createChannelRequest struct {
 	Name          string                      `json:"name,omitempty"`
 }
 
-// createChannel is handleCreateChannel's HTTP-free core, shared with
-// archives.go's channels_add (which creates several channels per request,
-// each needing the same validation/AddChannel/persist sequence and the same
-// per-item error handling this returns via *apiError).
+// createChannel is handleCreateChannel's HTTP-free core: the same
+// validation/AddChannel/persist sequence and the same per-item error
+// handling this returns via *apiError.
 func (s *HttpApiServer) createChannel(req createChannelRequest) (channelInfo, error) {
 	if req.ID == 0 {
 		return channelInfo{}, apiErr(http.StatusBadRequest, errChannelIDReserved)
@@ -347,21 +346,7 @@ func (s *HttpApiServer) createChannel(req createChannelRequest) (channelInfo, er
 		return channelInfo{}, policyTypeErr(req.CapturePolicy.Type)
 	}
 
-	cfg := ingest.ChannelConfig{
-		Channel:    req.ID,
-		RTSPURL:    req.RTSPURL,
-		StorageID:  req.Storage,
-		Recorder:   unit,
-		QueueDepth: queueDepthFor(policyType, req.CapturePolicy),
-		PolicyType: policyType,
-		PolicyParams: ingest.PolicyParams{
-			Prerecord: req.CapturePolicy.PrerecordNS, Postrecord: req.CapturePolicy.PostrecordNS,
-		},
-		ReadTimeout:        channelTimeout,
-		WriteTimeout:       channelTimeout,
-		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
-		Name:               req.Name,
-	}
+	cfg := buildChannelConfig(req.ID, req.RTSPURL, req.Storage, unit, policyType, req.CapturePolicy, req.Name)
 	err := s.ing.AddChannel(cfg)
 	if err != nil {
 		return channelInfo{}, apiErr(http.StatusConflict, err)
@@ -381,10 +366,6 @@ func (s *HttpApiServer) createChannel(req createChannelRequest) (channelInfo, er
 }
 
 func (s *HttpApiServer) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
-	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, errNoIngestManager)
-		return
-	}
 	var req createChannelRequest
 	err := decodeJSON(r, &req)
 	if err != nil {
@@ -413,11 +394,13 @@ type updateChannelRequest struct {
 // remove-then-add under the hood, with the removed config restored if any
 // later step fails, so a request that ends in an error never leaves the
 // channel stopped.
+//
+// Briefly removes channel from IngestManager's List() while draining its
+// old goroutine, same check-then-act race handleRemoveStorage's own doc
+// comment already accepts: a concurrent DELETE /storages/{req.Storage} can
+// see no attached channel in that window and close the Unit AddChannel is
+// about to hand back out below. Same accepted limitation, not fixed here.
 func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
-	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, errNoIngestManager)
-		return
-	}
 	channel, err := parseChannelID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -442,33 +425,19 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-
-	old, err := s.ing.RemoveChannel(channel)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err)
+	// Existence check before ReplaceChannel, purely for the 404 -- same
+	// check-then-act race this function's own doc comment already accepts
+	// for a concurrent DELETE /storages/{req.Storage}.
+	if _, ok := s.ing.StorageOf(channel); !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("ingest: unknown channel %d", channel))
 		return
 	}
 
-	cfg := ingest.ChannelConfig{
-		Channel:    channel,
-		RTSPURL:    req.RTSPURL,
-		StorageID:  req.Storage,
-		Recorder:   unit,
-		QueueDepth: queueDepthFor(policyType, req.CapturePolicy),
-		PolicyType: policyType,
-		PolicyParams: ingest.PolicyParams{
-			Prerecord: req.CapturePolicy.PrerecordNS, Postrecord: req.CapturePolicy.PostrecordNS,
-		},
-		ReadTimeout:        channelTimeout,
-		WriteTimeout:       channelTimeout,
-		BackpressureSignal: func() bool { return unit.EngineLevel() == storageengine.LevelBackpressure },
-		Name:               req.Name,
-	}
-	err = s.ing.AddChannel(cfg)
+	cfg := buildChannelConfig(channel, req.RTSPURL, req.Storage, unit, policyType, req.CapturePolicy, req.Name)
+	old, err := s.ing.ReplaceChannel(channel, cfg)
 	if err != nil {
-		// Only plausible if another request raced to (re-)create the same
-		// id between our Remove and Add above -- restore what we had.
-		_ = s.ing.AddChannel(old)
+		// ReplaceChannel already restored old internally -- only plausible
+		// if another request raced to (re-)create this id in the gap.
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -476,8 +445,7 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	spec := specFromRequest(channel, req.RTSPURL, req.Storage, req.CapturePolicy, req.Name)
 	err = s.onChannelUpdated(spec)
 	if err != nil {
-		_, _ = s.ing.RemoveChannel(channel)
-		_ = s.ing.AddChannel(old)
+		_, _ = s.ing.ReplaceChannel(channel, old)
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist channel %d: %w", channel, err))
 		return
 	}
@@ -488,8 +456,7 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// removeChannel is handleRemoveChannel's HTTP-free core, shared with
-// archives.go's channels_del (which removes several channels per request).
+// removeChannel is handleRemoveChannel's HTTP-free core.
 func (s *HttpApiServer) removeChannel(channel uint16) error {
 	old, err := s.ing.RemoveChannel(channel)
 	if err != nil {
@@ -504,10 +471,6 @@ func (s *HttpApiServer) removeChannel(channel uint16) error {
 }
 
 func (s *HttpApiServer) handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
-	if s.ing == nil {
-		writeError(w, http.StatusNotImplemented, errNoIngestManager)
-		return
-	}
 	channel, err := parseChannelID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

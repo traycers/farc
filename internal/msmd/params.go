@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/vaablocks"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/vaablocks"
+	"github.com/traycers/farc/mediatree"
 )
 
 // paramsKey identifies one already-reported config version. sc.Time (the ns
@@ -136,6 +136,12 @@ func (rc resolvedConfig) data() map[string]any {
 	}
 	if len(rc.pps) > 0 {
 		v["pps"] = base64.StdEncoding.EncodeToString(rc.pps)
+	}
+	if rc.sc.Width != 0 {
+		v["width"] = rc.sc.Width
+	}
+	if rc.sc.Height != 0 {
+		v["height"] = rc.sc.Height
 	}
 	return v
 }

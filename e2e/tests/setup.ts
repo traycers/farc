@@ -4,6 +4,18 @@
 // two channels are created pointing at mediamtx's two concurrently-running
 // RTSP loops, so they land in the same/overlapping fblock (ADR-014), which
 // is the scenario the fragParsingError bug lives in.
+//
+// Closing model (.scratch/multi-channel-fcontainer/issues/
+// 02-ingest-shared-filler-per-storage.md, settled 2026-08-13): a storage's
+// active fblock is written into by a single SHARED Filler across every
+// channel assigned to it, and that Filler closes (In Progress -> Ready)
+// purely on byte-fullness -- recording/stop only stops one channel from
+// contributing further frames, it does NOT close the shared Filler for the
+// others, and never did after that refactor. An earlier version of this
+// file called recording/stop after a fixed RECORD_WINDOW_MS and waited for
+// confirmed candidates, which is exactly the pre-refactor model and never
+// actually reaches Ready post-refactor -- see continuous-rotation.spec.ts's
+// waitForFblockReady for the only mechanism that does.
 
 const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:18081'
 
@@ -11,22 +23,15 @@ export const STORAGE_ID = 'e2e-storage'
 export const CHANNEL_1 = 1
 export const CHANNEL_2 = 2
 
-// Small, fast-rotating geometry so a fblock actually reaches Ready within
-// this test's patience window. These sizes are a starting point, not a
-// verified-correct value -- the plan flagged fblock-rotation timing as
-// something to tune empirically once this harness is actually run against
-// a real fblock writer; adjust FBLOCK_SIZE/FCHUNK_SIZE and
-// CANDIDATE_POLL_TIMEOUT_MS below if fblocks never reach Ready in time.
+// Small enough that both channels' combined real bitrate (~490 KB/s each,
+// ~980 KB/s together, per the sample video's measured 3.9 Mbps H.264 +
+// 15 kbps AAC track) fills fblock 0 to fullness well within
+// FBLOCK_READY_POLL_TIMEOUT_MS -- matching continuous-rotation.spec.ts's
+// own geometry/reasoning, since fullness is now the only path to Ready.
 const FCHUNK_SIZE = 4 * 1024 * 1024 // 4 MiB -- the documented fchunk floor
-const FBLOCK_SIZE = 32 * 1024 * 1024 // 32 MiB -- 8 fchunks per fblock
-const CANDIDATE_POLL_TIMEOUT_MS = 60_000
-const CANDIDATE_POLL_INTERVAL_MS = 2_000
-// How long to let each channel accumulate real frames in memory before
-// StopRecording flushes them -- comfortably under FBLOCK_SIZE at the
-// sample video's bitrate (~490 KB/s for the 3.9 Mbps H.264 + 15 kbps AAC
-// track ffprobe reported), leaving headroom before the ~65s point where a
-// single fcontainer would exceed FBLOCK_SIZE's 32 MiB.
-const RECORD_WINDOW_MS = 10_000
+const FBLOCK_SIZE = 16 * 1024 * 1024 // 16 MiB -- ~16s combined at ~980 KB/s
+const FBLOCK_READY_POLL_TIMEOUT_MS = 90_000
+const FBLOCK_READY_POLL_INTERVAL_MS = 2_000
 
 async function ok(res: Response): Promise<Response> {
   if (!res.ok) {
@@ -85,57 +90,46 @@ async function startRecording(channel: number): Promise<void> {
   await ok(res)
 }
 
-// CapturePolicy.HandleFrame (internal/ingest/policy.go) only queues frames
-// into an in-memory Filler while recording -- for the 'continuous' policy
-// there is no time/size-based auto-rotation (Tick is a no-op for it), so
-// nothing ever reaches disk until StopRecording explicitly closes the
-// segment and hands it to storage.Unit.WriteFcontainer. One WriteFcontainer
-// call writes exactly one whole fblock (internal/storage/recorder.go), so
-// this must run before RECORD_WINDOW_MS produces more content than
-// FBLOCK_SIZE can hold.
 async function stopRecording(channel: number): Promise<void> {
-  const res = await fetch(`${FARC_URL}/channels/${channel}/recording/stop`, { method: 'POST' })
-  await ok(res)
+  await fetch(`${FARC_URL}/channels/${channel}/recording/stop`, { method: 'POST' }).catch(() => {})
 }
 
-type Candidate = { index: number; uuid: string; begin: number; end: number }
+async function removeChannel(channel: number): Promise<void> {
+  await fetch(`${FARC_URL}/channels/${channel}`, { method: 'DELETE' }).catch(() => {})
+}
 
-async function hasConfirmedCandidate(channel: number): Promise<boolean> {
-  const t1 = 0n
-  // BigInt, not Number: Date.now() * 1e9 ns overflows Number.MAX_SAFE_INTEGER
-  // and would serialize in scientific notation, which farcd's strconv.ParseUint
-  // (internal/api/query.go's parseQueryChannelTimeRange) rejects.
-  const t2 = BigInt(Date.now()) * 1_000_000n
-  const url = `${FARC_URL}/storages/${STORAGE_ID}/candidates?channel=${channel}&t1=${t1}&t2=${t2}&confirm=true`
-  const res = await fetch(url)
-  if (!res.ok) return false
-  const rows = (await res.json()) as Candidate[]
-  return rows.length > 0
+type FblockInfo = { index: number; state: string }
+
+async function fblockState(index: number): Promise<string | null> {
+  const res = await fetch(`${FARC_URL}/storages/${STORAGE_ID}/fblocks/${index}`)
+  if (!res.ok) return null
+  const info = (await res.json()) as FblockInfo
+  return info.state
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-// waitForRecordings polls both channels' confirmed candidates until each has
-// at least one, or throws after CANDIDATE_POLL_TIMEOUT_MS -- proving both
-// channels genuinely recorded real, TOC-confirmed data before the test
-// proceeds to playback (reuses the confirm=true endpoint fixed earlier this
-// session specifically to rule out mask false positives, ADR-014).
-async function waitForRecordings(): Promise<void> {
-  const deadline = Date.now() + CANDIDATE_POLL_TIMEOUT_MS
-  let ch1Ready = false
-  let ch2Ready = false
+// waitForFblockReady polls fblock 0's state until both channels' combined
+// writes have closed it for fullness -- the only path to Ready post the
+// shared-Filler refactor (see this file's header comment). Mirrors
+// continuous-rotation.spec.ts's helper of the same name/shape.
+async function waitForFblockReady(index: number): Promise<void> {
+  const deadline = Date.now() + FBLOCK_READY_POLL_TIMEOUT_MS
+  let lastState: string | null = null
   while (Date.now() < deadline) {
-    ch1Ready ||= await hasConfirmedCandidate(CHANNEL_1)
-    ch2Ready ||= await hasConfirmedCandidate(CHANNEL_2)
-    if (ch1Ready && ch2Ready) return
-    await sleep(CANDIDATE_POLL_INTERVAL_MS)
+    lastState = await fblockState(index)
+    if (lastState === 'ready') return
+    if (lastState === 'bad') {
+      throw new Error(`fblock ${index} state = bad -- should have closed as Ready on fullness, not failed`)
+    }
+    await sleep(FBLOCK_READY_POLL_INTERVAL_MS)
   }
   throw new Error(
-    `timed out waiting for confirmed candidates (channel 1 ready=${ch1Ready}, channel 2 ready=${ch2Ready}) -- ` +
-      'check that ffmpeg-ch1/ffmpeg-ch2 are actually publishing into mediamtx, and that FBLOCK_SIZE/FCHUNK_SIZE ' +
-      'in this file are small enough for a fblock to reach Ready within CANDIDATE_POLL_TIMEOUT_MS',
+    `timed out waiting for fblock ${index} to reach ready on its own (last state=${lastState}) -- ` +
+      'both channels write into one shared Filler (ADR-014) that only closes on fullness; check ' +
+      'FBLOCK_SIZE/FCHUNK_SIZE in this file are small enough relative to ffmpeg-ch1/ffmpeg-ch2/sample.mp4\'s bitrate',
   )
 }
 
@@ -145,8 +139,16 @@ export async function setupStack(): Promise<void> {
   await createChannel(CHANNEL_2, 'ch2')
   await startRecording(CHANNEL_1)
   await startRecording(CHANNEL_2)
-  await sleep(RECORD_WINDOW_MS)
+  await waitForFblockReady(0)
+}
+
+// teardownStack stops and removes both channels -- call from a spec's
+// afterAll so they don't keep consuming mediamtx/CPU resources for the
+// remainder of a suite run (this repo's specs share one real, finite
+// mediamtx/farcd stack -- playwright.config.ts's workers:1).
+export async function teardownStack(): Promise<void> {
   await stopRecording(CHANNEL_1)
   await stopRecording(CHANNEL_2)
-  await waitForRecordings()
+  await removeChannel(CHANNEL_1)
+  await removeChannel(CHANNEL_2)
 }

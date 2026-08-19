@@ -1,18 +1,19 @@
 package tocindex_test
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/api"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/api"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
 )
 
 // Recreated from internal/api/testutil_test.go (an unexported _test.go
@@ -87,6 +88,59 @@ func writeVideoFrame(t *testing.T, unit *storage.Unit, channels []uint16, channe
 		t.Fatalf("AddFrames: %v", err)
 	}
 	uuid, err := unit.WriteFcontainer(channels, begin, end, f, now)
+	if err != nil {
+		t.Fatalf("WriteFcontainer: %v", err)
+	}
+	return uuid
+}
+
+// writeChannelVideo writes one channel's video frames (only) at the given
+// times into a fresh fcontainer/fblock, returning its UUID -- mirrors
+// internal/vaablocks/vaablocks_test.go's helper of the same name/shape.
+func writeChannelVideo(t *testing.T, unit *storage.Unit, channel uint16, times []uint64) [16]byte {
+	t.Helper()
+	f := fcontainer.New()
+	cid, err := f.AddStreamParams(uint32(channel), 0, fcontainer.KindVideo, fcontainer.StreamParams{
+		Time: times[0], CodecVideo: mediatree.CodecH264, ParamSPS: []byte{1, 2, 3}, ParamPPS: []byte{4, 5},
+	})
+	if err != nil {
+		t.Fatalf("AddStreamParams: %v", err)
+	}
+	frames := make([]fcontainer.Frame, len(times))
+	for i, tm := range times {
+		frames[i] = fcontainer.Frame{Data: []byte(fmt.Sprintf("frame-%d-payload", i)), Time: tm, Kind: mediatree.FrameKindI}
+	}
+	err = f.AddFrames(cid, frames)
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	uuid, err := unit.WriteFcontainer([]uint16{channel}, times[0], times[len(times)-1], f, 1000)
+	if err != nil {
+		t.Fatalf("WriteFcontainer: %v", err)
+	}
+	return uuid
+}
+
+// writeChannelAudio writes one channel's audio frames (only) at the given
+// times into a fresh fcontainer/fblock, returning its UUID.
+func writeChannelAudio(t *testing.T, unit *storage.Unit, channel uint16, times []uint64) [16]byte {
+	t.Helper()
+	f := fcontainer.New()
+	cid, err := f.AddStreamParams(uint32(channel), 0, fcontainer.KindAudio, fcontainer.StreamParams{
+		Time: times[0], CodecAudio: mediatree.CodecG711A, SampleRate: 8000, ChannelCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("AddStreamParams: %v", err)
+	}
+	frames := make([]fcontainer.Frame, len(times))
+	for i, tm := range times {
+		frames[i] = fcontainer.Frame{Data: []byte(fmt.Sprintf("frame-%d-payload", i)), Time: tm}
+	}
+	err = f.AddFrames(cid, frames)
+	if err != nil {
+		t.Fatalf("AddFrames: %v", err)
+	}
+	uuid, err := unit.WriteFcontainer([]uint16{channel}, times[0], times[len(times)-1], f, 1000)
 	if err != nil {
 		t.Fatalf("WriteFcontainer: %v", err)
 	}

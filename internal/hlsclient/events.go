@@ -18,10 +18,13 @@ const (
 )
 
 // Event is a decoded WS push frame — a typed mirror of internal/api's
-// pushMessage, with UUID decoded from hex into [16]byte. Channel/Storage
-// are only set for a global subscription's channel-lifecycle events
-// (Name == EventChannelCreated/EventChannelRemoved); Index/UUID/Severity/
-// Reason are only set for a per-storage fblock event.
+// pushMessage/tocPushMessage (both shapes fold into one struct, same as
+// internal/msmclient.Event, since their JSON fields never collide), with
+// UUID decoded from hex into [16]byte. Channel/Storage are only set for a
+// global subscription's channel-lifecycle events (Name ==
+// EventChannelCreated/EventChannelRemoved); Index/UUID/Severity/Reason are
+// only set for a per-storage fblock event; TOC is only set when
+// Type == "toc" (a Subscribe call made with includeTOC=true).
 type Event struct {
 	Type     string
 	Name     string // storage.Event* name, e.g. "fblock.write.completed", or EventChannelCreated/Removed
@@ -32,25 +35,31 @@ type Event struct {
 	Reason   string
 	Channel  uint16
 	Storage  string
+	TOC      []byte
 }
 
 // wireSubscribeMessage mirrors internal/api's subscribeMessage.
 type wireSubscribeMessage struct {
-	Storage  string   `json:"storage"`
-	Want     []string `json:"want"`
-	Channels []uint16 `json:"channels"`
+	Storage    string   `json:"storage"`
+	Want       []string `json:"want"`
+	Channels   []uint16 `json:"channels"`
+	IncludeTOC bool     `json:"include_toc"`
 }
 
-// wirePushMessage mirrors internal/api's pushMessage.
+// wirePushMessage mirrors the union of internal/api's pushMessage and
+// tocPushMessage -- decoding both shapes into one struct is safe since their
+// JSON field sets don't overlap except Type/Storage/Index/UUID, which mean
+// the same thing in both (internal/msmclient's wireMessage does the same).
 type wirePushMessage struct {
 	Type     string `json:"type"`
-	Name     string `json:"name"`
+	Name     string `json:"name,omitempty"`
 	Index    uint32 `json:"index,omitempty"`
 	UUID     string `json:"uuid,omitempty"`
 	Severity string `json:"severity,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 	Channel  uint16 `json:"channel,omitempty"`
 	Storage  string `json:"storage,omitempty"`
+	TOC      []byte `json:"toc,omitempty"`
 }
 
 // Subscribe dials farcd's EventPushServer (GET /events/ws), sends the one
@@ -61,20 +70,27 @@ type wirePushMessage struct {
 // storageID == "" is a "global" subscription (ADR-021): no per-storage
 // fblock filtering, just channel-lifecycle events (EventChannelCreated/
 // EventChannelRemoved) regardless of channels' filtering, which only
-// applies to a per-storage subscription.
+// applies to a per-storage subscription. includeTOC requests a follow-up
+// "toc" frame (decoded into Event.TOC) right after each
+// storage.EventFblockWriteCompleted event -- callers that don't need it
+// (internal/hlsd's global channel-lifecycle subscription) should pass
+// false, since the server only builds that frame when asked (a fblock
+// already recycled past retention by push time yields no "toc" frame at
+// all, not an empty one -- callers must not assume it's always present just
+// because they asked for it).
 //
 // The returned channel closes when the connection ends for any reason
 // (ctx cancellation, server close, network error); this package does not
 // retry or catch up on missed events itself — that is
 // internal/tocindex.EventSubscriber's job (ADR-018: reconnect triggers a
 // bootstrap resolve, not a resend).
-func (c *Client) Subscribe(ctx context.Context, storageID string, want []string, channels []uint16) (<-chan Event, error) {
+func (c *Client) Subscribe(ctx context.Context, storageID string, want []string, channels []uint16, includeTOC bool) (<-chan Event, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.wsBase+"/events/ws", nil) //nolint:bodyclose // gorilla/websocket's own doc comment: the handshake response body needs no closing
 	if err != nil {
 		return nil, fmt.Errorf("hlsclient: subscribe: dial: %w", err)
 	}
 
-	sub := wireSubscribeMessage{Storage: storageID, Want: want, Channels: channels}
+	sub := wireSubscribeMessage{Storage: storageID, Want: want, Channels: channels, IncludeTOC: includeTOC}
 	err = conn.WriteJSON(sub)
 	if err != nil {
 		_ = conn.Close()
@@ -95,7 +111,7 @@ func (c *Client) Subscribe(ctx context.Context, storageID string, want []string,
 			if err != nil {
 				return
 			}
-			ev := Event{Type: msg.Type, Name: msg.Name, Index: msg.Index, Severity: msg.Severity, Reason: msg.Reason, Channel: msg.Channel, Storage: msg.Storage}
+			ev := Event{Type: msg.Type, Name: msg.Name, Index: msg.Index, Severity: msg.Severity, Reason: msg.Reason, Channel: msg.Channel, Storage: msg.Storage, TOC: msg.TOC}
 			if msg.UUID != "" {
 				uuid, err := decodeHexUUID(msg.UUID)
 				if err == nil {

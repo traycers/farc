@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
-	"traycers/farc/internal/segmentcache"
+	"github.com/traycers/farc/internal/segmentcache"
 )
 
 // fakeS3 is a minimal in-memory stand-in for *s3.Client, satisfying

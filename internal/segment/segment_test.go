@@ -6,12 +6,11 @@ import (
 	"testing"
 
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
-	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/segment"
-	"traycers/farc/internal/tocindex"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/segment"
+	"github.com/traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/mediatree"
 )
 
 func setupFixture(t *testing.T) (*hlsclient.Client, tocindex.Record) {
@@ -63,9 +62,9 @@ func TestBuildInit_RoundTrips(t *testing.T) {
 	var audio *fmp4.InitTrack
 	for _, tr := range parsed.Tracks {
 		switch tr.Codec.(type) {
-		case *codecs.H264:
+		case *fmp4.CodecH264:
 			video = tr
-		case *codecs.MPEG4Audio:
+		case *fmp4.CodecMPEG4Audio:
 			audio = tr
 		}
 	}
@@ -76,14 +75,14 @@ func TestBuildInit_RoundTrips(t *testing.T) {
 		t.Fatalf("TimeScale video=%d audio=%d, want 1e9 for both", video.TimeScale, audio.TimeScale)
 	}
 
-	h264Codec := video.Codec.(*codecs.H264)
+	h264Codec := video.Codec.(*fmp4.CodecH264)
 	if !bytes.Equal(h264Codec.SPS, testSPS) || !bytes.Equal(h264Codec.PPS, testPPS) {
 		t.Fatalf("SPS/PPS = %x/%x, want %x/%x", h264Codec.SPS, h264Codec.PPS, testSPS, testPPS)
 	}
 
-	aacCodec := audio.Codec.(*codecs.MPEG4Audio)
-	if aacCodec.Config.SampleRate != 44100 || aacCodec.Config.ChannelConfig != 1 {
-		t.Fatalf("AAC config = %+v, want SampleRate=44100 ChannelConfig=1", aacCodec.Config)
+	aacCodec := audio.Codec.(*fmp4.CodecMPEG4Audio)
+	if aacCodec.SampleRate != 44100 || aacCodec.ChannelCount != 1 {
+		t.Fatalf("AAC config = %+v, want SampleRate=44100 ChannelCount=1", aacCodec.Config)
 	}
 }
 
@@ -91,7 +90,7 @@ func TestBuildMedia_FullWindow_RoundTrips(t *testing.T) {
 	client, rec := setupFixture(t)
 	ctx := context.Background()
 
-	mediaBytes, err := segment.BuildMedia(ctx, client, rec, 1, 0, 2_100_000)
+	mediaBytes, err := segment.BuildMedia(ctx, client, rec, 1, 0, 0, 2_100_000)
 	if err != nil {
 		t.Fatalf("BuildMedia: %v", err)
 	}
@@ -158,7 +157,7 @@ func TestBuildMedia_PartitionsAcrossTwoSegmentsWithNoOverlap(t *testing.T) {
 	client, rec := setupFixture(t)
 	ctx := context.Background()
 
-	firstBytes, err := segment.BuildMedia(ctx, client, rec, 1, 0, 1_000_000)
+	firstBytes, err := segment.BuildMedia(ctx, client, rec, 1, 0, 0, 1_000_000)
 	if err != nil {
 		t.Fatalf("BuildMedia (first): %v", err)
 	}
@@ -174,8 +173,19 @@ func TestBuildMedia_PartitionsAcrossTwoSegmentsWithNoOverlap(t *testing.T) {
 	if firstVideo.Samples[0].Duration != 1_000_000 {
 		t.Fatalf("first segment sample Duration = %d, want 1_000_000", firstVideo.Samples[0].Duration)
 	}
+	// BaseTime must be the segment's own first sample's absolute time (ns),
+	// not 0 -- otherwise every segment's tfdt claims to start the track's
+	// timeline over from zero, which is what was silently producing
+	// mediaError/bufferAppendError in real browsers (.scratch/hls-playback/
+	// issues/01-media-segment-basetime-sequencenumber.md): MSE positions
+	// each fragment's samples using tfdt, so two fragments both claiming
+	// baseMediaDecodeTime=0 overlap entirely on the SourceBuffer timeline.
+	firstAudio := trackByID(t, firstParts[0].Tracks, 2)
+	if firstVideo.BaseTime != 0 || firstAudio.BaseTime != 0 {
+		t.Fatalf("first segment BaseTime video=%d audio=%d, want 0 (first frame of the record)", firstVideo.BaseTime, firstAudio.BaseTime)
+	}
 
-	secondBytes, err := segment.BuildMedia(ctx, client, rec, 1, 1_000_000, 2_100_000)
+	secondBytes, err := segment.BuildMedia(ctx, client, rec, 1, 1, 1_000_000, 2_100_000)
 	if err != nil {
 		t.Fatalf("BuildMedia (second): %v", err)
 	}
@@ -190,6 +200,18 @@ func TestBuildMedia_PartitionsAcrossTwoSegmentsWithNoOverlap(t *testing.T) {
 	}
 	if secondVideo.Samples[0].Duration != 1_000_000 || secondVideo.Samples[1].Duration != 100_000 {
 		t.Fatalf("second segment durations = [%d,%d], want [1000000,100000]", secondVideo.Samples[0].Duration, secondVideo.Samples[1].Duration)
+	}
+	secondAudio := trackByID(t, secondParts[0].Tracks, 2)
+	if secondVideo.BaseTime != 1_000_000 || secondAudio.BaseTime != 1_000_000 {
+		t.Fatalf("second segment BaseTime video=%d audio=%d, want 1000000 (this segment's first frame)", secondVideo.BaseTime, secondAudio.BaseTime)
+	}
+
+	// SequenceNumber must be unique/increasing across a record's fragments
+	// -- browsers' native fMP4 demuxers (the ones actually processing these
+	// bytes, since hls.js passes already-fragmented CMAF through untouched)
+	// reject a repeated mfhd sequence_number.
+	if firstParts[0].SequenceNumber == secondParts[0].SequenceNumber {
+		t.Fatalf("SequenceNumber first=%d second=%d, want different values", firstParts[0].SequenceNumber, secondParts[0].SequenceNumber)
 	}
 }
 

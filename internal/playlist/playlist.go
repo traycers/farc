@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/internal/tocindex"
 )
 
 // segment is one playlist entry: a byte-cacheable, independently fetchable
@@ -56,7 +56,8 @@ func Build(index *tocindex.Index, channel uint16, t1, t2 uint64, targetDur time.
 
 	var segments []segment
 	var prev *tocindex.Record
-	for _, rec := range records {
+	for idx := range records {
+		rec := records[idx]
 		canonical := RecordSegments(rec, channel, targetDur)
 
 		discontinuityPending := prev != nil && configChanged(prev.Columns, rec.Columns, channel)
@@ -76,7 +77,12 @@ func Build(index *tocindex.Index, channel uint16, t1, t2 uint64, targetDur time.
 			})
 			first = false
 		}
-		prev = &rec
+		// &records[idx], not &rec -- rec is the range loop's value copy,
+		// whose address is only guaranteed distinct per iteration since
+		// Go 1.22 (this module targets go1.21.0, see go.mod); indexing the
+		// backing slice directly is correct under either loop-variable
+		// semantics.
+		prev = &records[idx]
 	}
 	if len(segments) == 0 {
 		return "", fmt.Errorf("playlist: no segments produced for channel %d in [%d,%d]", channel, t1, t2)

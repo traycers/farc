@@ -3,8 +3,8 @@ package ingest
 import (
 	"testing"
 
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/mediatree"
 )
 
 func vf(t uint64, kind uint8) fcontainer.Frame {

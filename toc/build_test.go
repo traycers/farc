@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/mediatree"
 )
 
 // sampleTree reproduces the 13-node worked example from

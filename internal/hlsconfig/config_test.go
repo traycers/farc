@@ -14,6 +14,7 @@ import (
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("HLS_SERVER_HTTP_PORT", "8090")
+	t.Setenv("HLS_SERVER_METRICS_PORT", "9091")
 	t.Setenv("HLS_SERVER_FARC_HTTP", "http://10.0.0.1:8080")
 	t.Setenv("HLS_SERVER_FARC_WS", "ws://10.0.0.1:8081")
 	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "6s")
@@ -50,6 +51,9 @@ func TestLoad_DocExample(t *testing.T) {
 	if cfg.HTTP.String() != "0.0.0.0:8090" {
 		t.Fatalf("HTTP = %s", cfg.HTTP)
 	}
+	if cfg.Metrics.String() != "0.0.0.0:9091" {
+		t.Fatalf("Metrics = %s", cfg.Metrics)
+	}
 	if cfg.Farcd.HTTP != "http://10.0.0.1:8080" || cfg.Farcd.WS != "ws://10.0.0.1:8081" {
 		t.Fatalf("Farcd = %+v", cfg.Farcd)
 	}
@@ -70,6 +74,7 @@ func TestLoad_DocExample(t *testing.T) {
 func TestLoad_CustomEnvAddr(t *testing.T) {
 	t.Setenv("HLS_SERVER_HTTP_IP", "127.0.0.1")
 	t.Setenv("HLS_SERVER_HTTP_PORT", "18090")
+	t.Setenv("HLS_SERVER_METRICS_PORT", "19091")
 	t.Setenv("HLS_SERVER_FARC_HTTP", "http://h")
 	t.Setenv("HLS_SERVER_FARC_WS", "ws://h")
 	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "2s")
@@ -94,6 +99,19 @@ func TestLoad_MissingHTTPPortEnvRejected(t *testing.T) {
 	const doc = `{"channels": []}`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
 		t.Fatalf("Load: want error for missing HLS_SERVER_HTTP_PORT, got nil")
+	}
+}
+
+func TestLoad_MissingMetricsPortEnvRejected(t *testing.T) {
+	t.Setenv("HLS_SERVER_HTTP_PORT", "8090")
+	t.Setenv("HLS_SERVER_FARC_HTTP", "http://h")
+	t.Setenv("HLS_SERVER_FARC_WS", "ws://h")
+	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "6s")
+	t.Setenv("HLS_SERVER_CACHE_DIR", "/tmp/cache")
+
+	const doc = `{"channels": []}`
+	if _, err := Load(writeConfig(t, doc)); err == nil {
+		t.Fatalf("Load: want error for missing HLS_SERVER_METRICS_PORT, got nil")
 	}
 }
 
@@ -182,6 +200,28 @@ func TestLoad_MissingCacheDirEnvRejected(t *testing.T) {
 	const doc = `{"channels": [{"id":1,"storage":"disk0"}]}`
 	if _, err := Load(writeConfig(t, doc)); err == nil {
 		t.Fatalf("Load: want error for missing HLS_SERVER_CACHE_DIR, got nil")
+	}
+}
+
+// TestLoad_MissingCacheDirEnvRejected_S3Backend is issue 02's config-side
+// contract (.scratch/hls-toc-bootstrap/issues/02-persistent-toc-cache-and-catalog-diff.md):
+// cache_dir holds hls_server's persistent TOC cache (a dedicated subpath
+// under it, decided 2026-08-13 to avoid a separate config var), which is
+// needed regardless of which backend cfg.CacheBackend selects for the
+// *segment* cache -- s3 exempts a deployment from a local segment cache
+// dir, but never from a local TOC cache dir.
+func TestLoad_MissingCacheDirEnvRejected_S3Backend(t *testing.T) {
+	t.Setenv("HLS_SERVER_HTTP_PORT", "8090")
+	t.Setenv("HLS_SERVER_FARC_HTTP", "http://h")
+	t.Setenv("HLS_SERVER_FARC_WS", "ws://h")
+	t.Setenv("HLS_SERVER_TARGET_SEGMENT_DURATION", "6s")
+	t.Setenv("HLS_SERVER_CACHE_BACKEND", "s3")
+	t.Setenv("HLS_SERVER_S3_ENDPOINT", "http://minio:9000")
+	t.Setenv("HLS_SERVER_S3_BUCKET", "hls")
+
+	const doc = `{"channels": [{"id":1,"storage":"disk0"}]}`
+	if _, err := Load(writeConfig(t, doc)); err == nil {
+		t.Fatalf("Load: want error for missing HLS_SERVER_CACHE_DIR even with cache_backend=s3, got nil")
 	}
 }
 

@@ -3,18 +3,25 @@ package api
 import (
 	"net/http"
 
-	"traycers/farc/internal/ingest"
+	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/traycers/farc/internal/ingest"
 )
 
 // HttpApiServer wires StorageRegistry, an optional IngestManager (channel
 // routes 501 without one — see channels.go), and an optional
 // EventPushServer (WS route only mounted if provided) onto one
-// http.ServeMux.
+// gorilla/mux Router (net/http.ServeMux's own method+{param} patterns need
+// Go 1.22; this module targets go1.21.0 — see go.mod).
 type HttpApiServer struct {
-	reg  *StorageRegistry
-	ing  *ingest.IngestManager
-	push *EventPushServer
-	mux  *http.ServeMux
+	reg        *StorageRegistry
+	ing        *ingest.IngestManager
+	push       *EventPushServer
+	mux        *mux.Router
+	metricsSrv http.Handler
 
 	onStorageCreated func(id, path, catalogPath, name string) error
 	onStorageUpdated func(id, name string) error
@@ -28,8 +35,16 @@ type HttpApiServer struct {
 // a read-only deployment, or tests exercising only the storage routes) —
 // routes that need them report 501 Not Implemented rather than panicking.
 func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *EventPushServer) *HttpApiServer {
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		&storageCollector{reg: reg},
+	)
+
 	s := &HttpApiServer{
-		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
+		reg: reg, ing: ing, push: push, mux: mux.NewRouter(),
+		metricsSrv:       promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
 		onStorageCreated: func(string, string, string, string) error { return nil },
 		onStorageUpdated: func(string, string) error { return nil },
 		onStorageRemoved: func(string) error { return nil },
@@ -70,7 +85,7 @@ func (s *HttpApiServer) SetOnStorageUpdated(fn func(id, name string) error) {
 }
 
 // SetOnStorageRemoved installs a hook run synchronously by
-// archives.go's archives_detach, before the Storage is actually unregistered
+// handleRemoveStorage, before the Storage is actually unregistered
 // and closed -- internal/farcd uses this to stop that Storage's fblock-event
 // bridge goroutine and remove its config-file entry (and those of its
 // channels), so a failure to persist the removal leaves the Storage fully
@@ -125,46 +140,56 @@ func (s *HttpApiServer) Handler() http.Handler { return s.mux }
 // shared mux for everything. /metrics still also being reachable on the
 // main API's own mux (see routes()) is harmless, not a conflict.
 func (s *HttpApiServer) MetricsHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
-	return mux
+	r := mux.NewRouter()
+	r.Handle("/metrics", s.metricsSrv).Methods(http.MethodGet)
+	return r
+}
+
+// requireIngest wraps h so it responds 501 (errNoIngestManager) before ever
+// running if this server was built without an IngestManager (NewHttpApiServer's
+// own doc comment on why that's a valid, supported configuration) -- every
+// ingest-backed route needs this same guard; wrapping it once here, at the
+// routing seam, means a new one can't forget it.
+func (s *HttpApiServer) requireIngest(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.ing == nil {
+			writeError(w, http.StatusNotImplemented, errNoIngestManager)
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *HttpApiServer) routes() {
-	s.mux.HandleFunc("POST /storages", s.handleCreateStorage)
-	s.mux.HandleFunc("GET /storages", s.handleListStorages)
-	s.mux.HandleFunc("PATCH /storages/{id}", s.handlePatchStorage)
+	s.mux.HandleFunc("/storages", s.handleCreateStorage).Methods(http.MethodPost)
+	s.mux.HandleFunc("/storages", s.handleListStorages).Methods(http.MethodGet)
+	s.mux.HandleFunc("/storages/{id}", s.handlePatchStorage).Methods(http.MethodPatch)
+	s.mux.HandleFunc("/storages/{id}", s.handleRemoveStorage).Methods(http.MethodDelete)
 
-	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/toc", s.handleReadTOC)
-	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/tree", s.handleReadTree)
-	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}", s.handleReadContent)
-	s.mux.HandleFunc("POST /storages/{id}/fcontainers/{uuid}/protected", s.handleSetProtected)
+	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}/toc", s.handleReadTOC).Methods(http.MethodGet)
+	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}/tree", s.handleReadFblockTree).Methods(http.MethodGet)
+	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}", s.handleReadContent).Methods(http.MethodGet)
+	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}/protected", s.handleSetProtected).Methods(http.MethodPost)
 
-	s.mux.HandleFunc("GET /storages/{id}/fblocks", s.handleListFblocks)
-	s.mux.HandleFunc("GET /storages/{id}/candidates", s.handleCandidates)
-	s.mux.HandleFunc("GET /storages/{id}/resolve", s.handleResolve)
+	s.mux.HandleFunc("/storages/{id}/fblocks/{index}", s.handleGetFblock).Methods(http.MethodGet)
+	s.mux.HandleFunc("/storages/{id}/fblocks/{index}/tree/ws", s.requireIngest(s.handleFblockLiveTreeWS)).Methods(http.MethodGet)
+	s.mux.HandleFunc("/storages/{id}/catalog", s.handleGetCatalog).Methods(http.MethodGet)
 
-	s.mux.HandleFunc("GET /channels", s.handleListChannels)
-	s.mux.HandleFunc("POST /channels", s.handleCreateChannel)
-	s.mux.HandleFunc("PUT /channels/{id}", s.handleUpdateChannel)
-	s.mux.HandleFunc("DELETE /channels/{id}", s.handleRemoveChannel)
-	s.mux.HandleFunc("POST /channels/{id}/capture-policy", s.handleSetCapturePolicy)
-	s.mux.HandleFunc("POST /channels/{id}/events", s.handleTriggerEvent)
-	s.mux.HandleFunc("POST /channels/{id}/recording/start", s.handleStartRecording)
-	s.mux.HandleFunc("POST /channels/{id}/recording/stop", s.handleStopRecording)
+	s.mux.HandleFunc("/storages/{id}/candidates", s.handleCandidates).Methods(http.MethodGet)
+	s.mux.HandleFunc("/storages/{id}/resolve", s.handleResolve).Methods(http.MethodGet)
 
-	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
+	s.mux.HandleFunc("/channels", s.handleListChannels).Methods(http.MethodGet) // degrades to an empty list, not 501, when s.ing == nil -- not wrapped in requireIngest
+	s.mux.HandleFunc("/channels", s.requireIngest(s.handleCreateChannel)).Methods(http.MethodPost)
+	s.mux.HandleFunc("/channels/{id}", s.requireIngest(s.handleUpdateChannel)).Methods(http.MethodPut)
+	s.mux.HandleFunc("/channels/{id}", s.requireIngest(s.handleRemoveChannel)).Methods(http.MethodDelete)
+	s.mux.HandleFunc("/channels/{id}/capture-policy", s.requireIngest(s.handleSetCapturePolicy)).Methods(http.MethodPost)
+	s.mux.HandleFunc("/channels/{id}/events", s.requireIngest(s.handleTriggerEvent)).Methods(http.MethodPost)
+	s.mux.HandleFunc("/channels/{id}/recording/start", s.requireIngest(s.handleStartRecording)).Methods(http.MethodPost)
+	s.mux.HandleFunc("/channels/{id}/recording/stop", s.requireIngest(s.handleStopRecording)).Methods(http.MethodPost)
 
-	s.mux.HandleFunc("PUT /api/v1/archives/", s.handleArchiveSetup)
-	s.mux.HandleFunc("DELETE /api/v1/archives/", s.handleArchiveDetach)
-	s.mux.HandleFunc("POST /api/v1/archives/{aid}/channels/", s.handleArchiveChannelsAdd)
-	s.mux.HandleFunc("DELETE /api/v1/archives/{aid}/channels/", s.handleArchiveChannelsDel)
-	s.mux.HandleFunc("PATCH /api/v1/archives/{aid}/channels/config/", s.handleArchiveChannelsConfigUpdate)
-	s.mux.HandleFunc("POST /api/v1/archives/{aid}/recording/start", s.handleArchiveRecordingStart)
-	s.mux.HandleFunc("POST /api/v1/archives/{aid}/recording/stop", s.handleArchiveRecordingStop)
-	s.mux.HandleFunc("PUT /api/v1/archives/{aid}/ttl/", s.handleArchiveTTLSet)
+	s.mux.Handle("/metrics", s.metricsSrv).Methods(http.MethodGet)
 
 	if s.push != nil {
-		s.mux.HandleFunc("GET /events/ws", s.push.ServeHTTP)
+		s.mux.HandleFunc("/events/ws", s.push.ServeHTTP).Methods(http.MethodGet)
 	}
 }

@@ -1,6 +1,6 @@
 package fcontainer
 
-import "traycers/farc/mediatree"
+import "github.com/traycers/farc/mediatree"
 
 // StreamKind selects which branch (video/audio) AddStreamParams/AddFrames
 // operate on (docs/docs/archive/07-media-tree.md §2).
@@ -33,6 +33,11 @@ type StreamParams struct {
 	ParamPPS     []byte  // required
 	Framerate    float64 // optional; 0 means absent
 	HasFramerate bool
+	// Width/Height are the stream's resolution, parsed from ParamSPS at
+	// ingest time -- optional (0 means absent/unparseable; unlike Framerate,
+	// 0 is never a valid resolution so no separate Has* flag is needed).
+	Width  uint32
+	Height uint32
 
 	// Audio (Kind == KindAudio).
 	CodecAudio       uint8  // mediatree.CodecPCM/AAC/G711A/G711U, required

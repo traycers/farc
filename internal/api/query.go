@@ -2,15 +2,14 @@ package api
 
 import (
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
 
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 func parseQueryChannelTimeRange(r *http.Request) (channel uint16, t1, t2 uint64, err error) {
@@ -48,9 +47,8 @@ type candidateInfo struct {
 // having this endpoint do that confirmation itself, at the cost of reading
 // and parsing each candidate's TOC before it's returned.
 func (s *HttpApiServer) handleCandidates(w http.ResponseWriter, r *http.Request) {
-	unit, ok := s.reg.Get(r.PathValue("id"))
+	unit, _, ok := s.resolveUnit(w, r)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", r.PathValue("id")))
 		return
 	}
 	channel, t1, t2, err := parseQueryChannelTimeRange(r)
@@ -102,9 +100,8 @@ type resolvedFrame struct {
 // after (re)connecting). No width limit is enforced on [t1,t2] — ADR-016
 // itself leaves that as an open question, not a decided bound.
 func (s *HttpApiServer) handleResolve(w http.ResponseWriter, r *http.Request) {
-	unit, ok := s.reg.Get(r.PathValue("id"))
+	unit, _, ok := s.resolveUnit(w, r)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", r.PathValue("id")))
 		return
 	}
 	channel, t1, t2, err := parseQueryChannelTimeRange(r)
@@ -153,7 +150,7 @@ func resolveChannelFrames(unit *storage.Unit, uuid [16]byte, c *toc.Columns, cha
 			hasKind = true
 		}
 
-		dataID, ok := findChildByRole(c, frameID, dataRole)
+		dataID, ok := toc.ChildByRole(c, frameID, dataRole)
 		if !ok {
 			return nil, fmt.Errorf("api: resolve: frame %d has no data child", frameID)
 		}
@@ -172,7 +169,7 @@ func resolveChannelFrames(unit *storage.Unit, uuid [16]byte, c *toc.Columns, cha
 			Data: base64.StdEncoding.EncodeToString(data),
 		}
 		if hasKind {
-			if kindID, ok := findChildByRole(c, frameID, kindRole); ok {
+			if kindID, ok := toc.ChildByRole(c, frameID, kindRole); ok {
 				if v, ok := toc.InlineValue(c, kindID); ok && len(v) == 1 {
 					frame.Kind = &v[0]
 				}
@@ -188,39 +185,12 @@ func resolveChannelFrames(unit *storage.Unit, uuid [16]byte, c *toc.Columns, cha
 // channel isn't present at all (mask false positive, ADR-014) or has no
 // frames in range.
 func channelFrameTimesInRange(c *toc.Columns, channel uint16, t1, t2 uint64) []uint32 {
-	channelNodeID, ok := findChannelNode(c, channel)
+	start, end, ok := toc.ChannelSubtreeRange(c, channel)
 	if !ok {
 		return nil
 	}
-	start, end := toc.SubtreeRange(c, channelNodeID)
 
 	timeIDs := toc.ScanByRole(c, mediatree.RoleFrameTimeVideo, mediatree.RoleFrameTimeAudio)
 	timeIDs = toc.InRange(timeIDs, start, end)
 	return toc.TimeRange(c, timeIDs, t1, t2)
-}
-
-// findChannelNode finds the RoleChannel node whose inline uint32 value is
-// channel, within c's own row-index space.
-func findChannelNode(c *toc.Columns, channel uint16) (uint32, bool) {
-	for _, id := range toc.ScanByRole(c, mediatree.RoleChannel) {
-		v, ok := toc.InlineValue(c, id)
-		if ok && len(v) == 4 && binary.LittleEndian.Uint32(v) == uint32(channel) {
-			return id, true
-		}
-	}
-	return 0, false
-}
-
-// findChildByRole scans parentID's own subtree range for a direct child
-// (parent == parentID) with the given role — toc.Columns has no ready-made
-// equivalent of mediatree.FindChildByRole (that helper works on []Element,
-// the pre-reorder write-time representation, not post-reorder Columns).
-func findChildByRole(c *toc.Columns, parentID uint32, role mediatree.Role) (uint32, bool) {
-	_, end := toc.SubtreeRange(c, parentID)
-	for i := parentID + 1; i < end; i++ {
-		if c.Parent[i] == parentID && c.Role[i] == role {
-			return i, true
-		}
-	}
-	return 0, false
 }

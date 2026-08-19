@@ -40,9 +40,9 @@ func TestHandleMetrics(t *testing.T) {
 	if !strings.Contains(body, wantTotal) {
 		t.Fatalf("body missing %q; got:\n%s", wantTotal, body)
 	}
-	// fblock 0 (Storage's own bootstrap header) plus the one just written
-	// -- 2 Ready, N-2 uninitialized, 0 bad/in_progress.
-	wantReady := fmt.Sprintf(`farc_fblocks_ready_total{storage="s1"} %d`, 2)
+	// fblock 0's bootstrap write never counts as real content -- it stays
+	// Uninitialized, so only the one fcontainer just written is Ready.
+	wantReady := fmt.Sprintf(`farc_fblocks_ready_total{storage="s1"} %d`, 1)
 	if !strings.Contains(body, wantReady) {
 		t.Fatalf("body missing %q; got:\n%s", wantReady, body)
 	}
@@ -77,7 +77,13 @@ func TestHandleMetrics_NoStorages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	if len(buf) != 0 {
-		t.Fatalf("body = %q, want empty (no registered storages)", buf)
+	body := string(buf)
+	// No registered storages -- no farc_* storage-scoped metric, but the
+	// process/runtime collectors (client_golang) are always present.
+	if strings.Contains(body, "farc_fblocks_total") {
+		t.Fatalf("body contains farc_fblocks_total with no registered storages:\n%s", body)
+	}
+	if !strings.Contains(body, "go_goroutines") {
+		t.Fatalf("body missing go_goroutines (runtime collector):\n%s", body)
 	}
 }

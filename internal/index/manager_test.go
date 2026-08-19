@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"traycers/farc/fblock"
+	"github.com/traycers/farc/fblock"
 )
 
 func newTestCatalog(n uint32) *fblock.Catalog {

@@ -2,9 +2,11 @@ package hlsapi
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 func writeError(w http.ResponseWriter, status int, err error) {
@@ -33,6 +35,29 @@ func parseInt(s string) (int, error) {
 		return 0, fmt.Errorf("hlsapi: invalid value %q: %w", s, err)
 	}
 	return v, nil
+}
+
+// parseChannelList parses a comma-separated query value ("1,2,3") into a
+// channel-number slice, matching handleTimeline's ?channels= convention.
+func parseChannelList(s string) ([]uint16, error) {
+	if s == "" {
+		return nil, nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]uint16, len(parts))
+	for i, p := range parts {
+		ch, err := parseUint16(p)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = ch
+	}
+	return out, nil
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // parseUUID parses a hex-encoded (no dashes) UUIDv4 path value, matching

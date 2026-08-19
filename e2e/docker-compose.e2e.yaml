@@ -80,6 +80,9 @@ services:
       HLS_SERVER_FARC_HTTP: "http://farc:8080"
       HLS_SERVER_FARC_WS: "ws://farc:8081"
       HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
+      # Required regardless of cache_backend (internal/hlsconfig also roots
+      # staging dirs under it) -- s3 mode below doesn't exempt it.
+      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
       # s3 (not the disk default) so this stack actually exercises
       # internal/segmentcache's S3 backend end to end -- the existing
       # two-channel-playback.spec.ts already drives real cache-miss-then-hit

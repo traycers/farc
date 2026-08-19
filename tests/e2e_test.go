@@ -40,12 +40,12 @@ import (
 
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/hlsconfig"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/hlsconfig"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
 )
 
 // Recreated from internal/hlsd/testutil_test.go (an unexported _test.go
@@ -135,6 +135,13 @@ func prepareStorageImage(t *testing.T) (imgPath string, begin, end uint64, video
 	if err != nil {
 		t.Fatalf("CreateSizedFile: %v", err)
 	}
+	// ioengine.OpenStandard (Alignment()==1) rather than the platform-default
+	// direct backend -- these test geometries/params are deliberately tiny
+	// and not O_DIRECT-block-aligned. The farc subprocess is told to open
+	// this same image with the matching "standard" backend too (farcEnv's
+	// FARC_STORAGE_BACKEND), since a fixture written under one Alignment()
+	// and reopened under another corrupts the tail's CRC and leaves fblock 0
+	// permanently Bad.
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("OpenStandard: %v", err)
@@ -219,8 +226,13 @@ func writeFarcConfig(t *testing.T, imgPath string, channelsJSON string) string {
 }
 
 // farcEnv builds the FARC_* environment variables the farc process reads
-// its HTTP/WS/Metrics addresses from (internal/config's loadEnv),
-// appended to os.Environ() so the subprocess still inherits PATH etc.
+// its HTTP/WS/Metrics addresses from (internal/config's loadEnv), appended
+// to os.Environ() so the subprocess still inherits PATH etc.
+// FARC_STORAGE_BACKEND=standard makes farcd open its storages with
+// ioengine.OpenStandard, matching prepareStorageImage's own fixture writer
+// -- the platform-default direct backend's Alignment() would otherwise
+// disagree with a fixture written under OpenStandard's Alignment()==1 and
+// leave fblock 0 permanently Bad on reopen.
 func farcEnv(httpPort, wsPort, metricsPort int) []string {
 	return append(os.Environ(),
 		"FARC_HTTP_IP=127.0.0.1",
@@ -230,6 +242,7 @@ func farcEnv(httpPort, wsPort, metricsPort int) []string {
 		"FARC_WS_MAX_CONNECTIONS=100",
 		"FARC_METRICS_IP=127.0.0.1",
 		fmt.Sprintf("FARC_METRICS_PORT=%d", metricsPort),
+		"FARC_STORAGE_BACKEND=standard",
 	)
 }
 
@@ -252,12 +265,14 @@ func writeHlsConfig(t *testing.T, channelsJSON string) string {
 }
 
 // hlsEnv builds the HLS_SERVER_* environment variables the hls_server
-// process reads its HTTP address, the one farcd it talks to (ADR-020), and
-// segment/cache tuning from (internal/hlsconfig's loadEnv).
-func hlsEnv(httpPort, farcdHTTPPort, farcdWSPort int, cacheDir string) []string {
+// process reads its HTTP/Metrics addresses, the one farcd it talks to
+// (ADR-020), and segment/cache tuning from (internal/hlsconfig's loadEnv).
+func hlsEnv(httpPort, metricsPort, farcdHTTPPort, farcdWSPort int, cacheDir string) []string {
 	return append(os.Environ(),
 		"HLS_SERVER_HTTP_IP=127.0.0.1",
 		fmt.Sprintf("HLS_SERVER_HTTP_PORT=%d", httpPort),
+		"HLS_SERVER_METRICS_IP=127.0.0.1",
+		fmt.Sprintf("HLS_SERVER_METRICS_PORT=%d", metricsPort),
 		fmt.Sprintf("HLS_SERVER_FARC_HTTP=http://127.0.0.1:%d", farcdHTTPPort),
 		fmt.Sprintf("HLS_SERVER_FARC_WS=ws://127.0.0.1:%d", farcdWSPort),
 		"HLS_SERVER_TARGET_SEGMENT_DURATION=2s",
@@ -418,13 +433,14 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	farcConfigPath := writeFarcConfig(t, imgPath, `[{"id":1,"rtsp_url":"rtsp://127.0.0.1:1/none","storage":"disk0","capture_policy":{"type":"continuous"}}]`)
 
 	hlsHTTPPort := freePort(t)
+	hlsMetricsPort := freePort(t)
 	hlsConfigPath := writeHlsConfig(t, `[{"id":1,"storage":"disk0"}]`)
 
 	farcCmd := startProcess(t, "farc", farcBin, farcConfigPath, farcEnv(farcHTTPPort, farcWSPort, farcMetricsPort))
 	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
 	waitForServer(t, farcAddr)
 
-	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, farcHTTPPort, farcWSPort, t.TempDir()))
+	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, hlsMetricsPort, farcHTTPPort, farcWSPort, t.TempDir()))
 	hlsAddr := fmt.Sprintf("127.0.0.1:%d", hlsHTTPPort)
 	waitForServer(t, hlsAddr)
 
@@ -510,13 +526,14 @@ func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *te
 	farcConfigPath := writeFarcConfig(t, imgPath, `[]`) // channel 1 is created live, via POST /channels below
 
 	hlsHTTPPort := freePort(t)
+	hlsMetricsPort := freePort(t)
 	hlsConfigPath := writeHlsConfig(t, `[]`) // no seed -- reconciliation must discover the channel live
 
 	farcCmd := startProcess(t, "farc", farcBin, farcConfigPath, farcEnv(farcHTTPPort, farcWSPort, farcMetricsPort))
 	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
 	waitForServer(t, farcAddr)
 
-	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, farcHTTPPort, farcWSPort, t.TempDir()))
+	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, hlsMetricsPort, farcHTTPPort, farcWSPort, t.TempDir()))
 	hlsAddr := fmt.Sprintf("127.0.0.1:%d", hlsHTTPPort)
 	waitForServer(t, hlsAddr)
 

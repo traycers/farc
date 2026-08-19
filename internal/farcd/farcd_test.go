@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -17,16 +15,12 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/config"
-	"traycers/farc/internal/ingest"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storage"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/config"
+	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storage"
 )
-
-// unknownUUIDHex is a UUID guaranteed not to resolve (see internal/api's
-// identically-named test constant for why not all-zero).
-const unknownUUIDHex = "ffffffffffffffffffffffffffffffff"
 
 func smallGeometry() storage.Geometry {
 	return storage.Geometry{FblockSize: 8192, N: 4, MaxChannels: 8}
@@ -617,134 +611,6 @@ func TestRun_CreateChannelOverHTTP_PersistsToConfigFile(t *testing.T) {
 	}
 }
 
-// TestFarcd_LiveProgress_TracksStorageLifecycle exercises
-// tickLiveProgress's storage-scoped polling directly (white-box, no HTTP/WS
-// needed) -- the actual tree data these feed into fblock-live's WS push is
-// unit-tested at the ingest/api layers (IngestManager.
-// LiveElementsSinceStorage, EventPushServer.PublishLiveProgress); this test
-// only checks farcd's own wiring between them doesn't panic and reflects
-// the shared segment's state at the right times.
-func TestFarcd_LiveProgress_TracksStorageLifecycle(t *testing.T) {
-	cfg, path := testConfig(t, []config.Channel{
-		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
-	})
-	f, err := New(cfg, path)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer f.closeUnits()
-
-	f.ing.Start(f.channels)
-	defer f.ing.Stop()
-
-	if _, _, _, ok := f.ing.LiveElementsSinceStorage("disk0", 0); ok {
-		t.Fatal("LiveElementsSinceStorage before recording starts: want ok=false")
-	}
-
-	err = f.ing.StartRecording(7, 1000, nil)
-	if err != nil {
-		t.Fatalf("StartRecording: %v", err)
-	}
-	if _, _, _, ok := f.ing.LiveElementsSinceStorage("disk0", 0); !ok {
-		t.Fatal("LiveElementsSinceStorage right after recording starts: want ok=true")
-	}
-
-	// An empty segment (no frames yet) must tick without panicking and
-	// without publishing anything (tickLiveProgress skips zero-length
-	// deltas) -- there's no subscriber here, so a wrongly-attempted publish
-	// would just be silently dropped rather than failing this test, but a
-	// panic (e.g. a nil map deref) would not be.
-	f.tickLiveProgress()
-
-	err = f.ing.StopRecording(7, 2000)
-	if err != nil {
-		t.Fatalf("StopRecording: %v", err)
-	}
-	if _, _, _, ok := f.ing.LiveElementsSinceStorage("disk0", 0); ok {
-		t.Fatal("LiveElementsSinceStorage after recording stops (last channel detached): want ok=false")
-	}
-}
-
-// TestRun_ServesFblockTreeAndLiveProgress is an end-to-end smoke test
-// against a fully running Farcd (real net/http + gorilla/websocket servers,
-// not internal/api's httptest-only coverage): GET .../tree reaches the
-// actual HTTP route registered in server.go, and a WS client subscribed to
-// a recording channel's storage via LiveStorages stays connected across a
-// live-progress tick without the ticker goroutine panicking. It doesn't
-// write a real
-// fblock through farcd's own (O_DIRECT) storage backend -- that write path
-// requires block-device-grade alignment this package's other tests never
-// exercise either, since they only ever read/administer "disk0" -- decoding
-// a finalized tree's actual content is already covered at the internal/api
-// layer (TestHandleReadTree_WalksVideoFrame) against a Storage opened via
-// the alignment-free "standard" backend.
-func TestRun_ServesFblockTreeAndLiveProgress(t *testing.T) {
-	cfg, path := testConfig(t, []config.Channel{
-		{ID: 7, RTSPURL: "rtsp://127.0.0.1:1/cam", Storage: "disk0", CapturePolicy: config.CapturePolicy{Type: config.CapturePolicyContinuous}},
-	})
-	f, err := New(cfg, path)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runErr := make(chan error, 1)
-	go func() { runErr <- f.Run(ctx) }()
-	waitForServer(t, cfg.HTTP.String())
-	waitForServer(t, cfg.WS.String())
-
-	resp, err := http.Get(fmt.Sprintf("http://%s/storages/disk0/fcontainers/%s/tree", cfg.HTTP.String(), unknownUUIDHex))
-	if err != nil {
-		t.Fatalf("GET .../tree: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 for a uuid that was never written", resp.StatusCode)
-	}
-
-	wsURL := "ws://" + cfg.WS.String() + "/events/ws"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil) //nolint:bodyclose // gorilla/websocket's own doc comment: the handshake response body needs no closing
-	if err != nil {
-		t.Fatalf("dial %s: %v", wsURL, err)
-	}
-	defer conn.Close()
-	err = conn.WriteJSON(map[string]any{"storage": "", "want": []string{}, "channels": []int{}, "live_storages": []string{"disk0"}})
-	if err != nil {
-		t.Fatalf("write subscribe: %v", err)
-	}
-
-	startResp, err := http.Post(fmt.Sprintf("http://%s/channels/7/recording/start", cfg.HTTP.String()), "application/json", nil)
-	if err != nil {
-		t.Fatalf("POST recording/start: %v", err)
-	}
-	startResp.Body.Close()
-
-	// Outlive at least one liveProgressInterval tick with the WS connection
-	// held open, then confirm it's still alive -- a panic in
-	// runLiveProgressTicker or PublishLiveProgress would have taken the
-	// whole process down well before this point. The server never sends a
-	// second message on a channel with no real frames (nothing to report),
-	// so a read here is expected to time out, not to return data or a
-	// close; anything else means the tick broke the connection.
-	time.Sleep(liveProgressInterval + 200*time.Millisecond)
-	err = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	if err != nil {
-		t.Fatalf("SetReadDeadline: %v", err)
-	}
-	_, _, err = conn.ReadMessage()
-	var netErr net.Error
-	if err != nil && (!errors.As(err, &netErr) || !netErr.Timeout()) {
-		t.Fatalf("WS connection unexpectedly closed after a live-progress tick: %v", err)
-	}
-
-	select {
-	case err := <-runErr:
-		t.Fatalf("Run returned early: %v", err)
-	default:
-	}
-}
-
 func waitForServer(t *testing.T, addr string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -757,4 +623,46 @@ func waitForServer(t *testing.T, addr string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("server at %s never came up", addr)
+}
+
+// TestFarcd_PersistNewStorage_AlreadyPresentSkipsSave guards
+// withConfigMutation's idempotent no-op path: if the mutate closure reports
+// nothing to do, config.Save must never be attempted at all -- proven here
+// deterministically by pointing configPath at a directory that doesn't
+// exist (Save would fail if it were ever called).
+func TestFarcd_PersistNewStorage_AlreadyPresentSkipsSave(t *testing.T) {
+	cfg, path := testConfig(t, nil)
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer f.closeUnits()
+
+	f.configPath = filepath.Join(t.TempDir(), "does-not-exist", "farc.config.json")
+	err = f.persistNewStorage("disk0", "irrelevant", "", "irrelevant") // disk0 is already in cfg.Storages
+	if err != nil {
+		t.Fatalf("persistNewStorage (already present) = %v, want nil (idempotent, Save never attempted)", err)
+	}
+}
+
+// TestFarcd_PersistNewStorage_RollsBackOnSaveFailure guards
+// withConfigMutation's rollback path: a real mutation whose Save fails must
+// leave f.cfg exactly as it was before the call.
+func TestFarcd_PersistNewStorage_RollsBackOnSaveFailure(t *testing.T) {
+	cfg, path := testConfig(t, nil)
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer f.closeUnits()
+
+	before := len(f.cfg.Storages)
+	f.configPath = filepath.Join(t.TempDir(), "does-not-exist", "farc.config.json")
+	err = f.persistNewStorage("disk1", "/tmp/disk1.img", "", "Disk 1")
+	if err == nil {
+		t.Fatal("persistNewStorage = nil error, want the Save failure to surface")
+	}
+	if len(f.cfg.Storages) != before {
+		t.Fatalf("f.cfg.Storages after failed persist = %+v, want rolled back to the original %d entries", f.cfg.Storages, before)
+	}
 }

@@ -3,8 +3,8 @@ package storage
 import (
 	"sync/atomic"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/index"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/index"
 )
 
 // HealthMonitor holds simple operation counters and a threshold-based

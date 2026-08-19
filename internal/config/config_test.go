@@ -112,6 +112,37 @@ func TestLoad_CustomEnvAddr(t *testing.T) {
 	}
 }
 
+func TestLoad_StoragePoolEnv(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("FARC_STORAGE_POOL_SIZE", "8")
+	t.Setenv("FARC_STORAGE_POOL_WARNING_AT", "4")
+	t.Setenv("FARC_STORAGE_POOL_BACKPRESSURE_AT", "8")
+
+	const doc = `{"storages": [{"id":"disk0","path":"/dev/sdb1"}], "channels": []}`
+	cfg, err := Load(writeConfig(t, doc))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.StoragePoolSize != 8 || cfg.StoragePoolWarningAt != 4 || cfg.StoragePoolBackpressureAt != 8 {
+		t.Fatalf("StoragePool* = %d/%d/%d, want 8/4/8", cfg.StoragePoolSize, cfg.StoragePoolWarningAt, cfg.StoragePoolBackpressureAt)
+	}
+}
+
+func TestLoad_StoragePoolEnvUnsetDefaultsToZero(t *testing.T) {
+	setRequiredEnv(t)
+	const doc = `{"storages": [{"id":"disk0","path":"/dev/sdb1"}], "channels": []}`
+	cfg, err := Load(writeConfig(t, doc))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Zero here means "use storage.DefaultPoolTuning()" (PoolTuning.
+	// withDefaults' job, one layer up in internal/farcd, not loadEnv's) --
+	// unset must not be rejected.
+	if cfg.StoragePoolSize != 0 || cfg.StoragePoolWarningAt != 0 || cfg.StoragePoolBackpressureAt != 0 {
+		t.Fatalf("StoragePool* = %d/%d/%d, want 0/0/0 when unset", cfg.StoragePoolSize, cfg.StoragePoolWarningAt, cfg.StoragePoolBackpressureAt)
+	}
+}
+
 func TestLoad_MissingPortEnvRejected(t *testing.T) {
 	const doc = `{"storages": [{"id":"disk0","path":"/dev/sdb1"}], "channels": []}`
 	// No env vars set at all -- every *_PORT defaults to 0.

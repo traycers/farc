@@ -11,7 +11,7 @@ package index
 import (
 	"sync"
 
-	"traycers/farc/fblock"
+	"github.com/traycers/farc/fblock"
 )
 
 const nsPerDay = int64(24 * 60 * 60 * 1_000_000_000)
@@ -221,6 +221,29 @@ func (m *Manager) RetentionDays() int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.retentionDays
+}
+
+// LatestReadyForChannel returns the physical index of channel's most
+// recently completed (Ready, largest End) fblock -- the fblock-live WS
+// handler's (internal/api) "previous fblock" link. ok is false if channel
+// has never been registered or has no Ready fblock yet.
+func (m *Manager) LatestReadyForChannel(channel uint16) (idx uint32, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	pos, exists := m.channelToPos[channel]
+	if !exists {
+		return 0, false
+	}
+	var bestEnd uint64
+	for i := uint32(0); i < m.catalog.N; i++ {
+		if m.catalog.State(i) != fblock.Ready || !m.catalog.ChannelBit(i, pos) {
+			continue
+		}
+		if !ok || m.catalog.End[i] > bestEnd {
+			bestEnd, idx, ok = m.catalog.End[i], i, true
+		}
+	}
+	return idx, ok
 }
 
 // ChannelPos resolves a registered channel number to its compact registry

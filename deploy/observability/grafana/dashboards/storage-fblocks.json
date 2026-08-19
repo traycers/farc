@@ -1,0 +1,75 @@
+{
+  "title": "Storage & Fblocks",
+  "uid": "farc-storage-fblocks",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "tags": ["farc"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Fblock states by storage",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "farc_fblocks_uninitialized_total", "legendFormat": "uninitialized {{storage}}", "refId": "A" },
+        { "expr": "farc_fblocks_ready_total", "legendFormat": "ready {{storage}}", "refId": "B" },
+        { "expr": "farc_fblocks_writable_total", "legendFormat": "writable {{storage}}", "refId": "C" },
+        { "expr": "farc_fblocks_retained_total", "legendFormat": "retained {{storage}}", "refId": "D" },
+        { "expr": "farc_fblocks_protected_total", "legendFormat": "protected {{storage}}", "refId": "E" },
+        { "expr": "farc_fblocks_bad_total", "legendFormat": "bad {{storage}}", "refId": "F" },
+        { "expr": "farc_fblocks_in_progress_total", "legendFormat": "in_progress {{storage}}", "refId": "G" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Write queue depth",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "farc_write_queue_depth", "legendFormat": "{{storage}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Write queue status (0=normal, 1=warning, 2=backpressure)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 2 }, "overrides": [] },
+      "targets": [
+        { "expr": "farc_write_queue_status", "legendFormat": "{{storage}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Write-verify failures / sec",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "rate(farc_write_verify_failures_total[5m])", "legendFormat": "{{storage}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Channel registry usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "farc_channel_registry_used", "legendFormat": "used {{storage}}", "refId": "A" },
+        { "expr": "farc_channel_registry_capacity", "legendFormat": "capacity {{storage}}", "refId": "B" }
+      ]
+    }
+  ]
+}

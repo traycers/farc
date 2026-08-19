@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/playlist"
-	"traycers/farc/internal/tocindex"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/playlist"
+	"github.com/traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 type frameSpec struct {
@@ -210,6 +210,29 @@ func TestBuild_SegmentBoundsAreQueryIndependent(t *testing.T) {
 	segs := playlist.RecordSegments(rec, 1, 2500*time.Millisecond)
 	if len(segs) != 4 || segs[2].Start != 6*second || segs[2].End != 8*second {
 		t.Fatalf("RecordSegments = %+v, want canonical segment 2 = [6s,8s)", segs)
+	}
+}
+
+// TestRecordSegments_FirstBoundarySnapsToNearestKeyframe is the companion
+// fix for .scratch/capture-keyframe-start/issues/
+// 01-first-frame-not-guaranteed-keyframe.md: a record whose first frame(s)
+// aren't keyframes (e.g. pre-fix data, or any other edge case) must still
+// produce a first segment starting on a real keyframe, the same way every
+// later boundary already does -- not on rec.Begin verbatim.
+func TestRecordSegments_FirstBoundarySnapsToNearestKeyframe(t *testing.T) {
+	const second = uint64(1e9)
+	frames := []frameSpec{
+		{Time: 0, Kind: mediatree.FrameKindP, Data: "frame"},
+		{Time: 1 * second, Kind: mediatree.FrameKindP, Data: "frame"},
+		{Time: 2 * second, Kind: mediatree.FrameKindI, Data: "frame"},
+		{Time: 3 * second, Kind: mediatree.FrameKindP, Data: "frame"},
+	}
+	columns := buildColumns(t, 1, []byte{1, 2, 3}, []byte{4, 5}, frames)
+	rec := tocindex.Record{UUID: [16]byte{1}, StorageID: "s1", Begin: 0, End: 4 * second, Columns: columns}
+
+	segs := playlist.RecordSegments(rec, 1, 10*time.Second)
+	if len(segs) != 1 || segs[0].Start != 2*second || segs[0].End != 4*second {
+		t.Fatalf("RecordSegments = %+v, want a single segment [2s,4s) snapped to the first real keyframe", segs)
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/ioengine"
 )
 
 func testParams() fblock.Params {
@@ -67,8 +67,8 @@ func TestInit_WritesReadableFblock0(t *testing.T) {
 	if h.Prolog.WriteSequence != 1 {
 		t.Fatalf("write_sequence = %d, want 1", h.Prolog.WriteSequence)
 	}
-	if h.Catalog.State(0) != fblock.InProgress {
-		t.Fatalf("embedded self-state = %v, want InProgress (own-snapshot convention)", h.Catalog.State(0))
+	if h.Catalog.State(0) != fblock.Uninitialized {
+		t.Fatalf("embedded self-state = %v, want Uninitialized (bootstrap write never counts as real content)", h.Catalog.State(0))
 	}
 	for i := uint32(1); i < geo.N; i++ {
 		if h.Catalog.State(i) != fblock.Uninitialized {
@@ -85,7 +85,8 @@ func TestInit_WritesReadableFblock0(t *testing.T) {
 		t.Fatalf("epilog.TOCSize = %d, want 0", epilog.TOCSize)
 	}
 
-	// SSD catalog mirror: index 0 recorded as Ready immediately (no lag).
+	// SSD catalog mirror must match the main disk: fblock 0 stays
+	// Uninitialized (the bootstrap write never counts as real content).
 	ssdCat, meta, err := LoadSSDCatalog(filepath.Join(dir, "storage.catalog"), geo.MaxChannels, geo.N)
 	if err != nil {
 		t.Fatalf("LoadSSDCatalog: %v", err)
@@ -96,8 +97,8 @@ func TestInit_WritesReadableFblock0(t *testing.T) {
 	if meta.Cursor != 0 {
 		t.Fatalf("SSD catalog cursor = %d, want 0", meta.Cursor)
 	}
-	if ssdCat.State(0) != fblock.Ready {
-		t.Fatalf("SSD catalog fblock 0 state = %v, want Ready", ssdCat.State(0))
+	if ssdCat.State(0) != fblock.Uninitialized {
+		t.Fatalf("SSD catalog fblock 0 state = %v, want Uninitialized", ssdCat.State(0))
 	}
 }
 

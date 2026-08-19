@@ -16,6 +16,10 @@ const (
 // guaranteed to fcontainer capacity (ADR-013).
 const DefaultMinContainerShare = 0.7
 
+// DefaultFlushTimeoutNS is ADR-017's periodic-flush timeout T, applied by
+// DecodeParams when flush_timeout_ns is absent/zero — 5s.
+const DefaultFlushTimeoutNS = int64(5_000_000_000)
+
 // Retention holds the retention.days nested JSON param.
 type Retention struct {
 	Days int64 `json:"days"`
@@ -28,6 +32,7 @@ type Retention struct {
 type Params struct {
 	FchunkSize        int64     `json:"fchunk_size"`
 	ReadChunkSize     int64     `json:"read_chunk_size,omitempty"`
+	FlushTimeoutNS    int64     `json:"flush_timeout_ns,omitempty"` // ADR-017's T; DecodeParams defaults absent/zero to DefaultFlushTimeoutNS -- a raw literal (e.g. in tests) left at 0 disables the timeout trigger (fchunk_size-only pacing)
 	WriteMode         string    `json:"write_mode"`
 	Retention         Retention `json:"retention"`
 	MinContainerShare float64   `json:"min_container_share"`
@@ -59,6 +64,9 @@ func DecodeParams(buf []byte) (Params, error) {
 	}
 	if p.ReadChunkSize == 0 {
 		p.ReadChunkSize = p.FchunkSize // default per §5.2 table
+	}
+	if p.FlushTimeoutNS == 0 {
+		p.FlushTimeoutNS = DefaultFlushTimeoutNS
 	}
 	if p.MinContainerShare == 0 {
 		p.MinContainerShare = DefaultMinContainerShare

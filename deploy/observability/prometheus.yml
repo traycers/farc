@@ -1,0 +1,19 @@
+# Scrape config for the farc/hls_server/msm_server /metrics endpoints
+# (.scratch/observability/spec.md). msm_server is only scraped if the
+# `msm` compose profile is active -- if it isn't, this target just shows
+# as down, which is expected, not an error.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: farc
+    static_configs:
+      - targets: ["farc:9090"]
+
+  - job_name: hls_server
+    static_configs:
+      - targets: ["hls_server:9091"]
+
+  - job_name: msm_server
+    static_configs:
+      - targets: ["msm_server:9092"]

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"traycers/farc/fblock"
+	"github.com/traycers/farc/fblock"
 )
 
 // SSD catalog envelope (ADR-007). 03-storage-format.md never actually pins

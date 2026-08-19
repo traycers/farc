@@ -8,10 +8,10 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4/seekablebuffer"
 
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/tocindex"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 // frameMeta is one frame's timing and location, resolved from the TOC
@@ -46,7 +46,7 @@ func gatherFrames(c *toc.Columns, start, stop uint32, timeRole, dataRole, kindRo
 		}
 
 		frameID := c.Parent[timeID]
-		dataID, ok := findChildByRole(c, frameID, dataRole)
+		dataID, ok := toc.ChildByRole(c, frameID, dataRole)
 		if !ok {
 			continue
 		}
@@ -57,7 +57,7 @@ func gatherFrames(c *toc.Columns, start, stop uint32, timeRole, dataRole, kindRo
 
 		sync := kindRole == 0
 		if !sync {
-			if kindID, ok := findChildByRole(c, frameID, kindRole); ok {
+			if kindID, ok := toc.ChildByRole(c, frameID, kindRole); ok {
 				if v, ok := toc.InlineValue(c, kindID); ok && len(v) == 1 {
 					sync = v[0] == mediatree.FrameKindI
 				}
@@ -91,8 +91,10 @@ func sampleDuration(frames []frameMeta, i int, windowEnd uint64) uint32 {
 // rec.End, regardless of which playback query originally asked for this
 // segment (that query-independence is what lets internal/hlsapi's segment
 // route recompute segStart/segEnd for a given segIndex from rec alone).
-func BuildMedia(ctx context.Context, client *hlsclient.Client, rec tocindex.Record, channel uint16, segStart, segEnd uint64) ([]byte, error) {
-	start, stop, ok := channelSubtree(rec.Columns, channel)
+// segIndex is only used for the fragment's mfhd sequence_number (.scratch/
+// hls-playback/issues/01-media-segment-basetime-sequencenumber.md).
+func BuildMedia(ctx context.Context, client hlsclient.API, rec tocindex.Record, channel uint16, segIndex int, segStart, segEnd uint64) ([]byte, error) {
+	start, stop, ok := toc.ChannelSubtreeRange(rec.Columns, channel)
 	if !ok {
 		return nil, fmt.Errorf("segment: channel %d not present in fcontainer %x", channel, rec.UUID)
 	}
@@ -119,14 +121,14 @@ func BuildMedia(ctx context.Context, client *hlsclient.Client, rec tocindex.Reco
 	var tracks []*fmp4.PartTrack
 	pos := 0
 	if len(videoFrames) > 0 {
-		samples := make([]*fmp4.Sample, len(videoFrames))
+		samples := make([]*fmp4.PartSample, len(videoFrames))
 		for i, f := range videoFrames {
 			var au h264.AnnexB
 			err = au.Unmarshal(bufs[pos])
 			if err != nil {
 				return nil, fmt.Errorf("segment: parse Annex-B video frame at t=%d: %w", f.Time, err)
 			}
-			sample := &fmp4.Sample{}
+			sample := &fmp4.PartSample{}
 			err = sample.FillH264(0, au)
 			if err != nil {
 				return nil, fmt.Errorf("segment: encode AVCC video frame at t=%d: %w", f.Time, err)
@@ -135,18 +137,23 @@ func BuildMedia(ctx context.Context, client *hlsclient.Client, rec tocindex.Reco
 			samples[i] = sample
 			pos++
 		}
-		tracks = append(tracks, &fmp4.PartTrack{ID: videoTrackID, Samples: samples})
+		tracks = append(tracks, &fmp4.PartTrack{ID: videoTrackID, BaseTime: videoFrames[0].Time, Samples: samples})
 	}
 	if len(audioFrames) > 0 {
-		samples := make([]*fmp4.Sample, len(audioFrames))
+		samples := make([]*fmp4.PartSample, len(audioFrames))
 		for i := range audioFrames {
-			samples[i] = &fmp4.Sample{Payload: bufs[pos], Duration: sampleDuration(audioFrames, i, segEnd)}
+			samples[i] = &fmp4.PartSample{Payload: bufs[pos], Duration: sampleDuration(audioFrames, i, segEnd)}
 			pos++
 		}
-		tracks = append(tracks, &fmp4.PartTrack{ID: audioTrackID, Samples: samples})
+		tracks = append(tracks, &fmp4.PartTrack{ID: audioTrackID, BaseTime: audioFrames[0].Time, Samples: samples})
 	}
 
-	part := fmp4.Part{SequenceNumber: 1, Tracks: tracks}
+	// SequenceNumber must be unique and increasing across a record's
+	// fragments -- browsers' native fMP4 demuxers (hls.js passes
+	// already-fragmented CMAF through untouched) reject a repeated mfhd
+	// sequence_number. 1-based to match CMAF convention (first fragment is
+	// sequence 1, not 0).
+	part := fmp4.Part{SequenceNumber: uint32(segIndex + 1), Tracks: tracks} //nolint:gosec // segIndex is bounds-checked against playlist.RecordSegments by the caller, always small and non-negative
 	var buf seekablebuffer.Buffer
 	err = part.Marshal(&buf)
 	if err != nil {

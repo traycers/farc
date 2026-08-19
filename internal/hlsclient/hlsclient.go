@@ -20,9 +20,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
-	"traycers/farc/toc"
+	"github.com/traycers/farc/internal/tracing"
+	"github.com/traycers/farc/toc"
 )
 
 // Client is a farcd read-API client. farcd runs HTTP API and WS push as two
@@ -42,6 +44,21 @@ func New(httpBase, wsBase string) *Client {
 		wsBase:   strings.TrimSuffix(wsBase, "/"),
 		hc:       &http.Client{},
 	}
+}
+
+// API is the subset of *Client's methods actually used across this
+// codebase (internal/hlsd's channel reconciliation, internal/tocindex's
+// EventSubscriber, and internal/segment's segment building via
+// internal/hlsapi) -- every one of them depends on API instead of the
+// concrete *Client, so a test can substitute a fake. *Client satisfies API
+// structurally; nothing on its own side needs to change. Candidates/Resolve
+// are deliberately excluded -- nothing outside this package calls them.
+type API interface {
+	Subscribe(ctx context.Context, storageID string, want []string, channels []uint16, includeTOC bool) (<-chan Event, error)
+	ListChannels(ctx context.Context) ([]ChannelInfo, error)
+	GetTOC(ctx context.Context, storageID string, uuid [16]byte) (*toc.Columns, error)
+	Catalog(ctx context.Context, storageID string) ([]CatalogEntry, error)
+	ReadRanges(ctx context.Context, storageID string, uuid [16]byte, ranges []Range) ([][]byte, error)
 }
 
 // Range is one (offset, size) request into a fcontainer's Content section,
@@ -80,6 +97,16 @@ func (c *Client) do(ctx context.Context, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.httpBase+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("hlsclient: build request for %s: %w", path, err)
+	}
+	// Forward the browser request's own trace headers (if any) onto this
+	// internal call to farcd, so one playback request's playlist/segment
+	// fetches all show up under the same request_id/session_id in both
+	// hls_server's and farcd's access logs.
+	if reqID, ok := tracing.RequestID(ctx); ok {
+		req.Header.Set(tracing.HeaderRequestID, reqID)
+	}
+	if sessID, ok := tracing.SessionID(ctx); ok {
+		req.Header.Set(tracing.HeaderSessionID, sessID)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
@@ -188,6 +215,63 @@ func (c *Client) Resolve(ctx context.Context, storageID string, channel uint16, 
 			return nil, fmt.Errorf("hlsclient: resolve: %w", err)
 		}
 		out[i] = ResolvedFrame{UUID: uuid, Time: w.Time, Kind: w.Kind, Data: data}
+	}
+	return out, nil
+}
+
+// wireCatalogEntry mirrors internal/api's catalogEntry.
+type wireCatalogEntry struct {
+	Index uint32 `json:"index"`
+	State string `json:"state"`
+	UUID  string `json:"uuid,omitempty"`
+	Begin string `json:"begin,omitempty"`
+	End   string `json:"end,omitempty"`
+}
+
+// CatalogEntry is one GET .../catalog result entry: UUID/Begin/End are only
+// meaningful (and only decoded) when State == "ready" — a Bad/InProgress/
+// Uninitialized entry has no valid uuid to diff against a local cache.
+type CatalogEntry struct {
+	Index uint32
+	State string
+	UUID  [16]byte
+	Begin uint64
+	End   uint64
+}
+
+// Catalog implements GET .../catalog (issue
+// .scratch/hls-toc-bootstrap/issues/02-persistent-toc-cache-and-catalog-diff.md):
+// every fblock's state in one request, so a caller can diff against a local
+// cache instead of walking Candidates+GetTOC over the full retention window
+// on every bootstrap/reconnect.
+func (c *Client) Catalog(ctx context.Context, storageID string) ([]CatalogEntry, error) {
+	path := fmt.Sprintf("/storages/%s/catalog", url.PathEscape(storageID))
+	var wire []wireCatalogEntry
+	err := c.getJSON(ctx, path, &wire)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CatalogEntry, len(wire))
+	for i, w := range wire {
+		entry := CatalogEntry{Index: w.Index, State: w.State}
+		if w.State == "ready" {
+			uuid, err := decodeHexUUID(w.UUID)
+			if err != nil {
+				return nil, fmt.Errorf("hlsclient: catalog: %w", err)
+			}
+			begin, err := strconv.ParseUint(w.Begin, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("hlsclient: catalog: invalid begin %q: %w", w.Begin, err)
+			}
+			end, err := strconv.ParseUint(w.End, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("hlsclient: catalog: invalid end %q: %w", w.End, err)
+			}
+			entry.UUID = uuid
+			entry.Begin = begin
+			entry.End = end
+		}
+		out[i] = entry
 	}
 	return out, nil
 }

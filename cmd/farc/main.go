@@ -1,7 +1,7 @@
 package main
 
 import (
-	"traycers/farc/cmd/farc/commands"
+	"github.com/traycers/farc/cmd/farc/commands"
 )
 
 func main() {

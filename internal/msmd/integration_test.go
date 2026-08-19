@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"traycers/farc/internal/api"
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/msmapi"
-	"traycers/farc/internal/msmclient"
+	"github.com/traycers/farc/internal/api"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/msmapi"
+	"github.com/traycers/farc/internal/msmclient"
 )
 
 // recordingHTTPServer is a minimal fake msm: it accepts every request with

@@ -7,15 +7,33 @@ import (
 	"testing"
 	"time"
 
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
 )
 
-type fakeRecorder struct{}
+// fakeSegmentBackend/fakeAPISegment are minimal ingest.SegmentBackend/
+// storage.Segment fakes for tests that only exercise admin-command
+// dispatch (SetPolicy/TriggerEvent/List/StartRecording's own bookkeeping)
+// -- none of these tests ever push a real frame through HandleFrame, so
+// BeginSegment is never actually invoked; these exist purely to satisfy
+// the interface.
+type fakeSegmentBackend struct{}
 
-func (fakeRecorder) WriteFcontainer(channels []uint16, begin, end uint64, filler *fcontainer.Filler, now uint64) ([16]byte, error) {
-	return [16]byte{}, nil
+func (fakeSegmentBackend) BeginSegment(channels []uint16, now uint64) (storage.Segment, storage.PoolStatus, int64, error) {
+	return fakeAPISegment{}, storage.PoolNormal, 0, nil
 }
+
+type fakeAPISegment struct{}
+
+func (fakeAPISegment) AddStreamParams(channel, stream uint32, kind fcontainer.StreamKind, params fcontainer.StreamParams) (uint32, error) {
+	return 0, nil
+}
+func (fakeAPISegment) AddFrames(configID uint32, frames []fcontainer.Frame) error { return nil }
+func (fakeAPISegment) RegisterChannel(channel uint16) error                       { return nil }
+func (fakeAPISegment) Elements() []mediatree.Element                              { return nil }
+func (fakeAPISegment) Close(now uint64) ([16]byte, error)                         { return [16]byte{}, nil }
 
 // newTestIngestManager starts one channel against an RTSP URL nothing is
 // listening on -- ChannelIngest.Run fails fast (connection refused) and its
@@ -26,16 +44,86 @@ func newTestIngestManager(t *testing.T) *ingest.IngestManager {
 	t.Helper()
 	im := ingest.NewIngestManager()
 	im.Start([]ingest.ChannelConfig{{
-		Channel:      1,
-		RTSPURL:      "rtsp://127.0.0.1:1/nonexistent",
-		Recorder:     fakeRecorder{},
-		QueueDepth:   uint64(time.Second),
-		PolicyType:   ingest.PolicyContinuous,
-		ReadTimeout:  time.Second,
-		WriteTimeout: time.Second,
+		Channel:        1,
+		RTSPURL:        "rtsp://127.0.0.1:1/nonexistent",
+		SegmentBackend: fakeSegmentBackend{},
+		QueueDepth:     uint64(time.Second),
+		PolicyType:     ingest.PolicyContinuous,
+		ReadTimeout:    time.Second,
+		WriteTimeout:   time.Second,
 	}})
 	t.Cleanup(im.Stop)
 	return im
+}
+
+func TestHandleListChannels_FiltersByStorage(t *testing.T) {
+	im := ingest.NewIngestManager()
+	im.Start([]ingest.ChannelConfig{
+		{
+			Channel: 1, RTSPURL: "rtsp://127.0.0.1:1/nonexistent", StorageID: "a",
+			SegmentBackend: fakeSegmentBackend{}, QueueDepth: uint64(time.Second),
+			PolicyType: ingest.PolicyContinuous, ReadTimeout: time.Second, WriteTimeout: time.Second,
+		},
+		{
+			Channel: 2, RTSPURL: "rtsp://127.0.0.1:1/nonexistent", StorageID: "b",
+			SegmentBackend: fakeSegmentBackend{}, QueueDepth: uint64(time.Second),
+			PolicyType: ingest.PolicyContinuous, ReadTimeout: time.Second, WriteTimeout: time.Second,
+		},
+	})
+	t.Cleanup(im.Stop)
+
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/channels?storage=a")
+	if err != nil {
+		t.Fatalf("GET /channels?storage=a: %v", err)
+	}
+	defer resp.Body.Close()
+	var list []channelInfo
+	err = decodeBody(resp, &list)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 || list[0].Channel != 1 || list[0].Storage != "a" {
+		t.Fatalf("list = %+v, want exactly channel 1 (storage a)", list)
+	}
+}
+
+func TestHandleListChannels_NoStorageFilterReturnsAll(t *testing.T) {
+	im := ingest.NewIngestManager()
+	im.Start([]ingest.ChannelConfig{
+		{
+			Channel: 1, RTSPURL: "rtsp://127.0.0.1:1/nonexistent", StorageID: "a",
+			SegmentBackend: fakeSegmentBackend{}, QueueDepth: uint64(time.Second),
+			PolicyType: ingest.PolicyContinuous, ReadTimeout: time.Second, WriteTimeout: time.Second,
+		},
+		{
+			Channel: 2, RTSPURL: "rtsp://127.0.0.1:1/nonexistent", StorageID: "b",
+			SegmentBackend: fakeSegmentBackend{}, QueueDepth: uint64(time.Second),
+			PolicyType: ingest.PolicyContinuous, ReadTimeout: time.Second, WriteTimeout: time.Second,
+		},
+	})
+	t.Cleanup(im.Stop)
+
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/channels")
+	if err != nil {
+		t.Fatalf("GET /channels: %v", err)
+	}
+	defer resp.Body.Close()
+	var list []channelInfo
+	err = decodeBody(resp, &list)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list = %+v, want 2 channels", list)
+	}
 }
 
 func TestHandleSetCapturePolicy(t *testing.T) {

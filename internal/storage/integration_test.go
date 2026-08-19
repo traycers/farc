@@ -6,13 +6,13 @@ import (
 	"reflect"
 	"testing"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/index"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storageengine"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/index"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storageengine"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 func smallGeometry() Geometry {
@@ -105,8 +105,8 @@ func TestWriteFcontainer_RoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("ResolveUUID: not found")
 	}
-	if idx != 1 {
-		t.Fatalf("idx = %d, want 1 (first uninitialized after fblock 0)", idx)
+	if idx != 0 {
+		t.Fatalf("idx = %d, want 0 (fblock 0's bootstrap write doesn't count as real content)", idx)
 	}
 
 	columns, err := u.ReadTOC(uuid)
@@ -163,7 +163,7 @@ func TestOpen_SSDCatalogPathMatchesFallbackScanPath(t *testing.T) {
 	geo := smallGeometry()
 
 	u := initAndOpen(t, dir, geo, catalogPath)
-	// Two overlapping-channel fcontainers, landing on idx 1 and idx 2.
+	// Two overlapping-channel fcontainers, landing on idx 0 and idx 1.
 	if _, err := u.WriteFcontainer([]uint16{1, 2}, 100, 200, videoFiller(t, 1, "frame-a", 100), 1000); err != nil {
 		t.Fatalf("write 1: %v", err)
 	}
@@ -230,7 +230,7 @@ func writeRawFblockAt(t *testing.T, eng *storageengine.Engine, geo Geometry, par
 		Params:  params,
 		Catalog: cat,
 	}
-	buf, err := assembleFblock(h, content, nil)
+	buf, err := assembleFblock(h, content, nil, 1) // ioengine.OpenStandard, Alignment()==1
 	if err != nil {
 		t.Fatalf("assembleFblock: %v", err)
 	}
@@ -353,21 +353,52 @@ func TestConsistencyCheck_TruncatedEpilogueBecomesBad(t *testing.T) {
 }
 
 // corruptingBackend wraps an ioengine.Backend and flips a byte on read-back
-// for any offset in corrupt, exactly once per offset — enough to make a
-// single write-verify fchunk fail without also breaking the retry's write
-// to a different physical index.
+// for the first read whose offset falls in [rangeStart, rangeEnd), exactly
+// once — enough to make a single write-verify fchunk fail without also
+// breaking the retry's write to a different physical index. A range rather
+// than one exact offset, since Segment's write path (segment.go) can split
+// one fcontainer's write across more than one physical job (the open
+// header/content job, plus a separate tail-write job for whatever wasn't
+// periodically flushed) — each restarting its own fchunk boundary count
+// from its own job offset, not a single fixed grid from the fblock's start.
 type corruptingBackend struct {
 	ioengine.Backend
-	corrupt map[int64]bool
+	rangeStart, rangeEnd int64
+	fired                bool
 }
 
 func (b *corruptingBackend) ReadAt(p []byte, offset int64) (int, error) {
 	n, err := b.Backend.ReadAt(p, offset)
-	if b.corrupt[offset] && n > 0 {
+	if !b.fired && offset >= b.rangeStart && offset < b.rangeEnd && n > 0 {
 		p[0] ^= 0xFF
-		delete(b.corrupt, offset)
+		b.fired = true
 	}
 	return n, err
+}
+
+// alignmentEnforcingBackend wraps a plain (non-O_DIRECT) backend but
+// rejects any WriteAt whose offset or length isn't a multiple of align,
+// mirroring internal/ioengine's real DirectBackend.WriteAt closely enough
+// to catch alignment bugs in unit tests without needing a real
+// O_DIRECT-capable filesystem (every other test in this package uses
+// ioengine.OpenStandard, Alignment()==1, which can never exercise this).
+// ReadAt is passed through unchanged -- DirectBackend.ReadAt transparently
+// handles any offset/length itself (internal/ioengine/direct_linux.go's
+// roundRange + scratch buffer), unlike WriteAt, so real callers never need
+// aligned reads and this wrapper shouldn't invent a stricter contract than
+// the backend it's standing in for.
+type alignmentEnforcingBackend struct {
+	ioengine.Backend
+	align int64
+}
+
+func (b *alignmentEnforcingBackend) Alignment() int { return int(b.align) }
+
+func (b *alignmentEnforcingBackend) WriteAt(p []byte, offset int64) (int, error) {
+	if offset%b.align != 0 || int64(len(p))%b.align != 0 {
+		return 0, ioengine.ErrMisaligned
+	}
+	return b.Backend.WriteAt(p, offset)
 }
 
 func TestWriteFcontainer_MidFchunkFailureRetriesOnNewIndex(t *testing.T) {
@@ -395,11 +426,22 @@ func TestWriteFcontainer_MidFchunkFailureRetriesOnNewIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	// The first write after init lands on idx 1 (cursor=0, first
-	// uninitialized). Corrupt its 3rd fchunk (offset fblockOffset(1)+2048)
-	// so write-verify fails partway through, forcing a retry onto idx 2.
-	corruptOffset := int64(fblockOffset(geo, 1)) + 2*smallParams().FchunkSize
-	cb := &corruptingBackend{Backend: backend, corrupt: map[int64]bool{corruptOffset: true}}
+	// The first write after init lands on idx 0 (fblock 0's bootstrap
+	// write doesn't count as real content, see Open()'s cursor
+	// correction). Corrupt starting exactly at fblock 0's content offset —
+	// past every header section Open() itself must read (prolog/params/
+	// catalog/checksums), so probing/startup-scan reads are untouched, but
+	// the new write's own verify-read of its first content byte fails,
+	// forcing a retry onto idx 1.
+	paramsBuf, err := fblock.EncodeParams(smallParams())
+	if err != nil {
+		t.Fatalf("EncodeParams: %v", err)
+	}
+	catalogSize := fblock.CatalogSize(geo.MaxChannels, geo.N)
+	offs := fblock.ComputeOffsets(uint32(len(paramsBuf)), catalogSize, 1) // ioengine.OpenStandard, Alignment()==1
+	corruptStart := int64(fblockOffset(geo, 0)) + int64(offs.ContentOffset)
+	corruptEnd := int64(fblockOffset(geo, 0)) + int64(geo.FblockSize)
+	cb := &corruptingBackend{Backend: backend, rangeStart: corruptStart, rangeEnd: corruptEnd}
 
 	u, err := Open(OpenConfig{Backend: cb})
 	if err != nil {
@@ -413,14 +455,14 @@ func TestWriteFcontainer_MidFchunkFailureRetriesOnNewIndex(t *testing.T) {
 	}
 
 	snap := u.Index().Snapshot()
-	if snap.State(1) != fblock.Bad {
-		t.Fatalf("idx 1 state = %v, want Bad (the corrupted attempt)", snap.State(1))
+	if snap.State(0) != fblock.Bad {
+		t.Fatalf("idx 0 state = %v, want Bad (the corrupted attempt)", snap.State(0))
 	}
-	if snap.State(2) != fblock.Ready {
-		t.Fatalf("idx 2 state = %v, want Ready (the successful retry)", snap.State(2))
+	if snap.State(1) != fblock.Ready {
+		t.Fatalf("idx 1 state = %v, want Ready (the successful retry)", snap.State(1))
 	}
 	idx, ok := u.ResolveUUID(uuid)
-	if !ok || idx != 2 {
-		t.Fatalf("ResolveUUID = %d,%v, want 2,true", idx, ok)
+	if !ok || idx != 1 {
+		t.Fatalf("ResolveUUID = %d,%v, want 1,true", idx, ok)
 	}
 }

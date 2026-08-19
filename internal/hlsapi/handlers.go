@@ -4,26 +4,28 @@ import (
 	"fmt"
 	"net/http"
 
-	"traycers/farc/internal/playlist"
-	"traycers/farc/internal/segment"
-	"traycers/farc/internal/segmentcache"
-	"traycers/farc/internal/tocindex"
+	"github.com/gorilla/mux"
+
+	"github.com/traycers/farc/internal/playlist"
+	"github.com/traycers/farc/internal/segment"
+	"github.com/traycers/farc/internal/segmentcache"
+	"github.com/traycers/farc/internal/tocindex"
 )
 
 // handlePlaylist implements GET /channels/{channel}/hls/{t1}/{t2}/playlist.m3u8
 // — pure read of the local tocindex.Index (ADR-018), no farcd round trip.
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
-	channel, err := parseUint16(r.PathValue("channel"))
+	channel, err := parseUint16(mux.Vars(r)["channel"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	t1, err := parseUint64(r.PathValue("t1"))
+	t1, err := parseUint64(mux.Vars(r)["t1"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	t2, err := parseUint64(r.PathValue("t2"))
+	t2, err := parseUint64(mux.Vars(r)["t2"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -50,13 +52,13 @@ func (s *Server) lookupRecord(channel uint16, uuid [16]byte) (tocindex.Record, b
 }
 
 func (s *Server) parseSegmentPathValues(w http.ResponseWriter, r *http.Request) (channel uint16, storageID string, uuid [16]byte, ok bool) {
-	channel, err := parseUint16(r.PathValue("channel"))
+	channel, err := parseUint16(mux.Vars(r)["channel"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return 0, "", [16]byte{}, false
 	}
-	storageID = r.PathValue("storage")
-	uuid, err = parseUUID(r.PathValue("uuid"))
+	storageID = mux.Vars(r)["storage"]
+	uuid, err = parseUUID(mux.Vars(r)["uuid"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return 0, "", [16]byte{}, false
@@ -107,7 +109,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	segIndex, err := parseInt(r.PathValue("n"))
+	segIndex, err := parseInt(mux.Vars(r)["n"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -134,13 +136,62 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := segment.BuildMedia(r.Context(), s.client, rec, channel, bounds[segIndex].Start, bounds[segIndex].End)
+	data, err := segment.BuildMedia(r.Context(), s.client, rec, channel, segIndex, bounds[segIndex].Start, bounds[segIndex].End)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	_ = s.cache.Put(key, data)
 	writeSegment(w, data)
+}
+
+// timelineSegment/channelTimeline are handleTimeline's wire format.
+type timelineSegment struct {
+	Begin uint64 `json:"begin"`
+	End   uint64 `json:"end"`
+}
+
+type channelTimeline struct {
+	Channel  uint16            `json:"channel"`
+	Segments []timelineSegment `json:"segments"`
+}
+
+// handleTimeline implements GET /timeline?channels=1,2&t1=..&t2=.. -- a
+// batch, already-precomputed video-presence timeline (tocindex.ChannelIndex.
+// Timeline) for a list of channels at once (.scratch/player-redesign/
+// issues/01-hls-server-timeline-endpoint.md). A channel this hls_server
+// isn't configured to serve is silently omitted from the response rather
+// than failing the whole batch.
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	channels, err := parseChannelList(r.URL.Query().Get("channels"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	t1, err := parseUint64(r.URL.Query().Get("t1"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	t2, err := parseUint64(r.URL.Query().Get("t2"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	out := make([]channelTimeline, 0, len(channels))
+	for _, ch := range channels {
+		if !s.channels.Has(ch) {
+			continue
+		}
+		segments := s.index.Channel(ch).Timeline(t1, t2)
+		dtos := make([]timelineSegment, len(segments))
+		for i, seg := range segments {
+			dtos[i] = timelineSegment{Begin: seg.Begin, End: seg.End}
+		}
+		out = append(out, channelTimeline{Channel: ch, Segments: dtos})
+	}
+	writeJSON(w, out)
 }
 
 func writeMP4(w http.ResponseWriter, data []byte) {

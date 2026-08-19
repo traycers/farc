@@ -14,19 +14,31 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"traycers/farc/internal/hlsapi"
-	"traycers/farc/internal/hlsclient"
-	"traycers/farc/internal/hlsconfig"
-	"traycers/farc/internal/segmentcache"
-	"traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/internal/hlsapi"
+	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/hlsconfig"
+	"github.com/traycers/farc/internal/levellog"
+	"github.com/traycers/farc/internal/segmentcache"
+	"github.com/traycers/farc/internal/toccache"
+	"github.com/traycers/farc/internal/tocindex"
+	"github.com/traycers/farc/internal/tracing"
 )
+
+// tocCacheSubdir is the dedicated subpath of cfg.CacheDir the persistent
+// TOC cache lives under (decided 2026-08-13,
+// .scratch/hls-toc-bootstrap/issues/02-persistent-toc-cache-and-catalog-diff.md)
+// -- a sibling of internal/segmentcache's own on-disk layout under the same
+// root, not a separate config var.
+const tocCacheSubdir = "toc"
 
 // shutdownTimeout bounds how long graceful HTTP shutdown waits for
 // in-flight requests before Run returns anyway — matches internal/farcd's
@@ -62,17 +74,30 @@ type trackedSub struct {
 // Hlsd is one running hls_server process.
 type Hlsd struct {
 	index     *tocindex.Index
-	client    *hlsclient.Client
+	client    hlsclient.API
 	apiServer *hlsapi.Server
 	cache     *segmentcache.Cache
+	tocCache  *toccache.Cache
 	seed      []hlsconfig.Channel
 
 	configPath string
 
-	httpSrv *http.Server
+	httpSrv    *http.Server
+	metricsSrv *http.Server
+
+	// connectedChannels mirrors len(tracked) (reconcile's own map, single-
+	// goroutine-owned and deliberately unguarded -- see reconcile's doc
+	// comment) for concurrent, lock-free reads from the /metrics handler.
+	// startChannel/stopChannel are reconcile's only two mutators of tracked,
+	// so storing the new length there is the only place this needs updating.
+	connectedChannels atomic.Int32
 
 	logf func(format string, args ...any)
 }
+
+// ConnectedChannels reports the number of channels currently tracked/served
+// -- internal/hlsd/metrics.go's one domain gauge.
+func (h *Hlsd) ConnectedChannels() int { return int(h.connectedChannels.Load()) }
 
 // New builds the one hlsclient.Client for cfg.Farcd, opens the disk cache,
 // and wires internal/hlsapi's handler, but starts nothing yet — call Run to
@@ -99,12 +124,27 @@ func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 	}
 	h.cache = cache
 
+	tocCache, err := toccache.New(filepath.Join(cfg.CacheDir, tocCacheSubdir))
+	if err != nil {
+		return nil, fmt.Errorf("hlsd: %w", err)
+	}
+	h.tocCache = tocCache
+
 	initial := make(map[uint16]bool, len(cfg.Channels))
 	for _, cc := range cfg.Channels {
 		initial[cc.ID] = true
 	}
 	h.apiServer = hlsapi.New(h.index, h.client, initial, h.cache, cfg.TargetSegmentDuration.Duration())
-	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: h.apiServer.Handler(), ReadHeaderTimeout: readHeaderTimeout}
+	// trace forwards to h.logf by field access, not by value, so it keeps
+	// working after SetLogger replaces h.logf -- SetLogger is only called by
+	// cmd/hls_server after New returns, but httpSrv is built here, inside
+	// New, so capturing h.logf itself would forever bind to its no-op
+	// default set above.
+	trace := func(format string, args ...any) { h.logf(format, args...) }
+	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: tracing.Middleware(trace)(h.apiServer.Handler()), ReadHeaderTimeout: readHeaderTimeout}
+	// metricsSrv is left unwrapped -- internal scrape traffic, not proxied
+	// through envoy, matching internal/farcd's identical convention.
+	h.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: newMetricsHandler(h), ReadHeaderTimeout: readHeaderTimeout}
 
 	return h, nil
 }
@@ -171,11 +211,19 @@ func (h *Hlsd) SetLogger(logf func(format string, args ...any)) {
 func (h *Hlsd) Run(ctx context.Context) error {
 	go h.reconcile(ctx)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		err := h.httpSrv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("hlsd: http server: %w", err)
+			return
+		}
+		errCh <- nil
+	}()
+	go func() {
+		err := h.metricsSrv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("hlsd: metrics server: %w", err)
 			return
 		}
 		errCh <- nil
@@ -194,9 +242,11 @@ func (h *Hlsd) Run(ctx context.Context) error {
 func (h *Hlsd) shutdown() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	err := h.httpSrv.Shutdown(shutdownCtx)
-	if err != nil {
-		h.logf("hlsd: server shutdown: %v", err)
+	for _, srv := range []*http.Server{h.httpSrv, h.metricsSrv} {
+		err := srv.Shutdown(shutdownCtx)
+		if err != nil {
+			levellog.New(h.logf).Error("hlsd: server shutdown: %v", err)
+		}
 	}
 }
 
@@ -218,7 +268,7 @@ func (h *Hlsd) reconcile(ctx context.Context) {
 	for {
 		err := h.reconcileOnce(ctx, tracked)
 		if err != nil {
-			h.logf("hlsd: channel reconciliation: %v", err)
+			levellog.New(h.logf).Warn("hlsd: channel reconciliation: %v", err)
 		}
 		if ctx.Err() != nil {
 			return
@@ -252,7 +302,7 @@ func (h *Hlsd) reconcile(ctx context.Context) {
 // so processing the same channel twice (once from each source) is a no-op
 // the second time.
 func (h *Hlsd) reconcileOnce(ctx context.Context, tracked map[uint16]*trackedSub) error {
-	events, err := h.client.Subscribe(ctx, "", []string{hlsclient.EventChannelCreated, hlsclient.EventChannelRemoved}, nil)
+	events, err := h.client.Subscribe(ctx, "", []string{hlsclient.EventChannelCreated, hlsclient.EventChannelRemoved}, nil, false)
 	if err != nil {
 		return fmt.Errorf("subscribe to channel events: %w", err)
 	}
@@ -272,7 +322,7 @@ func (h *Hlsd) reconcileOnce(ctx context.Context, tracked map[uint16]*trackedSub
 		case <-ticker.C:
 			err := h.applyRemoteList(ctx, tracked)
 			if err != nil {
-				h.logf("hlsd: periodic channel list recheck: %v", err)
+				levellog.New(h.logf).Warn("hlsd: periodic channel list recheck: %v", err)
 			}
 		case ev, ok := <-events:
 			if !ok {
@@ -329,7 +379,7 @@ func (h *Hlsd) startChannel(ctx context.Context, tracked map[uint16]*trackedSub,
 	}
 
 	subCtx, cancel := context.WithCancel(ctx)
-	sub := tocindex.NewEventSubscriber(h.client, storage, []uint16{id}, h.index)
+	sub := tocindex.NewEventSubscriber(h.client, storage, []uint16{id}, h.index, h.tocCache)
 	sub.SetLogger(h.logf)
 	tracked[id] = &trackedSub{cancel: cancel, storage: storage}
 	h.apiServer.AddChannel(id)
@@ -338,7 +388,7 @@ func (h *Hlsd) startChannel(ctx context.Context, tracked map[uint16]*trackedSub,
 	go func() {
 		err := sub.Run(subCtx)
 		if err != nil {
-			h.logf("hlsd: event subscriber for channel %d: %v", id, err)
+			levellog.New(h.logf).Warn("hlsd: event subscriber for channel %d: %v", id, err)
 		}
 	}()
 }
@@ -369,8 +419,12 @@ func (h *Hlsd) stopChannel(tracked map[uint16]*trackedSub, id uint16) {
 // file says. Sorted by channel id for a stable, diffable file, since
 // tracked is a map and would otherwise iterate in random order. A write
 // failure is only logged: the in-memory tracked state, and therefore what's
-// actually being served, is unaffected either way.
+// actually being served, is unaffected either way. Also the one place
+// connectedChannels is refreshed, piggybacking on being the point every
+// tracked mutation already funnels through.
 func (h *Hlsd) persist(tracked map[uint16]*trackedSub) {
+	h.connectedChannels.Store(int32(len(tracked)))
+
 	channels := make([]hlsconfig.Channel, 0, len(tracked))
 	for id, sub := range tracked {
 		channels = append(channels, hlsconfig.Channel{ID: id, Storage: sub.storage})
@@ -378,6 +432,6 @@ func (h *Hlsd) persist(tracked map[uint16]*trackedSub) {
 	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
 	err := hlsconfig.Save(h.configPath, &hlsconfig.Config{Channels: channels})
 	if err != nil {
-		h.logf("hlsd: persist channel list to %s: %v", h.configPath, err)
+		levellog.New(h.logf).Warn("hlsd: persist channel list to %s: %v", h.configPath, err)
 	}
 }

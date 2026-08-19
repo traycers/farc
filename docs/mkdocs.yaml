@@ -2,6 +2,8 @@ site_name: farc docs
 site_description: Документация архива farc
 site_author: dim shu
 site_url: https://github.com/traycers/farc
+repo_url: https://github.com/traycers/farc
+repo_name: traycers/farc
 docs_dir: ./docs/
 site_dir: ../build/site/
 

@@ -4,8 +4,8 @@ import (
 	"sort"
 	"sync"
 
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/mediatree"
 )
 
 // StreamID identifies one (stream number, kind) pair within a channel.

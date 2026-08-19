@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storageengine"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storageengine"
 )
 
 // ErrAlreadyInitialized is step 1's "already initialized" refusal
@@ -59,19 +59,20 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 	if err != nil {
 		return fmt.Errorf("storage: init: encode params: %w", err)
 	}
-	err = fblock.CheckMinContainerShare(cfg.Geometry.FblockSize, uint32(len(paramsBuf)), catalogSize, cfg.Params.MinContainerShare)
+	err = fblock.CheckMinContainerShare(cfg.Geometry.FblockSize, uint32(len(paramsBuf)), catalogSize, cfg.Params.MinContainerShare, backend.Alignment())
 	if err != nil {
 		return fmt.Errorf("storage: init: %w", err)
 	}
 
-	// Step 4: fblock 0 in memory. Index 0 is in_progress in its own
-	// snapshot — matches the ordinary write algorithm (02-storage.md §5:
-	// "сам K в собственном снимке помечен in_progress"); IndexManager will
-	// treat it as Ready as soon as this call returns successfully. No real
-	// fcontainer exists yet: content/toc are both absent (see this
-	// package's doc comment on why that's still a full fblock_size write).
+	// Step 4: fblock 0 in memory. Index 0 stays Uninitialized in its own
+	// snapshot, even though it's the fblock this call physically writes:
+	// the bootstrap write only exists to persist a valid prolog/catalog so
+	// the disk is readable at all, it carries no real fcontainer (content/
+	// toc both absent, see this package's doc comment on why that's still
+	// a full fblock_size write), and it must never be treated as "real"
+	// content by SelectNextIndex/the write cursor — see docs/docs/archive/
+	// 04-storage-operations.md §3.1 step 4 and §6.1.
 	cat := fblock.NewCatalog(cfg.Geometry.MaxChannels, cfg.Geometry.N)
-	cat.SetState(0, fblock.InProgress)
 
 	h := &fblock.Header{
 		Prolog: fblock.FixedProlog{
@@ -85,7 +86,7 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 		Params:  cfg.Params,
 		Catalog: cat,
 	}
-	buf, err := assembleFblock(h, nil, nil)
+	buf, err := assembleFblock(h, nil, nil, backend.Alignment())
 	if err != nil {
 		return fmt.Errorf("storage: init: assemble fblock 0: %w", err)
 	}
@@ -104,12 +105,11 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 		return fmt.Errorf("storage: init: write-verify failed for fblock 0 at offset %d", res.FailedOffset)
 	}
 
-	// Step 6: optional SSD catalog — index 0 recorded as Ready right away
-	// (ADR-007's mirror has no "confirmed one write later" lag, unlike the
-	// main disk's self-referential snapshot).
+	// Step 6: optional SSD catalog — must mirror the main disk exactly, so
+	// index 0 stays Uninitialized here too (cat is cloned as-is, no
+	// override).
 	if cfg.CatalogPath != "" {
 		ssd := cat.Clone()
-		ssd.SetState(0, fblock.Ready)
 		meta := SSDCatalogMeta{WriteSequence: 1, CatalogTime: cfg.Now, Cursor: 0}
 		err := SaveSSDCatalog(cfg.CatalogPath, ssd, meta)
 		if err != nil {

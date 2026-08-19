@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"traycers/farc/fblock"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/toc"
 )
 
 // Range is one (offset, size) request into a fcontainer's Content section,
@@ -28,6 +28,13 @@ func (u *Unit) ResolveUUID(uuid [16]byte) (uint32, bool) {
 // candidate's TOC.
 func (u *Unit) Candidates(channelNumber uint16, t1, t2 uint64) []uint32 {
 	return u.mgr.Candidates(channelNumber, t1, t2)
+}
+
+// LatestReadyForChannel returns the physical index of channelNumber's most
+// recently completed (Ready, largest End) fblock -- the fblock-live WS
+// handler's (internal/api) "previous fblock" link.
+func (u *Unit) LatestReadyForChannel(channelNumber uint16) (uint32, bool) {
+	return u.mgr.LatestReadyForChannel(channelNumber)
 }
 
 // readRange performs one arbitrated read through the StorageEngine
@@ -66,7 +73,7 @@ func (u *Unit) contentBaseOffset(idx uint32) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	offs := fblock.ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize)
+	offs := fblock.ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize, u.backend.Alignment())
 	return int64(fblockOffset(u.geo, idx)) + int64(offs.ContentOffset), nil
 }
 

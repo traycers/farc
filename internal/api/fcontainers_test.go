@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/mediatree"
+	"github.com/traycers/farc/toc"
 )
 
 // unknownUUIDHex is a UUID guaranteed not to resolve: unlike an all-zero

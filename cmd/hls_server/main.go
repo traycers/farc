@@ -1,7 +1,7 @@
 package main
 
 import (
-	"traycers/farc/cmd/hls_server/commands"
+	"github.com/traycers/farc/cmd/hls_server/commands"
 )
 
 func main() {

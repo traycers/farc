@@ -12,5 +12,10 @@ var (
 	errMissingChannelCount = errors.New("fcontainer: audio params missing required channel_count")
 	errAudioConfigNotAAC   = errors.New("fcontainer: param_audio_config is AAC-only")
 	errUnknownKind         = errors.New("fcontainer: unknown StreamKind")
-	errStaleConfigID       = errors.New("fcontainer: configID does not refer to a config node created by this Filler")
+	// ErrStaleConfigID is exported so callers above internal/storage (e.g.
+	// internal/ingest) can detect and recover from a configID minted
+	// against a shared segment that's since been replaced (pool-driven
+	// rotation, discovered only reactively -- see
+	// CapturePolicy.addFrameLocked's own doc comment).
+	ErrStaleConfigID = errors.New("fcontainer: configID does not refer to a config node created by this Filler")
 )

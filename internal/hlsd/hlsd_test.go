@@ -16,9 +16,9 @@ import (
 
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 
-	"traycers/farc/internal/hlsconfig"
-	"traycers/farc/internal/hlsd"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/internal/hlsconfig"
+	"github.com/traycers/farc/internal/hlsd"
+	"github.com/traycers/farc/mediatree"
 )
 
 // hlsConfigPath returns a writable path for a fresh test's config file,

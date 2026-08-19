@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/api"
-	"traycers/farc/internal/fcontainer"
-	"traycers/farc/internal/ingest"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/api"
+	"github.com/traycers/farc/internal/fcontainer"
+	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/mediatree"
 )
 
 // Recreated from internal/api/testutil_test.go (an unexported _test.go
@@ -125,7 +125,7 @@ func newTestServer(t *testing.T, unit *storage.Unit, channels ...uint16) *testSe
 		ing = ingest.NewIngestManager()
 		for _, ch := range channels {
 			cfg := ingest.ChannelConfig{
-				Channel: ch, RTSPURL: "rtsp://127.0.0.1:1/none", StorageID: "s1", Recorder: unit,
+				Channel: ch, RTSPURL: "rtsp://127.0.0.1:1/none", StorageID: "s1", SegmentBackend: unit,
 				PolicyType: ingest.PolicyContinuous, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
 			}
 			err := ing.AddChannel(cfg)

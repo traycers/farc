@@ -40,6 +40,8 @@ services:
       # the site-specific topology data.
       HLS_SERVER_HTTP_IP: "0.0.0.0"
       HLS_SERVER_HTTP_PORT: "8090"
+      HLS_SERVER_METRICS_IP: "0.0.0.0"
+      HLS_SERVER_METRICS_PORT: "9091"
       HLS_SERVER_FARC_HTTP: "http://farc:8080"
       HLS_SERVER_FARC_WS: "ws://farc:8081"
       HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
@@ -52,11 +54,11 @@ services:
       HLS_SERVER_CACHE_BACKEND: "disk"
       HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
       HLS_SERVER_CACHE_QUOTA_BYTES: "10737418240"
-      HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
-      HLS_SERVER_S3_BUCKET: "hls-segments"
-      HLS_SERVER_S3_ACCESS_KEY: "hls_server"
-      HLS_SERVER_S3_SECRET_KEY: "changeme"
-      HLS_SERVER_S3_USE_SSL: "false"
+      # HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
+      # HLS_SERVER_S3_BUCKET: "hls-segments"
+      # HLS_SERVER_S3_ACCESS_KEY: "hls_server"
+      # HLS_SERVER_S3_SECRET_KEY: "changeme"
+      # HLS_SERVER_S3_USE_SSL: "false"
     volumes:
       # hls_config holds hls_server.config.json itself -- no repo file
       # bind-mount (nothing site-specific belongs in git). The volume starts
@@ -84,14 +86,14 @@ services:
   # profiles: only starts with `docker compose --profile s3 up` -- a plain
   # `docker compose up` stays exactly as before (disk backend, no extra
   # container) for anyone who hasn't opted into the s3 backend above.
-  seaweedfs:
-    image: chrislusf/seaweedfs:latest
-    command: server -s3 -s3.port=8333 -dir=/data
-    profiles:
-      - s3
-    volumes:
-      - seaweedfs_data:/data
-    restart: unless-stopped
+  # seaweedfs:
+  #   image: chrislusf/seaweedfs:latest
+  #   command: server -s3 -s3.port=8333 -dir=/data
+  #   profiles:
+  #     - s3
+  #   volumes:
+  #     - seaweedfs_data:/data
+  #   restart: unless-stopped
 
   # Relays farcd's WS event feed to an external msm ("media services
   # manager") service (temp/msm/openapi.yaml) -- fblock/recording lifecycle,
@@ -106,6 +108,8 @@ services:
     profiles:
       - msm
     environment:
+      MSM_SERVER_METRICS_IP: "0.0.0.0"
+      MSM_SERVER_METRICS_PORT: "9092"
       MSM_SERVER_FARC_HTTP: "http://farc:8080"
       MSM_SERVER_FARC_WS: "ws://farc:8081"
       MSM_SERVER_MSM_URL: "http://msm:9000"
@@ -123,9 +127,59 @@ services:
       - hls_server
     restart: unless-stopped
 
+  # Observability stack (.scratch/observability/spec.md) -- always on, not
+  # an opt-in profile like s3/msm above: scrapes farc/hls_server/msm_server's
+  # /metrics, ships every container's stdout/stderr into Loki, and serves
+  # three pre-built Grafana dashboards. msm_server's target simply shows as
+  # down in Prometheus if the msm profile isn't active -- not an error.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.9
+    volumes:
+      - loki_data:/loki
+    restart: unless-stopped
+
+  # Reads container logs via the Docker Engine API (docker.sock) and ships
+  # them to loki -- no code change and no host-level log-driver plugin
+  # needed in farc/hls_server/msm_server/web.
+  promtail:
+    image: grafana/promtail:2.9.9
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./deploy/observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
 volumes:
   farc_config:
   farc_data:
   hls_config:
   hls_cache:
-  seaweedfs_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:
+  # seaweedfs_data:

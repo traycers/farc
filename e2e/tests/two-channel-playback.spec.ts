@@ -1,15 +1,20 @@
 import { test, expect, type Page } from '@playwright/test'
-import { setupStack, STORAGE_ID, CHANNEL_1, CHANNEL_2 } from './setup'
+import { setupStack, teardownStack, CHANNEL_1, CHANNEL_2 } from './setup'
 
 // Reproduces the reported fragParsingError end to end: two channels record
-// concurrently (via setup.ts) into the same/overlapping fblock -- ADR-014's
-// normal multi-channel scenario -- then a real headless Chromium session
-// drives the actual PlayerPage UI exactly as a user would. No test-only
-// hooks in web/: a fatal hls.js error already renders into `.alert-danger`
-// (PlayerPage.tsx's setError, wired up earlier this session), so failure
-// here reproduces the bug's exact user-visible message.
+// concurrently (via setup.ts) into the same/overlapping fblock (ADR-014's
+// normal multi-channel scenario), then a real headless Chromium session
+// drives the redesigned multi-channel /player page exactly as a user would
+// -- both channels checked at once, in a shared 1x2 grid, with one shared
+// play button (.scratch/player-redesign/). A fatal hls.js error still
+// renders into `.alert-danger` (VideoTile.tsx's setError), so failure here
+// reproduces the bug's exact user-visible symptom.
 test.beforeAll(async () => {
   await setupStack()
+})
+
+test.afterAll(async () => {
+  await teardownStack()
 })
 
 // PlayerPage.tsx's default "to" is `now`, but <input type="datetime-local">
@@ -21,8 +26,6 @@ test.beforeAll(async () => {
 // whatever timezone the page itself is rendering in, rather than assuming
 // Node's clock/timezone lines up with the browser's.
 async function bumpSearchWindowIntoFuture(page: Page): Promise<void> {
-  // exact: true -- getByLabel's default substring match makes plain 'to'
-  // match the "storage" select too ("s-TO-rage").
   const toField = page.getByLabel('to', { exact: true })
   const current = await toField.inputValue()
   const d = new Date(current)
@@ -31,39 +34,37 @@ async function bumpSearchWindowIntoFuture(page: Page): Promise<void> {
   await toField.fill(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
 }
 
-async function searchAndPlay(page: Page, channel: number): Promise<void> {
+test('both channels recorded into a shared fblock play at once in a shared grid', async ({ page }) => {
   await page.goto('/player')
-  await page.getByLabel('storage').selectOption(STORAGE_ID)
-  await page.getByLabel('channel id').fill(String(channel))
+
+  await page.getByLabel(`channel ${CHANNEL_1}`, { exact: true }).check()
+  await page.getByLabel(`channel ${CHANNEL_2}`, { exact: true }).check()
   await bumpSearchWindowIntoFuture(page)
   await page.getByRole('button', { name: 'Search' }).click()
 
-  await expect(page.getByRole('button', { name: 'play' }).first()).toBeVisible({ timeout: 30_000 })
-  await page.getByRole('button', { name: 'play' }).first().click()
+  // 2 checked channels -> the plan's 1x2 grid (spec.md), one tile per
+  // channel, both real <video> elements.
+  await expect(page.getByTestId('player-video-grid')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('video')).toHaveCount(2)
 
-  // PlayerPage.tsx's <video> has neither `autoplay` nor an explicit
-  // .play() call -- it only attaches hls.js/sets .src, same as a real
-  // browser leaving playback for the native player controls. A real user
-  // would press play next; do the same here rather than asserting on a
-  // video that was never asked to play.
-  // .catch: a rejected play() (e.g. no valid source yet) should surface via
-  // the currentTime/.alert-danger assertions below, not as a raw evaluate()
-  // exception.
-  await page.locator('video').evaluate((el: HTMLVideoElement) => el.play().catch(() => {}))
+  // The search window's default "from" is an hour before the (just-recorded,
+  // few-seconds-long) real segment -- jump the shared playhead straight to
+  // it via "Next" (the same segment-navigation button a real user would
+  // reach for), rather than waiting out real wall-clock time for the tick
+  // loop to crawl there on its own.
+  await page.getByRole('button', { name: 'Next' }).click()
+  await page.getByRole('button', { name: 'Play' }).click()
 
-  // The strong assertion: real decoded playback actually progressed, not
-  // just "no error observed yet".
+  // The strong assertion: both tiles' real decoded playback actually
+  // progressed at once, not just "no error observed yet".
   await expect(async () => {
-    const currentTime = await page.locator('video').evaluate((el: HTMLVideoElement) => el.currentTime)
-    expect(currentTime).toBeGreaterThan(0)
+    const times = await page.locator('video').evaluateAll((els) => els.map((el) => (el as HTMLVideoElement).currentTime))
+    expect(times).toHaveLength(2)
+    expect(times[0]).toBeGreaterThan(0)
+    expect(times[1]).toBeGreaterThan(0)
   }).toPass({ timeout: 30_000 })
 
   // Must still hold after the wait above -- a fatal hls.js error can arrive
   // shortly after playback nominally "starts".
   await expect(page.locator('.alert-danger')).toHaveCount(0)
-}
-
-test('both channels recorded into a shared fblock actually play', async ({ page }) => {
-  await test.step(`channel ${CHANNEL_1} plays`, () => searchAndPlay(page, CHANNEL_1))
-  await test.step(`channel ${CHANNEL_2} plays`, () => searchAndPlay(page, CHANNEL_2))
 })

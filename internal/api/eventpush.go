@@ -4,12 +4,12 @@ import (
 	"encoding/hex"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/toc"
 )
 
 // subscribeMessage is the one message a client sends right after connecting
@@ -23,20 +23,18 @@ import (
 // the one subscriber that sets it, to compute vaa-blocks without polling
 // GET .../toc).
 type subscribeMessage struct {
-	Storage  string   `json:"storage"`
-	Want     []string `json:"want"`
-	Channels []uint16 `json:"channels"`
-	// LiveStorages scopes livePushMessage delivery on a global subscription
-	// -- required for "live" frames to be delivered at all (an empty set
-	// means "no live messages", not "all of them", since live progress is
-	// meaningless unscoped to a storage). Unrelated to Channels above, which
-	// is the per-storage NotificationBus subscription's own fblock-bitmap
-	// filter (ServeHTTP's non-global branch) -- fblock-live's live-progress
-	// feed is storage-scoped, not channel-scoped (docs/docs/archive/
-	// adr/014-channel-registry.md: one fcontainer commonly holds every
-	// channel of a storage at once).
-	LiveStorages []string `json:"live_storages"`
-	IncludeTOC   bool     `json:"include_toc"`
+	Storage    string   `json:"storage"`
+	Want       []string `json:"want"`
+	Channels   []uint16 `json:"channels"`
+	IncludeTOC bool     `json:"include_toc"`
+
+	// IncludePool opts a per-storage subscriber into a periodic "pool"
+	// frame (poolPushMessage) — the live pool-status-list feed
+	// (.scratch/fblocks-ui/issues/04-pool-status-list-plan.md). Off by
+	// default, same convention as IncludeTOC: ordinary Journal/UI clients
+	// that don't render the pool-status-list never pay for it. Ignored
+	// for a global (Storage == "") subscription — Pool is per-Storage.
+	IncludePool bool `json:"include_pool"`
 }
 
 // pushMessage is one WS frame pushed to a subscribed client — a compact,
@@ -70,53 +68,68 @@ type tocPushMessage struct {
 	TOC     []byte `json:"toc"`
 }
 
-// liveNode is one element of a live progress delta — see livePushMessage.
-// Field-compatible with treeNodeJSON's Role/Type/Parent/Value/Size (this
-// package's shared decodeScalarValue is reused verbatim, see
-// liveNodeFromElement), minus ChildCount, which has no meaning for a flat
-// delta list.
-type liveNode struct {
-	ID     uint32 `json:"id"`
-	Role   string `json:"role"`
-	Type   string `json:"type"`
-	Parent uint32 `json:"parent"`
-	Value  any    `json:"value,omitempty"`
-	Size   uint64 `json:"size,omitempty"`
+// poolSlotMessage is one row of poolPushMessage — a JSON-friendly mirror of
+// storage.SlotStatus (State as a string, not storage.SlotState's raw int).
+type poolSlotMessage struct {
+	State       string `json:"state"` // "free"/"queued"/"active"/"closing"
+	Index       uint32 `json:"index,omitempty"`
+	HasIndex    bool   `json:"has_index,omitempty"`
+	PrologSize  uint32 `json:"prolog_size"`
+	CatalogSize uint32 `json:"catalog_size"`
+	ContentSize int64  `json:"content_size"`
+	TOCSize     uint32 `json:"toc_size"`
+	EpilogSize  uint32 `json:"epilog_size"`
 }
 
-// liveNodeFromElement decodes a mediatree.Element straight from an
-// in-memory fcontainer.Filler (internal/ingest.CapturePolicy.
-// LiveElementsSince) — unlike treeNodeJSON's finalized-TOC counterpart,
-// Value here is already the node's raw bytes at their exact fixed width
-// (Filler.append stores them pre-serialized), so decodeScalarValue applies
-// directly with no InlineValue/ContentOffset unpacking step.
-func liveNodeFromElement(id uint32, e mediatree.Element) liveNode {
-	n := liveNode{ID: id, Role: e.Role.String(), Type: e.Type.String(), Parent: e.Parent}
-	if v, ok := decodeScalarValue(e.Type, e.Value); ok {
-		n.Value = v
-	} else if e.Type.Variable() {
-		n.Size = uint64(len(e.Value))
+// poolPushMessage is the WS frame sent periodically to a per-storage
+// subscriber with IncludePool set — one row per PoolTuning.Size pool slot
+// (.scratch/fblocks-ui/issues/04-pool-status-list-plan.md).
+type poolPushMessage struct {
+	Type    string            `json:"type"`
+	Storage string            `json:"storage"`
+	Slots   []poolSlotMessage `json:"slots"`
+}
+
+// poolSlotStateNames maps storage.SlotState to its wire name. Open,
+// append-only: a state added later gets a new entry, never a renumbered
+// one, matching the same discipline as storage.SlotState's own iota block.
+var poolSlotStateNames = map[storage.SlotState]string{
+	storage.SlotFree:    "free",
+	storage.SlotQueued:  "queued",
+	storage.SlotActive:  "active",
+	storage.SlotClosing: "closing",
+}
+
+// poolPollInterval mirrors liveTreePollInterval (fblocktree.go) — same
+// 500ms cadence, chosen so ContentSize/TOCSize actually track a filling
+// segment's continuous growth between Pool's own discrete
+// reserve/promote/release transitions, not just at those transitions.
+const poolPollInterval = 500 * time.Millisecond
+
+// buildPoolPushMessage assembles storageID's current pool snapshot via
+// unit.PoolSlots(). ok is false if PoolSlots itself errored (the encode-
+// header-for-current-sizes step failing on an already-open, already-valid
+// Storage would be a near-impossible params-corruption case; skipping this
+// tick rather than tearing down the whole WS connection over it).
+func buildPoolPushMessage(storageID string, unit *storage.Unit) (poolPushMessage, bool) {
+	slots, err := unit.PoolSlots()
+	if err != nil {
+		return poolPushMessage{}, false
 	}
-	return n
-}
-
-// livePushMessage reports fcontainer tree growth for a storage whose shared
-// segment is still being recorded (not yet written to disk — see
-// internal/farcd's periodic ticker, the only publisher). One storage's
-// fcontainer commonly covers several channels at once (docs/docs/archive/
-// adr/014-channel-registry.md), so this is deliberately not scoped to any
-// one channel. Nodes is the delta since the subscriber's last-seen Total
-// (the fblock-live page's own cursor); Total is the new cursor to pass as
-// `since` on the next tick. A client that wants these must also set
-// subscribeMessage.LiveStorages, since live progress is meaningless
-// unscoped to a storage.
-type livePushMessage struct {
-	Type              string     `json:"type"` // "live"
-	Storage           string     `json:"storage"`
-	Total             int        `json:"total"`
-	ContentBytes      uint64     `json:"content_bytes"`
-	EstimatedTocBytes uint64     `json:"estimated_toc_bytes"`
-	Nodes             []liveNode `json:"nodes"`
+	msg := poolPushMessage{Type: "pool", Storage: storageID, Slots: make([]poolSlotMessage, len(slots))}
+	for i, sl := range slots {
+		msg.Slots[i] = poolSlotMessage{
+			State:       poolSlotStateNames[sl.State],
+			Index:       sl.Index,
+			HasIndex:    sl.HasIndex,
+			PrologSize:  sl.PrologSize,
+			CatalogSize: sl.CatalogSize,
+			ContentSize: sl.ContentSize,
+			TOCSize:     sl.TOCSize,
+			EpilogSize:  sl.EpilogSize,
+		}
+	}
+	return msg, true
 }
 
 // EventChannelCreated/EventChannelRemoved are JournalEvent's Name values for
@@ -146,17 +159,27 @@ type livePushMessage struct {
 // own doc comment) -- Begin is set for Started, End for Stopped, never both.
 //
 // EventTriggerFired fires when POST /channels/{id}/events is received.
+//
+// EventChannelRTSPConnected/EventChannelRTSPDisconnected fire on
+// ChannelIngest's actual RTSP-connection-state transition
+// (internal/ingest/channelingest.go's setConnected, driven by Run's
+// reconnect loop) -- connected once Play succeeds, disconnected when a
+// session ends with a real error and Run is about to retry. Deliberately
+// not fired on a deliberate channel stop/removal (ctx cancellation), only
+// on genuine connectivity loss/recovery.
 const (
-	EventChannelCreated        = "channel.created"
-	EventChannelRemoved        = "channel.removed"
-	EventFblockCreated         = "fblock.created"
-	EventFblockReady           = "fblock.ready"
-	EventFblockDeleted         = "fblock.deleted"
-	EventRecordingStarted      = "channel.recording.started"
-	EventRecordingStopped      = "channel.recording.stopped"
-	EventRecordingCommandStart = "channel.recording.command.start"
-	EventRecordingCommandStop  = "channel.recording.command.stop"
-	EventTriggerFired          = "channel.trigger.fired"
+	EventChannelCreated          = "channel.created"
+	EventChannelRemoved          = "channel.removed"
+	EventFblockCreated           = "fblock.created"
+	EventFblockReady             = "fblock.ready"
+	EventFblockDeleted           = "fblock.deleted"
+	EventRecordingStarted        = "channel.recording.started"
+	EventRecordingStopped        = "channel.recording.stopped"
+	EventRecordingCommandStart   = "channel.recording.command.start"
+	EventRecordingCommandStop    = "channel.recording.command.stop"
+	EventTriggerFired            = "channel.trigger.fired"
+	EventChannelRTSPConnected    = "channel.rtsp.connected"
+	EventChannelRTSPDisconnected = "channel.rtsp.disconnected"
 )
 
 // JournalEvent is one journal-worthy event, delivered to every "global"
@@ -193,7 +216,6 @@ type EventPushServer struct {
 
 	mu         sync.Mutex
 	globalSubs map[chan JournalEvent]struct{}
-	liveSubs   map[chan livePushMessage]struct{}
 }
 
 // NewEventPushServer creates a WS push server over reg. CheckOrigin always
@@ -204,7 +226,6 @@ func NewEventPushServer(reg *StorageRegistry) *EventPushServer {
 		reg:        reg,
 		upgrader:   websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
 		globalSubs: make(map[chan JournalEvent]struct{}),
-		liveSubs:   make(map[chan livePushMessage]struct{}),
 	}
 }
 
@@ -264,10 +285,33 @@ func (p *EventPushServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	closed := watchDisconnect(conn)
 
+	// tick stays nil (a select on it blocks forever) unless IncludePool --
+	// ordinary Journal/UI clients pay nothing for the extra case, same
+	// convention as IncludeTOC.
+	var tick <-chan time.Time
+	if sub.IncludePool {
+		if msg, ok := buildPoolPushMessage(sub.Storage, unit); ok {
+			if err := conn.WriteJSON(msg); err != nil {
+				return
+			}
+		}
+		ticker := time.NewTicker(poolPollInterval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
+
 	for {
 		select {
 		case <-closed:
 			return
+		case <-tick:
+			msg, ok := buildPoolPushMessage(sub.Storage, unit)
+			if !ok {
+				continue
+			}
+			if err := conn.WriteJSON(msg); err != nil {
+				return
+			}
 		case ev, ok := <-events:
 			if !ok {
 				return
@@ -283,6 +327,15 @@ func (p *EventPushServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
+			if sub.IncludeTOC && ev.Name == storage.EventFblockWriteCompleted {
+				tocMsg, ok := buildTOCPushMessageForUnit(unit, sub.Storage, ev.Index, ev.UUID)
+				if ok {
+					err := conn.WriteJSON(tocMsg)
+					if err != nil {
+						return
+					}
+				}
+			}
 		}
 	}
 }
@@ -297,25 +350,14 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 	for _, n := range sub.Want {
 		want[n] = true
 	}
-	// liveStorages scopes livePushMessage delivery only -- classic events
-	// stay unfiltered by storage, matching pre-existing behavior; live
-	// progress is meaningless unscoped (see livePushMessage's doc comment),
-	// so an empty set here means "no live messages", not "all of them".
-	liveStorages := make(map[string]bool, len(sub.LiveStorages))
-	for _, s := range sub.LiveStorages {
-		liveStorages[s] = true
-	}
 
 	events := make(chan JournalEvent, 64)
-	live := make(chan livePushMessage, 64)
 	p.mu.Lock()
 	p.globalSubs[events] = struct{}{}
-	p.liveSubs[live] = struct{}{}
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		delete(p.globalSubs, events)
-		delete(p.liveSubs, live)
 		p.mu.Unlock()
 	}()
 
@@ -347,59 +389,6 @@ func (p *EventPushServer) serveGlobal(conn *websocket.Conn, sub subscribeMessage
 					}
 				}
 			}
-		case lv := <-live:
-			if !liveStorages[lv.Storage] {
-				continue
-			}
-			err := conn.WriteJSON(lv)
-			if err != nil {
-				return
-			}
-		}
-	}
-}
-
-// PublishLiveProgress builds a livePushMessage from elems -- a live
-// fcontainer snapshot delta for storageID's shared segment, as returned by
-// internal/ingest.IngestManager.LiveElementsSinceStorage -- and fans it out
-// via PublishLive. firstID is the absolute (Filler creation-order) id of
-// elems[0], i.e. the cursor internal/farcd's periodic ticker passed to
-// LiveElementsSinceStorage, so each element's true id can be recovered as
-// firstID+i. Keeping liveNode/livePushMessage's wire shape unexported (this
-// is the one exported entry point for producing them) means farcd never has
-// to import mediatree's role/type stringification or the value/size
-// decoding this package already implements for the finalized-tree endpoint.
-//
-// contentBytes is the segment's total encoded content size so far
-// (Filler.ContentBytes, via LiveElementsSinceStorage). EstimatedTocBytes is
-// computed here, not passed in, by reusing toc.ComputeOffsets against the
-// current node count total -- an exact prediction of the eventual TOC
-// section size *if* the segment stopped growing right now (the fblock-live
-// page's fill bar treats it as a live estimate, since more nodes may still
-// arrive).
-func (p *EventPushServer) PublishLiveProgress(storageID string, total int, contentBytes int, elems []mediatree.Element, firstID uint32) {
-	nodes := make([]liveNode, len(elems))
-	for i, e := range elems {
-		nodes[i] = liveNodeFromElement(firstID+uint32(i), e)
-	}
-	estimatedTocBytes := uint64(toc.ComputeOffsets(uint32(total)).Total)
-	p.PublishLive(livePushMessage{
-		Type: "live", Storage: storageID, Total: total,
-		ContentBytes: uint64(contentBytes), EstimatedTocBytes: estimatedTocBytes, Nodes: nodes,
-	})
-}
-
-// PublishLive fans msg out to every current global subscriber whose
-// subscribeMessage.LiveStorages includes msg.Storage, non-blocking (same
-// drop-if-slow policy as Publish) -- internal/farcd's periodic live-progress
-// ticker is the only caller.
-func (p *EventPushServer) PublishLive(msg livePushMessage) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for ch := range p.liveSubs {
-		select {
-		case ch <- msg:
-		default:
 		}
 	}
 }
@@ -421,6 +410,14 @@ func (p *EventPushServer) buildTOCPushMessage(ev JournalEvent) (tocPushMessage, 
 	}
 	var uuid [16]byte
 	copy(uuid[:], uuidBytes)
+	return buildTOCPushMessageForUnit(unit, ev.Storage, ev.Index, uuid)
+}
+
+// buildTOCPushMessageForUnit is buildTOCPushMessage's shared core, taking an
+// already-resolved unit and a decoded uuid directly -- the per-storage
+// ServeHTTP loop has both in hand already (storage.Event.UUID is [16]byte,
+// no hex round trip needed), unlike serveGlobal's JournalEvent.UUID string.
+func buildTOCPushMessageForUnit(unit *storage.Unit, storageID string, index uint32, uuid [16]byte) (tocPushMessage, bool) {
 	columns, err := unit.ReadTOC(uuid)
 	if err != nil {
 		return tocPushMessage{}, false
@@ -429,7 +426,7 @@ func (p *EventPushServer) buildTOCPushMessage(ev JournalEvent) (tocPushMessage, 
 	if err != nil {
 		return tocPushMessage{}, false
 	}
-	return tocPushMessage{Type: "toc", Storage: ev.Storage, Index: ev.Index, UUID: ev.UUID, TOC: buf}, true
+	return tocPushMessage{Type: "toc", Storage: storageID, Index: index, UUID: hex.EncodeToString(uuid[:]), TOC: buf}, true
 }
 
 // Publish fans evt out to every current global subscriber, non-blocking — a

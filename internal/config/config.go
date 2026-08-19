@@ -135,6 +135,34 @@ type Config struct {
 	Metrics  Addr      `json:"-"`
 	Storages []Storage `json:"storages"`
 	Channels []Channel `json:"channels"`
+
+	// LogDir is FARC_LOG_DIR: a directory farcd additionally writes its own
+	// log lines to (farcd.log), alongside stderr. Optional -- empty means
+	// stderr only, matching the process's behavior before this field existed.
+	LogDir string `json:"-"`
+
+	// StoragePool{Size,WarningAt,BackpressureAt} are FARC_STORAGE_POOL_SIZE/
+	// _WARNING_AT/_BACKPRESSURE_AT: the buffer-pool occupancy thresholds
+	// backing storage.PoolTuning (an operational, per-process tuning knob,
+	// not site-specific topology, hence env rather than the JSON file — same
+	// reasoning as HTTP/WS/Metrics above). Left as plain ints rather than
+	// storage.PoolTuning directly, matching this package's stdlib-only
+	// dependency rule (see package doc) -- internal/farcd, which already
+	// depends on both packages, does the int->storage.PoolTuning translation.
+	// 0 (unset) means "let storage.DefaultPoolTuning() decide", exactly like
+	// storage.PoolTuning's own zero-field convention -- not rejected here.
+	StoragePoolSize           int `json:"-"`
+	StoragePoolWarningAt      int `json:"-"`
+	StoragePoolBackpressureAt int `json:"-"`
+
+	// StorageBackend is FARC_STORAGE_BACKEND: selects internal/ioengine's
+	// Backend implementation ("direct"/"standard"/"" for the platform
+	// default) used to open every configured Storage. An operational tuning
+	// knob like the pool thresholds above, not site-specific topology --
+	// exists for filesystems without O_DIRECT support and for tests that
+	// need farcd to agree with a fixture written via ioengine.OpenStandard
+	// (ioengine.Options' own doc comment already names both use cases).
+	StorageBackend string `json:"-"`
 }
 
 // Save serializes cfg's JSON-backed fields (Storages/Channels — HTTP/WS/
@@ -227,6 +255,23 @@ func loadEnv(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+
+	cfg.LogDir = os.Getenv("FARC_LOG_DIR")
+
+	cfg.StoragePoolSize, err = envInt("FARC_STORAGE_POOL_SIZE")
+	if err != nil {
+		return err
+	}
+	cfg.StoragePoolWarningAt, err = envInt("FARC_STORAGE_POOL_WARNING_AT")
+	if err != nil {
+		return err
+	}
+	cfg.StoragePoolBackpressureAt, err = envInt("FARC_STORAGE_POOL_BACKPRESSURE_AT")
+	if err != nil {
+		return err
+	}
+
+	cfg.StorageBackend = os.Getenv("FARC_STORAGE_BACKEND")
 
 	return nil
 }

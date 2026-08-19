@@ -6,22 +6,37 @@ import (
 	"strconv"
 	"strings"
 
-	"traycers/farc/internal/storage"
-	"traycers/farc/toc"
+	"github.com/gorilla/mux"
+
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/toc"
 )
 
 func (s *HttpApiServer) resolveUnitAndUUID(w http.ResponseWriter, r *http.Request) (*storage.Unit, [16]byte, bool) {
-	unit, ok := s.reg.Get(r.PathValue("id"))
+	unit, _, ok := s.resolveUnit(w, r)
 	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", r.PathValue("id")))
 		return nil, [16]byte{}, false
 	}
-	uuid, err := parseUUID(r.PathValue("uuid"))
+	uuid, err := parseUUID(mux.Vars(r)["uuid"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return nil, [16]byte{}, false
 	}
 	return unit, uuid, true
+}
+
+// resolveUnit resolves the {id} path variable to its registered Storage, or
+// writes a 404 and returns ok=false. Shared by every handler that only
+// needs a plain storage lookup (no fcontainer uuid alongside it, unlike
+// resolveUnitAndUUID above).
+func (s *HttpApiServer) resolveUnit(w http.ResponseWriter, r *http.Request) (*storage.Unit, string, bool) {
+	id := mux.Vars(r)["id"]
+	unit, ok := s.reg.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))
+		return nil, id, false
+	}
+	return unit, id, true
 }
 
 // handleReadTOC serves a fcontainer's TOC section, re-encoded from the

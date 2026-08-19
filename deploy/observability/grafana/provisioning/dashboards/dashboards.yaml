@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: farc
+    orgId: 1
+    folder: farc
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

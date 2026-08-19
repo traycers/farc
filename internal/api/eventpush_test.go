@@ -10,9 +10,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"traycers/farc/internal/storage"
-	"traycers/farc/mediatree"
-	"traycers/farc/toc"
+	"github.com/traycers/farc/internal/storage"
+	"github.com/traycers/farc/toc"
 )
 
 func dialWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
@@ -59,6 +58,80 @@ func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 	}
 	if msg.Type != "event" || msg.Name != storage.EventFblockWriteCompleted || msg.Index != 3 {
 		t.Fatalf("msg = %+v", msg)
+	}
+}
+
+// TestEventPushServer_PerStorageIncludePool exercises the pool-status-list
+// live transport (.scratch/fblocks-ui/issues/04-pool-status-list-plan.md,
+// design point 5 / spec.md item 13): a per-storage subscriber that sets
+// IncludePool gets a "pool" frame with one row per PoolTuning.Size slot,
+// without waiting for any storage.Event.
+func TestEventPushServer_PerStorageIncludePool(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err = conn.WriteJSON(subscribeMessage{Storage: "s1", IncludePool: true})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg poolPushMessage
+	err = conn.ReadJSON(&msg)
+	if err != nil {
+		t.Fatalf("read pool push: %v", err)
+	}
+	if msg.Type != "pool" {
+		t.Fatalf("msg.Type = %q, want %q", msg.Type, "pool")
+	}
+	if msg.Storage != "s1" {
+		t.Fatalf("msg.Storage = %q, want %q", msg.Storage, "s1")
+	}
+	if len(msg.Slots) == 0 {
+		t.Fatal("msg.Slots is empty, want one row per PoolTuning.Size slot")
+	}
+	for i, sl := range msg.Slots {
+		if sl.State != "free" {
+			t.Fatalf("slot %d state = %q, want %q (nothing reserved yet)", i, sl.State, "free")
+		}
+	}
+}
+
+// TestEventPushServer_PerStorageWithoutIncludePool verifies IncludePool's
+// default-false behavior: no "pool" frame (nor the ticker that would
+// produce one) is ever sent to a subscriber that didn't opt in.
+func TestEventPushServer_PerStorageWithoutIncludePool(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err = conn.WriteJSON(subscribeMessage{Storage: "s1"})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	var extra poolPushMessage
+	err = conn.ReadJSON(&extra)
+	if err == nil {
+		t.Fatalf("unexpected pool frame without IncludePool: %+v", extra)
 	}
 }
 
@@ -406,6 +479,111 @@ func TestEventPushServer_GlobalIncludeTOC(t *testing.T) {
 	}
 }
 
+// TestEventPushServer_PerStorageIncludeTOC mirrors
+// TestEventPushServer_GlobalIncludeTOC for a per-storage subscription
+// (Storage: "s1") -- hls_server's EventSubscriber uses exactly this
+// subscription shape (channel-filtered, not global), and today it gets no
+// "toc" frame at all regardless of IncludeTOC (issue
+// .scratch/hls-toc-bootstrap/issues/01-toc-via-ws-push.md's scope
+// correction: IncludeTOC was only ever wired into serveGlobal).
+func TestEventPushServer_PerStorageIncludeTOC(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err = conn.WriteJSON(subscribeMessage{Storage: "s1", IncludeTOC: true, Want: []string{storage.EventFblockWriteCompleted}})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// A real write, not a synthetic Notify().Publish -- WriteFcontainer
+	// itself fires the real fblock.write.completed event via u.Notify(),
+	// which the per-storage loop (already subscribed above) picks up live.
+	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "framedata", 150, 1000)
+	idx, ok := u.ResolveUUID(uuid)
+	if !ok {
+		t.Fatal("ResolveUUID: fblock just written not found")
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var evMsg pushMessage
+	err = conn.ReadJSON(&evMsg)
+	if err != nil {
+		t.Fatalf("read event frame: %v", err)
+	}
+	if evMsg.Type != "event" || evMsg.Name != storage.EventFblockWriteCompleted || evMsg.Index != idx {
+		t.Fatalf("event frame = %+v", evMsg)
+	}
+
+	var tocMsg tocPushMessage
+	err = conn.ReadJSON(&tocMsg)
+	if err != nil {
+		t.Fatalf("read toc frame: %v", err)
+	}
+	if tocMsg.Type != "toc" || tocMsg.Storage != "s1" || tocMsg.Index != idx || tocMsg.UUID != hex.EncodeToString(uuid[:]) {
+		t.Fatalf("toc frame = %+v", tocMsg)
+	}
+	if len(tocMsg.TOC) == 0 {
+		t.Fatal("toc frame carries no bytes")
+	}
+	columns, err := toc.Decode(tocMsg.TOC)
+	if err != nil {
+		t.Fatalf("decode pushed toc: %v", err)
+	}
+	if columns.N == 0 {
+		t.Fatal("decoded toc has no rows")
+	}
+}
+
+// TestEventPushServer_PerStorageWithoutIncludeTOC mirrors
+// TestEventPushServer_GlobalWithoutIncludeTOC for a per-storage
+// subscription: the existing default-false behavior
+// (TestEventPushServer_ForwardsMatchingEvent) must keep holding once the
+// per-storage loop starts checking sub.IncludeTOC at all.
+func TestEventPushServer_PerStorageWithoutIncludeTOC(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("s1", u, "s1.img", "")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	push := NewEventPushServer(reg)
+	s := NewHttpApiServer(reg, nil, push)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialWS(t, srv)
+	err = conn.WriteJSON(subscribeMessage{Storage: "s1", Want: []string{storage.EventFblockWriteCompleted}})
+	if err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	_ = writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "framedata", 150, 1000)
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var evMsg pushMessage
+	if err := conn.ReadJSON(&evMsg); err != nil {
+		t.Fatalf("read event frame: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var extra pushMessage
+	err = conn.ReadJSON(&extra)
+	if err == nil {
+		t.Fatalf("unexpected second frame without IncludeTOC: %+v", extra)
+	}
+}
+
 // TestEventPushServer_GlobalWithoutIncludeTOC verifies IncludeTOC's default
 // (false) still suppresses the "toc" frame -- ordinary Journal/UI clients
 // must never pay for a payload they didn't ask for.
@@ -443,166 +621,5 @@ func TestEventPushServer_GlobalWithoutIncludeTOC(t *testing.T) {
 	err = conn.ReadJSON(&extra)
 	if err == nil {
 		t.Fatalf("unexpected second frame without IncludeTOC: %+v", extra)
-	}
-}
-
-func TestLiveNodeFromElement(t *testing.T) {
-	scalar := mediatree.Element{Type: mediatree.TypeUint32, Role: mediatree.RoleChannel, Parent: 1, Value: []byte{1, 0, 0, 0}}
-	n := liveNodeFromElement(5, scalar)
-	if n.ID != 5 || n.Role != "channel" || n.Type != "uint32" || n.Parent != 1 {
-		t.Fatalf("liveNodeFromElement(scalar) = %+v", n)
-	}
-	if v, ok := n.Value.(uint32); !ok || v != 1 {
-		t.Fatalf("Value = %#v, want uint32(1)", n.Value)
-	}
-	if n.Size != 0 {
-		t.Fatalf("Size = %d, want 0 for a scalar node", n.Size)
-	}
-
-	bytesNode := mediatree.Element{Type: mediatree.TypeBytes, Role: mediatree.RoleFrameDataVideo, Parent: 3, Value: []byte("hello")}
-	n2 := liveNodeFromElement(6, bytesNode)
-	if n2.Value != nil {
-		t.Fatalf("Value = %#v, want nil for a bytes node", n2.Value)
-	}
-	if n2.Size != 5 {
-		t.Fatalf("Size = %d, want 5", n2.Size)
-	}
-
-	voidNode := mediatree.Element{Type: mediatree.TypeVoid, Role: mediatree.RoleChannels, Parent: 0}
-	n3 := liveNodeFromElement(1, voidNode)
-	if n3.Value != nil || n3.Size != 0 {
-		t.Fatalf("liveNodeFromElement(void) = %+v, want no value/size", n3)
-	}
-}
-
-// TestEventPushServer_GlobalPublishLive_DeliveredWhenStorageSubscribed
-// exercises the fblock-live page's other WS mechanism: a global subscriber
-// that lists storage "s1" in subscribeMessage.LiveStorages receives a
-// "live" frame PublishLive sends for that storage.
-func TestEventPushServer_GlobalPublishLive_DeliveredWhenStorageSubscribed(t *testing.T) {
-	reg := NewStorageRegistry()
-	push := NewEventPushServer(reg)
-	s := NewHttpApiServer(reg, nil, push)
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	conn := dialWS(t, srv)
-	err := conn.WriteJSON(subscribeMessage{Storage: "", LiveStorages: []string{"s1"}})
-	if err != nil {
-		t.Fatalf("write subscribe: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	push.PublishLive(livePushMessage{
-		Type: "live", Storage: "s1", Total: 3,
-		Nodes: []liveNode{{ID: 0, Role: "root", Type: "void"}},
-	})
-
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var msg livePushMessage
-	if err := conn.ReadJSON(&msg); err != nil {
-		t.Fatalf("read live frame: %v", err)
-	}
-	if msg.Type != "live" || msg.Storage != "s1" || msg.Total != 3 || len(msg.Nodes) != 1 {
-		t.Fatalf("live frame = %+v", msg)
-	}
-}
-
-// TestEventPushServer_PublishLiveProgress_ComputesContentBytesAndTocEstimate
-// verifies PublishLiveProgress forwards contentBytes verbatim and computes
-// EstimatedTocBytes from total via the real toc.ComputeOffsets formula (not
-// a hand-rolled approximation) -- the two numbers the fblock-live page's
-// fill bar reads.
-func TestEventPushServer_PublishLiveProgress_ComputesContentBytesAndTocEstimate(t *testing.T) {
-	reg := NewStorageRegistry()
-	push := NewEventPushServer(reg)
-	s := NewHttpApiServer(reg, nil, push)
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	conn := dialWS(t, srv)
-	err := conn.WriteJSON(subscribeMessage{Storage: "", LiveStorages: []string{"s1"}})
-	if err != nil {
-		t.Fatalf("write subscribe: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	elems := []mediatree.Element{
-		{Type: mediatree.TypeVoid, Role: mediatree.RoleRoot},
-		{Type: mediatree.TypeUint32, Role: mediatree.RoleChannel, Value: []byte{1, 0, 0, 0}},
-	}
-	const total = 5 // pretend 3 earlier elements were already delivered
-	const contentBytes = 12345
-	push.PublishLiveProgress("s1", total, contentBytes, elems, 3)
-
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var msg livePushMessage
-	if err := conn.ReadJSON(&msg); err != nil {
-		t.Fatalf("read live frame: %v", err)
-	}
-	if msg.ContentBytes != contentBytes {
-		t.Fatalf("ContentBytes = %d, want %d", msg.ContentBytes, contentBytes)
-	}
-	want := uint64(toc.ComputeOffsets(total).Total)
-	if msg.EstimatedTocBytes != want {
-		t.Fatalf("EstimatedTocBytes = %d, want %d (toc.ComputeOffsets(%d).Total)", msg.EstimatedTocBytes, want, total)
-	}
-	if len(msg.Nodes) != len(elems) || msg.Nodes[0].ID != 3 || msg.Nodes[1].ID != 4 {
-		t.Fatalf("Nodes = %+v, want ids starting at firstID=3", msg.Nodes)
-	}
-}
-
-// TestEventPushServer_GlobalPublishLive_FiltersOtherStorages verifies a
-// subscriber only sees live progress for storages it actually listed.
-func TestEventPushServer_GlobalPublishLive_FiltersOtherStorages(t *testing.T) {
-	reg := NewStorageRegistry()
-	push := NewEventPushServer(reg)
-	s := NewHttpApiServer(reg, nil, push)
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	conn := dialWS(t, srv)
-	err := conn.WriteJSON(subscribeMessage{Storage: "", LiveStorages: []string{"s1"}})
-	if err != nil {
-		t.Fatalf("write subscribe: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	push.PublishLive(livePushMessage{Type: "live", Storage: "s2", Total: 1})
-
-	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	var msg livePushMessage
-	err = conn.ReadJSON(&msg)
-	if err == nil {
-		t.Fatalf("unexpected live frame for unsubscribed storage: %+v", msg)
-	}
-}
-
-// TestEventPushServer_GlobalPublishLive_RequiresLiveStoragesSubscription
-// verifies that omitting LiveStorages entirely (the ordinary Journal/UI
-// subscription today) suppresses live progress altogether, not just for
-// unlisted storages -- see livePushMessage's own doc comment: unscoped
-// delivery would be meaningless.
-func TestEventPushServer_GlobalPublishLive_RequiresLiveStoragesSubscription(t *testing.T) {
-	reg := NewStorageRegistry()
-	push := NewEventPushServer(reg)
-	s := NewHttpApiServer(reg, nil, push)
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	conn := dialWS(t, srv)
-	err := conn.WriteJSON(subscribeMessage{Storage: ""})
-	if err != nil {
-		t.Fatalf("write subscribe: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	push.PublishLive(livePushMessage{Type: "live", Storage: "s1", Total: 1})
-
-	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	var msg livePushMessage
-	err = conn.ReadJSON(&msg)
-	if err == nil {
-		t.Fatalf("unexpected live frame without a LiveStorages subscription: %+v", msg)
 	}
 }

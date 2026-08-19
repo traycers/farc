@@ -1,7 +1,7 @@
 package main
 
 import (
-	"traycers/farc/cmd/msm_server/commands"
+	"github.com/traycers/farc/cmd/msm_server/commands"
 )
 
 func main() {

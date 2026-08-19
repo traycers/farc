@@ -29,6 +29,8 @@ services:
     environment:
       HLS_SERVER_HTTP_IP: "0.0.0.0"
       HLS_SERVER_HTTP_PORT: "8090"
+      HLS_SERVER_METRICS_IP: "0.0.0.0"
+      HLS_SERVER_METRICS_PORT: "9091"
       HLS_SERVER_FARC_HTTP: "http://farc:8080"
       HLS_SERVER_FARC_WS: "ws://farc:8081"
       HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
@@ -70,9 +72,56 @@ services:
       - hls_server
     restart: unless-stopped
 
+  # Observability stack (.scratch/observability/spec.md) -- always on, not
+  # an opt-in profile like s3 above: scrapes farc/hls_server(/msm_server)'s
+  # /metrics, ships every container's stdout/stderr into Loki, and serves
+  # three pre-built Grafana dashboards. References only public upstream
+  # images, so there's nothing to template here.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.9
+    volumes:
+      - loki_data:/loki
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.9
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
 volumes:
   farc_config:
   farc_data:
   hls_config:
   hls_cache:
   seaweedfs_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:

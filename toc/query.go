@@ -1,9 +1,10 @@
 package toc
 
 import (
+	"encoding/binary"
 	"sort"
 
-	"traycers/farc/mediatree"
+	"github.com/traycers/farc/mediatree"
 )
 
 // SubtreeRange returns [start, end) — the contiguous range of positions
@@ -17,6 +18,26 @@ func SubtreeRange(c *Columns, k uint32) (start, end uint32) {
 		end++
 	}
 	return k, end
+}
+
+// Children returns the ids of node parentID's direct children, in DFS
+// preorder (docs/docs/archive/06-toc-format.md §5) — the toc.Columns
+// analogue of mediatree.Children, which instead operates on the
+// pre-reorder, creation-order []Element representation. Bounded to
+// parentID's own SubtreeRange: DFS preorder guarantees Parent[i] < i for
+// every i, so no id outside [parentID+1, end) can be a child of parentID
+// (it would have to appear before parentID itself), and every actual
+// child's whole subtree is nested inside that range by SubtreeRange's own
+// definition — so the scan is both sound and complete.
+func Children(c *Columns, parentID uint32) []uint32 {
+	_, end := SubtreeRange(c, parentID)
+	var kids []uint32
+	for i := parentID + 1; i < end; i++ {
+		if c.Parent[i] == parentID {
+			kids = append(kids, i)
+		}
+	}
+	return kids
 }
 
 // IsAncestor reports whether a is an ancestor of b (or a == b), walking the
@@ -130,6 +151,50 @@ func InlineValue(c *Columns, i uint32) ([]byte, bool) {
 		return nil, false
 	}
 	return unpackInline(c.ValueOrOffset[i], fixedSize), true
+}
+
+// ChannelNode finds the RoleChannel node whose inline uint32 value is
+// channel, within c's own row-index space (ADR-014: channel counts per
+// fcontainer are small, so a linear scan over ScanByRole's result is
+// cheap). Was independently reimplemented in internal/api, internal/
+// tocindex, internal/segment, internal/playlist, and internal/vaablocks
+// before being promoted here.
+func ChannelNode(c *Columns, channel uint16) (uint32, bool) {
+	for _, id := range ScanByRole(c, mediatree.RoleChannel) {
+		v, ok := InlineValue(c, id)
+		if ok && len(v) == 4 && binary.LittleEndian.Uint32(v) == uint32(channel) {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// ChildByRole scans parentID's own subtree range for a direct child
+// (Parent == parentID) with the given role — Columns has no ready-made
+// equivalent of mediatree.FindChildByRole (that helper works on
+// []Element, the pre-reorder write-time representation, not this
+// post-reorder Columns).
+func ChildByRole(c *Columns, parentID uint32, role mediatree.Role) (uint32, bool) {
+	_, end := SubtreeRange(c, parentID)
+	for i := parentID + 1; i < end; i++ {
+		if c.Parent[i] == parentID && c.Role[i] == role {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// ChannelSubtreeRange resolves channel's node via ChannelNode and returns
+// its own SubtreeRange -- the common "find this channel, then look at
+// everything under it" starting point shared by every caller that walks a
+// single channel's frames/streams/configs.
+func ChannelSubtreeRange(c *Columns, channel uint16) (start, end uint32, ok bool) {
+	id, found := ChannelNode(c, channel)
+	if !found {
+		return 0, 0, false
+	}
+	start, end = SubtreeRange(c, id)
+	return start, end, true
 }
 
 // ContentOffset returns the byte offset into Content where node i's value

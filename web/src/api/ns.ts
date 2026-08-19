@@ -13,47 +13,19 @@ export type Candidate = {
 
 type RawCandidate = { index: number; uuid: string; begin: string; end: string }
 
-// Quotes the (known-position) begin/end integer literals before handing the
-// text to JSON.parse, which would otherwise coerce them through a float64
-// and lose precision -- the native parser has no bigint mode.
+// Quotes every occurrence of the named integer fields before handing text to
+// JSON.parse, which would otherwise coerce them through a float64 and lose
+// precision -- the native parser has no bigint mode. Field-name based (not
+// depth-based), so it works unchanged on any nesting shape.
+export function quoteBigintFields(text: string, fields: readonly string[]): string {
+  const pattern = new RegExp(`"(${fields.join('|')})":(\\d+)`, 'g')
+  return text.replace(pattern, '"$1":"$2"')
+}
+
 export function parseCandidatesJSON(text: string): Candidate[] {
-  const quoted = text.replace(/"(begin|end)":(\d+)/g, '"$1":"$2"')
+  const quoted = quoteBigintFields(text, ['begin', 'end'])
   const raw = JSON.parse(quoted) as RawCandidate[]
   return raw.map((c) => ({ index: c.index, uuid: c.uuid, begin: BigInt(c.begin), end: BigInt(c.end) }))
-}
-
-// Mirrors internal/api/fblocks.go's fblockInfo -- uuid/begin/end/channels
-// are only present once state is "ready".
-export type FblockInfo = {
-  index: number
-  state: string
-  uuid?: string
-  begin?: bigint
-  end?: bigint
-  protected: boolean
-  channels?: number[]
-}
-
-type RawFblockInfo = Omit<FblockInfo, 'begin' | 'end'> & { begin?: string; end?: string }
-
-export type FblockListPage = {
-  total: number
-  fblocks: FblockInfo[]
-}
-
-// Same bigint-precision problem as parseCandidatesJSON, same fix. Mirrors
-// internal/api/fblocks.go's fblockListResponse envelope: {total, fblocks}.
-export function parseFblocksJSON(text: string): FblockListPage {
-  const quoted = text.replace(/"(begin|end)":(\d+)/g, '"$1":"$2"')
-  const raw = JSON.parse(quoted) as { total: number; fblocks: RawFblockInfo[] }
-  return {
-    total: raw.total,
-    fblocks: raw.fblocks.map((r) => ({
-      ...r,
-      begin: r.begin !== undefined ? BigInt(r.begin) : undefined,
-      end: r.end !== undefined ? BigInt(r.end) : undefined,
-    })),
-  }
 }
 
 export function nsFromDate(d: Date): bigint {
@@ -83,4 +55,14 @@ export function nsToDisplayString(ns: bigint): string {
   const d = nsToDate(ns)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+// Microsecond-precision sibling of nsToDisplayString, for contexts where
+// second granularity isn't enough to tell two events apart (e.g. two frames
+// in the fblock tree, .scratch/fblocks-ui/issues/12-tree-codec-frame-kind-
+// and-precise-time.md) -- Date only has millisecond resolution, so the
+// microseconds come from the raw ns remainder, not from a Date field.
+export function nsToDisplayStringPrecise(ns: bigint): string {
+  const micros = (ns % 1_000_000_000n) / 1_000n
+  return `${nsToDisplayString(ns)}.${micros.toString().padStart(6, '0')}`
 }

@@ -2,13 +2,14 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
-	"traycers/farc/fblock"
-	"traycers/farc/internal/index"
-	"traycers/farc/internal/ioengine"
-	"traycers/farc/internal/storageengine"
+	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/index"
+	"github.com/traycers/farc/internal/ioengine"
+	"github.com/traycers/farc/internal/storageengine"
 )
 
 // DefaultBadRatioThreshold is HealthMonitor's default bad-fblock-ratio
@@ -36,11 +37,7 @@ type Unit struct {
 	mgr    *index.Manager
 	notify *NotificationBus
 	health *HealthMonitor
-
-	// writeMu serializes WriteFcontainer calls — Recorder is documented as
-	// single-writer per Storage (02-storage.md §0), so only one
-	// select-index/build-header/write sequence runs at a time.
-	writeMu sync.Mutex
+	pool   *Pool
 
 	// params is read under paramsMu since a future operator API may mutate
 	// write_mode/retention.days at runtime (SetWriteMode/SetRetentionDays
@@ -52,7 +49,7 @@ type Unit struct {
 	writeSeq atomic.Uint64
 }
 
-func newUnit(backend ioengine.Backend, geo Geometry, params fblock.Params, mgr *index.Manager, catalogPath string, tuning EngineTuning, lastWriteSequence uint64) *Unit {
+func newUnit(backend ioengine.Backend, geo Geometry, params fblock.Params, mgr *index.Manager, catalogPath string, tuning EngineTuning, poolTuning PoolTuning, lastWriteSequence uint64) *Unit {
 	eng := storageengine.New(backend, engineConfig(params.FchunkSize, params.ReadChunkSize, tuning))
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -65,6 +62,7 @@ func newUnit(backend ioengine.Backend, geo Geometry, params fblock.Params, mgr *
 		engineDone:   make(chan struct{}),
 		mgr:          mgr,
 		params:       params,
+		pool:         newPool(poolTuning),
 	}
 	u.notify = NewNotificationBus()
 	u.health = NewHealthMonitor(u.notify, DefaultBadRatioThreshold)
@@ -93,24 +91,45 @@ func (u *Unit) Index() *index.Manager { return u.mgr }
 // EngineLevel and EngineQueueDepth expose StorageEngine's write-queue fill
 // state (ADR-011) for MetricsEndpoint (farc_write_queue_depth/status,
 // docs/docs/archive/02-storage.md §8) — the only Phase 10 consumer of
-// engine-internal state, so no accessor for this existed before.
+// engine-internal state, so no accessor for this existed before. Metrics
+// only, not a live behavioral signal: Pool occupancy is (CONTEXT.md's own
+// "Pool" entry) -- every write call site here waits on its own ticket
+// before enqueueing the next, so this queue's depth never realistically
+// approaches BackpressureAt in current usage.
 func (u *Unit) EngineLevel() storageengine.Level { return u.engine.Level() }
 func (u *Unit) EngineQueueDepth() int            { return u.engine.QueueDepth() }
+
+// PoolStatus reports the buffer pool's occupancy level — the backpressure
+// signal ADR-011 wiring now sources from, superseding EngineLevel.
+func (u *Unit) PoolStatus() PoolStatus { return u.pool.Status() }
+
+// PoolSlots reports one row per pool slot (.scratch/fblocks-ui/issues/
+// 04-pool-status-list-plan.md's live pool-status list), with
+// prolog/catalog/epilog filled from this Storage's *current*
+// geometry/params — Storage-wide constants, identical for every fblock at
+// this moment, computed fresh here rather than cached on Pool (which has
+// no back-reference to Unit). Encodes a throwaway header purely to learn
+// its params/catalog byte sizes, mirroring exactly what promoteLocked
+// itself computes when a segment is actually promoted.
+func (u *Unit) PoolSlots() ([]SlotStatus, error) {
+	h := &fblock.Header{Params: u.currentParams(), Catalog: u.mgr.Snapshot()}
+	_, err := fblock.EncodeHeader(h)
+	if err != nil {
+		return nil, fmt.Errorf("storage: pool slots: encode header for current sizes: %w", err)
+	}
+	defaults := SectionSizes{
+		PrologSize:  fblock.FixedPrologSize + h.Prolog.ParamsSize,
+		CatalogSize: h.Prolog.CatalogSize,
+		EpilogSize:  fblock.EpilogSize,
+	}
+	return u.pool.Slots(defaults), nil
+}
 
 func (u *Unit) currentParams() fblock.Params {
 	u.paramsMu.RLock()
 	defer u.paramsMu.RUnlock()
 	return u.params
 }
-
-// MinContainerShare returns the storage's configured minimum fcontainer
-// share (fblock/params.go's Params.MinContainerShare) — the fraction of
-// fblock_size a single fcontainer is expected to fill. Exposed publicly (a
-// symmetric counterpart to Geometry) so internal/farcd can size
-// internal/ingest's shared-segment flush target off it without reaching
-// into currentParams, which stays private since nothing else outside this
-// package needs the whole Params value.
-func (u *Unit) MinContainerShare() float64 { return u.currentParams().MinContainerShare }
 
 func (u *Unit) nextWriteSequence() uint64 {
 	return u.writeSeq.Add(1)
