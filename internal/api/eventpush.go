@@ -291,7 +291,8 @@ func (p *EventPushServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var tick <-chan time.Time
 	if sub.IncludePool {
 		if msg, ok := buildPoolPushMessage(sub.Storage, unit); ok {
-			if err := conn.WriteJSON(msg); err != nil {
+			err = conn.WriteJSON(msg)
+			if err != nil {
 				return
 			}
 		}
@@ -309,7 +310,8 @@ func (p *EventPushServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			if err := conn.WriteJSON(msg); err != nil {
+			err = conn.WriteJSON(msg)
+			if err != nil {
 				return
 			}
 		case ev, ok := <-events:

@@ -219,7 +219,8 @@ func (s *segmentImpl) promoteLocked(now uint64, occupied int) error {
 	}
 	s.handle = u.engine.EnqueueOpenWrite(int64(fblockOffset(u.geo, idx)), headerAndMagic, timeout)
 	if len(s.backlog) > 0 {
-		if err := s.handle.Append(s.backlog); err != nil {
+		err = s.handle.Append(s.backlog)
+		if err != nil {
 			return err
 		}
 		s.backlog = nil
@@ -248,7 +249,8 @@ func (s *segmentImpl) AddStreamParams(channel, stream uint32, kind fcontainer.St
 	if err != nil {
 		return 0, err
 	}
-	if err := s.pushReadyLocked(params.Time); err != nil {
+	err = s.pushReadyLocked(params.Time)
+	if err != nil {
 		return 0, err
 	}
 	return cid, nil
@@ -351,7 +353,8 @@ func (s *segmentImpl) pushReadyLocked(now uint64) error {
 	newBytes := mediatree.EncodeContent(tail)
 	s.contentLen += int64(len(newBytes))
 	if s.promoted {
-		if err := s.handle.Append(newBytes); err != nil {
+		err := s.handle.Append(newBytes)
+		if err != nil {
 			return s.failLocked(now)
 		}
 	} else {
