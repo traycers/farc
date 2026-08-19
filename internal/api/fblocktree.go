@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 
 	"github.com/traycers/farc/fblock"
@@ -153,9 +152,9 @@ func (s *HttpApiServer) handleGetFblock(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	idx64, err := strconv.ParseUint(mux.Vars(r)["index"], 10, 32)
+	idx64, err := strconv.ParseUint(r.PathValue("index"), 10, 32)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("api: invalid fblock index %q: %w", mux.Vars(r)["index"], err))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: invalid fblock index %q: %w", r.PathValue("index"), err))
 		return
 	}
 	idx := uint32(idx64)
@@ -263,9 +262,9 @@ func (s *HttpApiServer) handleFblockLiveTreeWS(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	idx64, err := strconv.ParseUint(mux.Vars(r)["index"], 10, 32)
+	idx64, err := strconv.ParseUint(r.PathValue("index"), 10, 32)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("api: invalid fblock index %q: %w", mux.Vars(r)["index"], err))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("api: invalid fblock index %q: %w", r.PathValue("index"), err))
 		return
 	}
 	idx := uint32(idx64)

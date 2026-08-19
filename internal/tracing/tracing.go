@@ -73,11 +73,11 @@ func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 // Middleware returns a net/http middleware (works on any http.Handler, not
-// just a gorilla/mux Router -- internal/farcd's WS event-feed server is a
-// bare *api.EventPushServer, not routed through mux) that, for each request,
-// carries X-Request-Id/X-Session-Id (only the ones actually present -- a
-// missing header never fabricates an id) on the request's context and logs
-// one access-log line via logf after the handler returns.
+// just a *http.ServeMux -- internal/farcd's WS event-feed server is a
+// bare *api.EventPushServer, not routed through a mux) that, for each
+// request, carries X-Request-Id/X-Session-Id (only the ones actually
+// present -- a missing header never fabricates an id) on the request's
+// context and logs one access-log line via logf after the handler returns.
 func Middleware(logf func(format string, args ...any)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

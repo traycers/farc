@@ -17,6 +17,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4/seekablebuffer"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 
 	"github.com/traycers/farc/internal/hlsclient"
 	"github.com/traycers/farc/internal/tocindex"
@@ -125,7 +126,7 @@ func BuildInit(ctx context.Context, client hlsclient.API, rec tocindex.Record, c
 	if hasVideo {
 		sps, pps := bufs[pos], bufs[pos+1]
 		pos += 2
-		tracks = append(tracks, &fmp4.InitTrack{ID: videoTrackID, TimeScale: timeScale, Codec: &fmp4.CodecH264{SPS: sps, PPS: pps}})
+		tracks = append(tracks, &fmp4.InitTrack{ID: videoTrackID, TimeScale: timeScale, Codec: &codecs.H264{SPS: sps, PPS: pps}})
 	}
 	if hasAudio {
 		asc := bufs[pos]
@@ -134,7 +135,7 @@ func BuildInit(ctx context.Context, client hlsclient.API, rec tocindex.Record, c
 		if err != nil {
 			return nil, fmt.Errorf("segment: parse AAC AudioSpecificConfig: %w", err)
 		}
-		tracks = append(tracks, &fmp4.InitTrack{ID: audioTrackID, TimeScale: timeScale, Codec: &fmp4.CodecMPEG4Audio{Config: ascCfg}})
+		tracks = append(tracks, &fmp4.InitTrack{ID: audioTrackID, TimeScale: timeScale, Codec: &codecs.MPEG4Audio{Config: ascCfg}})
 	}
 
 	init := fmp4.Init{Tracks: tracks}

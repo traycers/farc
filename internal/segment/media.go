@@ -121,28 +121,30 @@ func BuildMedia(ctx context.Context, client hlsclient.API, rec tocindex.Record, 
 	var tracks []*fmp4.PartTrack
 	pos := 0
 	if len(videoFrames) > 0 {
-		samples := make([]*fmp4.PartSample, len(videoFrames))
+		samples := make([]*fmp4.Sample, len(videoFrames))
 		for i, f := range videoFrames {
 			var au h264.AnnexB
 			err = au.Unmarshal(bufs[pos])
 			if err != nil {
 				return nil, fmt.Errorf("segment: parse Annex-B video frame at t=%d: %w", f.Time, err)
 			}
-			sample := &fmp4.PartSample{}
-			err = sample.FillH264(0, au)
+			avcc, err := h264.AVCC(au).Marshal()
 			if err != nil {
 				return nil, fmt.Errorf("segment: encode AVCC video frame at t=%d: %w", f.Time, err)
 			}
-			sample.Duration = sampleDuration(videoFrames, i, segEnd)
-			samples[i] = sample
+			samples[i] = &fmp4.Sample{
+				Duration:        sampleDuration(videoFrames, i, segEnd),
+				IsNonSyncSample: !h264.IsRandomAccess(au),
+				Payload:         avcc,
+			}
 			pos++
 		}
 		tracks = append(tracks, &fmp4.PartTrack{ID: videoTrackID, BaseTime: videoFrames[0].Time, Samples: samples})
 	}
 	if len(audioFrames) > 0 {
-		samples := make([]*fmp4.PartSample, len(audioFrames))
+		samples := make([]*fmp4.Sample, len(audioFrames))
 		for i := range audioFrames {
-			samples[i] = &fmp4.PartSample{Payload: bufs[pos], Duration: sampleDuration(audioFrames, i, segEnd)}
+			samples[i] = &fmp4.Sample{Payload: bufs[pos], Duration: sampleDuration(audioFrames, i, segEnd)}
 			pos++
 		}
 		tracks = append(tracks, &fmp4.PartTrack{ID: audioTrackID, BaseTime: audioFrames[0].Time, Samples: samples})

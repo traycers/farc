@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bluenviron/gortsplib/v4"
-	"github.com/bluenviron/gortsplib/v4/pkg/base"
-	"github.com/bluenviron/gortsplib/v4/pkg/description"
-	"github.com/bluenviron/gortsplib/v4/pkg/format"
-	"github.com/bluenviron/gortsplib/v4/pkg/headers"
+	"github.com/bluenviron/gortsplib/v5"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/headers"
 )
 
 // scriptedSource is an rtspSource whose Start/Describe/Play/Wait behavior
@@ -27,7 +27,7 @@ type scriptedSource struct {
 	closeOnce   sync.Once
 }
 
-func (s *scriptedSource) Start(scheme, host string) error { return nil }
+func (s *scriptedSource) Start() error { return nil }
 
 func (s *scriptedSource) Close() {
 	s.closeOnce.Do(func() { close(s.closed) })

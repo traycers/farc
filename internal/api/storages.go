@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gorilla/mux"
-
 	"github.com/traycers/farc/fblock"
 	"github.com/traycers/farc/internal/ioengine"
 	"github.com/traycers/farc/internal/storage"
@@ -148,7 +146,7 @@ func (s *HttpApiServer) removeStorage(id string) error {
 // same instance of this HttpApiServer; revisit with real cross-manager
 // coordination if concurrent unrelated callers become a real scenario.
 func (s *HttpApiServer) handleRemoveStorage(w http.ResponseWriter, r *http.Request) {
-	id := mux.Vars(r)["id"]
+	id := r.PathValue("id")
 	if _, ok := s.reg.Get(id); !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))
 		return

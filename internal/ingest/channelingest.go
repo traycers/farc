@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bluenviron/gortsplib/v4/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
 
 	"github.com/traycers/farc/internal/fcontainer"
 	"github.com/traycers/farc/internal/levellog"
@@ -200,7 +200,7 @@ func (ci *ChannelIngest) runReconnecting(ctx context.Context, newSource func() (
 // end-to-end test) a real *gortsplib.Client pointed at an in-process
 // loopback server. Run calls this once per reconnect attempt.
 func (ci *ChannelIngest) run(ctx context.Context, c rtspSource, u *base.URL) error {
-	err := c.Start(u.Scheme, u.Host)
+	err := c.Start()
 	if err != nil {
 		return fmt.Errorf("ingest: channel %d: start: %w", ci.channel, err)
 	}

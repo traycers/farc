@@ -206,3 +206,52 @@ func TestHandleArchiveTTLSet_UnknownArchiveIs404(t *testing.T) {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }
+
+// TestRoutes_RejectExtraPathSegments locks in exact-path route matching:
+// every archivesapi route ends in a literal "/" in its OpenAPI shape
+// (temp/controller/openapi.yaml), which gorilla/mux (this package's router
+// before it was replaced by stdlib net/http.ServeMux) always treated as an
+// exact match. Without "{$}" on those patterns, net/http.ServeMux instead
+// treats a trailing "/" as a subtree prefix: an extra, unexpected path
+// segment after it would silently match the same handler instead of 404ing
+// at the router -- e.g. PUT /api/v1/archives/garbage would otherwise reach
+// handleArchiveSetup as if it were PUT /api/v1/archives/.
+//
+// Runs against a real, already-registered archive (not an unknown one) for
+// the {aid}-taking routes, so a 404 here can only mean the router itself
+// rejected the extra segment -- against an unknown archive, several of
+// these handlers 404 anyway via requireArchive, which would mask exactly
+// the router-level regression this test exists to catch.
+func TestRoutes_RejectExtraPathSegments(t *testing.T) {
+	farcd := newTestFarcd()
+	defer farcd.Close()
+	srv := newTestServer(farcd)
+	defer srv.Close()
+
+	const aid = "arch1"
+	dir := t.TempDir()
+	setupReq := archiveConfigNew{ID: aid, TTL: 30, Path: filepath.Join(dir, "archive.img"), Size: 32, FSize: 8}
+	resp := doJSON(t, srv, http.MethodPut, "/api/v1/archives/", setupReq)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archives_setup status = %d, want 200", resp.StatusCode)
+	}
+
+	cases := []struct {
+		method, path string
+	}{
+		{http.MethodPut, "/api/v1/archives/garbage"},
+		{http.MethodDelete, "/api/v1/archives/xyz"},
+		{http.MethodPost, "/api/v1/archives/" + aid + "/channels/extra"},
+		{http.MethodDelete, "/api/v1/archives/" + aid + "/channels/extra"},
+		{http.MethodPatch, "/api/v1/archives/" + aid + "/channels/config/extra"},
+		{http.MethodPut, "/api/v1/archives/" + aid + "/ttl/extra"},
+	}
+	for _, c := range cases {
+		caseResp := doJSON(t, srv, c.method, c.path, nil)
+		caseResp.Body.Close()
+		if caseResp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s: status = %d, want 404 (matched a handler via subtree-prefix routing instead of an exact path)", c.method, c.path, caseResp.StatusCode)
+		}
+	}
+}

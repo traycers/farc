@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -14,13 +13,13 @@ import (
 // HttpApiServer wires StorageRegistry, an optional IngestManager (channel
 // routes 501 without one — see channels.go), and an optional
 // EventPushServer (WS route only mounted if provided) onto one
-// gorilla/mux Router (net/http.ServeMux's own method+{param} patterns need
-// Go 1.22; this module targets go1.21.0 — see go.mod).
+// net/http.ServeMux (its method+{param} pattern routing, available since
+// Go 1.22).
 type HttpApiServer struct {
 	reg        *StorageRegistry
 	ing        *ingest.IngestManager
 	push       *EventPushServer
-	mux        *mux.Router
+	mux        *http.ServeMux
 	metricsSrv http.Handler
 
 	onStorageCreated func(id, path, catalogPath, name string) error
@@ -43,7 +42,7 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 	)
 
 	s := &HttpApiServer{
-		reg: reg, ing: ing, push: push, mux: mux.NewRouter(),
+		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
 		metricsSrv:       promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
 		onStorageCreated: func(string, string, string, string) error { return nil },
 		onStorageUpdated: func(string, string) error { return nil },
@@ -140,8 +139,8 @@ func (s *HttpApiServer) Handler() http.Handler { return s.mux }
 // shared mux for everything. /metrics still also being reachable on the
 // main API's own mux (see routes()) is harmless, not a conflict.
 func (s *HttpApiServer) MetricsHandler() http.Handler {
-	r := mux.NewRouter()
-	r.Handle("/metrics", s.metricsSrv).Methods(http.MethodGet)
+	r := http.NewServeMux()
+	r.Handle("GET /metrics", s.metricsSrv)
 	return r
 }
 
@@ -161,35 +160,35 @@ func (s *HttpApiServer) requireIngest(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *HttpApiServer) routes() {
-	s.mux.HandleFunc("/storages", s.handleCreateStorage).Methods(http.MethodPost)
-	s.mux.HandleFunc("/storages", s.handleListStorages).Methods(http.MethodGet)
-	s.mux.HandleFunc("/storages/{id}", s.handlePatchStorage).Methods(http.MethodPatch)
-	s.mux.HandleFunc("/storages/{id}", s.handleRemoveStorage).Methods(http.MethodDelete)
+	s.mux.HandleFunc("POST /storages", s.handleCreateStorage)
+	s.mux.HandleFunc("GET /storages", s.handleListStorages)
+	s.mux.HandleFunc("PATCH /storages/{id}", s.handlePatchStorage)
+	s.mux.HandleFunc("DELETE /storages/{id}", s.handleRemoveStorage)
 
-	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}/toc", s.handleReadTOC).Methods(http.MethodGet)
-	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}/tree", s.handleReadFblockTree).Methods(http.MethodGet)
-	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}", s.handleReadContent).Methods(http.MethodGet)
-	s.mux.HandleFunc("/storages/{id}/fcontainers/{uuid}/protected", s.handleSetProtected).Methods(http.MethodPost)
+	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/toc", s.handleReadTOC)
+	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/tree", s.handleReadFblockTree)
+	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}", s.handleReadContent)
+	s.mux.HandleFunc("POST /storages/{id}/fcontainers/{uuid}/protected", s.handleSetProtected)
 
-	s.mux.HandleFunc("/storages/{id}/fblocks/{index}", s.handleGetFblock).Methods(http.MethodGet)
-	s.mux.HandleFunc("/storages/{id}/fblocks/{index}/tree/ws", s.requireIngest(s.handleFblockLiveTreeWS)).Methods(http.MethodGet)
-	s.mux.HandleFunc("/storages/{id}/catalog", s.handleGetCatalog).Methods(http.MethodGet)
+	s.mux.HandleFunc("GET /storages/{id}/fblocks/{index}", s.handleGetFblock)
+	s.mux.HandleFunc("GET /storages/{id}/fblocks/{index}/tree/ws", s.requireIngest(s.handleFblockLiveTreeWS))
+	s.mux.HandleFunc("GET /storages/{id}/catalog", s.handleGetCatalog)
 
-	s.mux.HandleFunc("/storages/{id}/candidates", s.handleCandidates).Methods(http.MethodGet)
-	s.mux.HandleFunc("/storages/{id}/resolve", s.handleResolve).Methods(http.MethodGet)
+	s.mux.HandleFunc("GET /storages/{id}/candidates", s.handleCandidates)
+	s.mux.HandleFunc("GET /storages/{id}/resolve", s.handleResolve)
 
-	s.mux.HandleFunc("/channels", s.handleListChannels).Methods(http.MethodGet) // degrades to an empty list, not 501, when s.ing == nil -- not wrapped in requireIngest
-	s.mux.HandleFunc("/channels", s.requireIngest(s.handleCreateChannel)).Methods(http.MethodPost)
-	s.mux.HandleFunc("/channels/{id}", s.requireIngest(s.handleUpdateChannel)).Methods(http.MethodPut)
-	s.mux.HandleFunc("/channels/{id}", s.requireIngest(s.handleRemoveChannel)).Methods(http.MethodDelete)
-	s.mux.HandleFunc("/channels/{id}/capture-policy", s.requireIngest(s.handleSetCapturePolicy)).Methods(http.MethodPost)
-	s.mux.HandleFunc("/channels/{id}/events", s.requireIngest(s.handleTriggerEvent)).Methods(http.MethodPost)
-	s.mux.HandleFunc("/channels/{id}/recording/start", s.requireIngest(s.handleStartRecording)).Methods(http.MethodPost)
-	s.mux.HandleFunc("/channels/{id}/recording/stop", s.requireIngest(s.handleStopRecording)).Methods(http.MethodPost)
+	s.mux.HandleFunc("GET /channels", s.handleListChannels) // degrades to an empty list, not 501, when s.ing == nil -- not wrapped in requireIngest
+	s.mux.HandleFunc("POST /channels", s.requireIngest(s.handleCreateChannel))
+	s.mux.HandleFunc("PUT /channels/{id}", s.requireIngest(s.handleUpdateChannel))
+	s.mux.HandleFunc("DELETE /channels/{id}", s.requireIngest(s.handleRemoveChannel))
+	s.mux.HandleFunc("POST /channels/{id}/capture-policy", s.requireIngest(s.handleSetCapturePolicy))
+	s.mux.HandleFunc("POST /channels/{id}/events", s.requireIngest(s.handleTriggerEvent))
+	s.mux.HandleFunc("POST /channels/{id}/recording/start", s.requireIngest(s.handleStartRecording))
+	s.mux.HandleFunc("POST /channels/{id}/recording/stop", s.requireIngest(s.handleStopRecording))
 
-	s.mux.Handle("/metrics", s.metricsSrv).Methods(http.MethodGet)
+	s.mux.Handle("GET /metrics", s.metricsSrv)
 
 	if s.push != nil {
-		s.mux.HandleFunc("/events/ws", s.push.ServeHTTP).Methods(http.MethodGet)
+		s.mux.HandleFunc("GET /events/ws", s.push.ServeHTTP)
 	}
 }

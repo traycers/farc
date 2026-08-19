@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.3"
+          go-version: "1.26.6"
       - run: go build ./...
       - run: go vet ./...
       - run: go test -race ./...
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.3"
+          go-version: "1.26.6"
       # .golangci.yaml is a "version: 2" config -- v6 of this action only
       # supports golangci-lint v1, so a v2.x binary needs v7 of the action.
       - uses: golangci/golangci-lint-action@v7
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.3"
+          go-version: "1.26.6"
       - run: go build -o farc ./cmd/farc
       - run: go build -o hls_server ./cmd/hls_server
       - run: go test -tags e2e ./tests/... -v

@@ -3,14 +3,13 @@ package ingest
 import (
 	"context"
 	"fmt"
-	"net"
 	"testing"
 	"time"
 
-	"github.com/bluenviron/gortsplib/v4"
-	"github.com/bluenviron/gortsplib/v4/pkg/base"
-	"github.com/bluenviron/gortsplib/v4/pkg/description"
-	"github.com/bluenviron/gortsplib/v4/pkg/format"
+	"github.com/bluenviron/gortsplib/v5"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
 
 	"github.com/traycers/farc/mediatree"
 )
@@ -43,27 +42,16 @@ func (h *testServerHandler) OnPlay(*gortsplib.ServerHandlerOnPlayCtx) (*base.Res
 // SPS/PPS/frame/GOP shape.
 func TestChannelIngest_RealRTSPServerH264EndToEnd(t *testing.T) {
 	handler := &testServerHandler{}
-	var listener net.Listener
 	server := &gortsplib.Server{
 		Handler:     handler,
 		RTSPAddress: "127.0.0.1:0",
-		// gortsplib v4 has no Server.NetListener() accessor (unlike v5) --
-		// capturing the real net.Listen result via this hook is v4's own way
-		// to learn the actual bound port after listening on ":0".
-		Listen: func(network, address string) (net.Listener, error) {
-			l, err := net.Listen(network, address)
-			if err != nil {
-				return nil, err
-			}
-			listener = l
-			return l, nil
-		},
 	}
 	err := server.Start()
 	if err != nil {
 		t.Fatalf("server.Start: %v", err)
 	}
 	defer server.Close()
+	listener := server.NetListener()
 
 	desc := &description.Session{
 		Medias: []*description.Media{{

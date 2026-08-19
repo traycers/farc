@@ -118,6 +118,15 @@ describe('PlayerPage', () => {
     // fireEvent) before counting the first real 200ms tick.
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(200)
+    // React 19 commits a state update made from outside its own event
+    // system (this interval callback) one microtask turn later than the
+    // timer that triggered it -- confirmed by instrumenting the interval
+    // callback directly: the very first tick already computes the correct
+    // { kind: 'skip', to: 300_000_000n } step, but that commit isn't yet
+    // painted into the DOM by the time the assertion below would otherwise
+    // run. A zero-length advance flushes it without waiting for (or
+    // depending on) a second real tick.
+    await vi.advanceTimersByTimeAsync(0)
 
     const tile = screen.getByTestId('mock-tile-1')
     expect(tile.dataset.segmentUrl).toBe('/api/hls/channels/1/hls/300000000/400000000/playlist.m3u8')

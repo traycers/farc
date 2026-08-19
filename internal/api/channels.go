@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gorilla/mux"
-
 	"github.com/traycers/farc/internal/ingest"
 	"github.com/traycers/farc/internal/storage"
 )
@@ -38,9 +36,9 @@ var errChannelIDReserved = errors.New("api: channel id 0 is reserved (ADR-014), 
 var errRTSPURLRequired = errors.New("api: rtsp_url is required")
 
 func parseChannelID(r *http.Request) (uint16, error) {
-	ch, err := strconv.ParseUint(mux.Vars(r)["id"], 10, 16)
+	ch, err := strconv.ParseUint(r.PathValue("id"), 10, 16)
 	if err != nil {
-		return 0, fmt.Errorf("api: invalid channel id %q: %w", mux.Vars(r)["id"], err)
+		return 0, fmt.Errorf("api: invalid channel id %q: %w", r.PathValue("id"), err)
 	}
 	return uint16(ch), nil
 }

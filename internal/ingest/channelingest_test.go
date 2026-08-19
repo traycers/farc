@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bluenviron/gortsplib/v4"
-	"github.com/bluenviron/gortsplib/v4/pkg/base"
-	"github.com/bluenviron/gortsplib/v4/pkg/description"
-	"github.com/bluenviron/gortsplib/v4/pkg/format"
-	"github.com/bluenviron/gortsplib/v4/pkg/headers"
+	"github.com/bluenviron/gortsplib/v5"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/headers"
 	"github.com/pion/rtp"
 
 	"github.com/traycers/farc/internal/fcontainer"
@@ -25,7 +25,7 @@ type onPacketOnlySource struct {
 	cb gortsplib.OnPacketRTPFunc
 }
 
-func (s *onPacketOnlySource) Start(scheme, host string) error { return nil }
+func (s *onPacketOnlySource) Start() error { return nil }
 func (s *onPacketOnlySource) Close()                          {}
 func (s *onPacketOnlySource) Wait() error                     { return nil }
 func (s *onPacketOnlySource) Describe(*base.URL) (*description.Session, *base.Response, error) {
@@ -89,7 +89,7 @@ type dualMediaSource struct {
 	registered chan struct{}
 }
 
-func (s *dualMediaSource) Start(scheme, host string) error { return nil }
+func (s *dualMediaSource) Start() error { return nil }
 func (s *dualMediaSource) Close()                          { s.closeOnce.Do(func() { close(s.closed) }) }
 func (s *dualMediaSource) Wait() error                     { <-s.closed; return nil }
 func (s *dualMediaSource) Describe(*base.URL) (*description.Session, *base.Response, error) {

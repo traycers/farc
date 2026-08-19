@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gorilla/mux"
-
 	"github.com/traycers/farc/internal/playlist"
 	"github.com/traycers/farc/internal/segment"
 	"github.com/traycers/farc/internal/segmentcache"
@@ -15,17 +13,17 @@ import (
 // handlePlaylist implements GET /channels/{channel}/hls/{t1}/{t2}/playlist.m3u8
 // — pure read of the local tocindex.Index (ADR-018), no farcd round trip.
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
-	channel, err := parseUint16(mux.Vars(r)["channel"])
+	channel, err := parseUint16(r.PathValue("channel"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	t1, err := parseUint64(mux.Vars(r)["t1"])
+	t1, err := parseUint64(r.PathValue("t1"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	t2, err := parseUint64(mux.Vars(r)["t2"])
+	t2, err := parseUint64(r.PathValue("t2"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -52,13 +50,13 @@ func (s *Server) lookupRecord(channel uint16, uuid [16]byte) (tocindex.Record, b
 }
 
 func (s *Server) parseSegmentPathValues(w http.ResponseWriter, r *http.Request) (channel uint16, storageID string, uuid [16]byte, ok bool) {
-	channel, err := parseUint16(mux.Vars(r)["channel"])
+	channel, err := parseUint16(r.PathValue("channel"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return 0, "", [16]byte{}, false
 	}
-	storageID = mux.Vars(r)["storage"]
-	uuid, err = parseUUID(mux.Vars(r)["uuid"])
+	storageID = r.PathValue("storage")
+	uuid, err = parseUUID(r.PathValue("uuid"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return 0, "", [16]byte{}, false
@@ -109,7 +107,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	segIndex, err := parseInt(mux.Vars(r)["n"])
+	segIndex, err := parseInt(r.PathValue("n"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

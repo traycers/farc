@@ -5,7 +5,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 
 	"github.com/traycers/farc/internal/hlsclient"
 	"github.com/traycers/farc/internal/segment"
@@ -62,9 +64,9 @@ func TestBuildInit_RoundTrips(t *testing.T) {
 	var audio *fmp4.InitTrack
 	for _, tr := range parsed.Tracks {
 		switch tr.Codec.(type) {
-		case *fmp4.CodecH264:
+		case *codecs.H264:
 			video = tr
-		case *fmp4.CodecMPEG4Audio:
+		case *codecs.MPEG4Audio:
 			audio = tr
 		}
 	}
@@ -75,14 +77,19 @@ func TestBuildInit_RoundTrips(t *testing.T) {
 		t.Fatalf("TimeScale video=%d audio=%d, want 1e9 for both", video.TimeScale, audio.TimeScale)
 	}
 
-	h264Codec := video.Codec.(*fmp4.CodecH264)
+	h264Codec := video.Codec.(*codecs.H264)
 	if !bytes.Equal(h264Codec.SPS, testSPS) || !bytes.Equal(h264Codec.PPS, testPPS) {
 		t.Fatalf("SPS/PPS = %x/%x, want %x/%x", h264Codec.SPS, h264Codec.PPS, testSPS, testPPS)
 	}
 
-	aacCodec := audio.Codec.(*fmp4.CodecMPEG4Audio)
-	if aacCodec.SampleRate != 44100 || aacCodec.ChannelCount != 1 {
-		t.Fatalf("AAC config = %+v, want SampleRate=44100 ChannelCount=1", aacCodec.Config)
+	aacCodec := audio.Codec.(*codecs.MPEG4Audio)
+	// ChannelConfig is the raw MPEG-4 channel-config code (0 means
+	// PCE-defined, 7 means 8 channels -- see internal/ingest/rtsp.go's own
+	// nolint on this exact field), not a channel count; it only reads as
+	// "1" here because this fixture is mono. Don't widen this fixture past
+	// 6 channels expecting this assertion to still mean "channel count".
+	if aacCodec.Config.SampleRate != 44100 || aacCodec.Config.ChannelConfig != 1 {
+		t.Fatalf("AAC config = %+v, want SampleRate=44100 ChannelConfig=1", aacCodec.Config)
 	}
 }
 
@@ -130,9 +137,10 @@ func TestBuildMedia_FullWindow_RoundTrips(t *testing.T) {
 		if s.IsNonSyncSample == wantSync[i] {
 			t.Fatalf("video sample %d IsNonSyncSample = %v, want sync=%v", i, s.IsNonSyncSample, wantSync[i])
 		}
-		nalus, err := s.GetH264()
+		var nalus h264.AVCC
+		err := nalus.Unmarshal(s.Payload)
 		if err != nil {
-			t.Fatalf("video sample %d GetH264: %v", i, err)
+			t.Fatalf("video sample %d AVCC.Unmarshal: %v", i, err)
 		}
 		if len(nalus) != 1 || !bytes.Equal(nalus[0], wantNAL[i]) {
 			t.Fatalf("video sample %d NALs = %x, want [%x]", i, nalus, wantNAL[i])

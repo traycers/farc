@@ -20,8 +20,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gorilla/mux"
-
 	"github.com/traycers/farc/fblock"
 	"github.com/traycers/farc/internal/farcctl"
 	"github.com/traycers/farc/internal/storage"
@@ -70,12 +68,12 @@ type farcClient interface {
 // Server is /api/v1/archives/*'s HTTP handler set.
 type Server struct {
 	client farcClient
-	mux    *mux.Router
+	mux    *http.ServeMux
 }
 
 // New builds a Server calling client for every operation.
 func New(client farcClient) *Server {
-	s := &Server{client: client, mux: mux.NewRouter()}
+	s := &Server{client: client, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
@@ -83,15 +81,21 @@ func New(client farcClient) *Server {
 // Handler returns s's http.Handler.
 func (s *Server) Handler() http.Handler { return s.mux }
 
+// routes uses "{$}" on every pattern ending in a literal "/" -- without it,
+// stdlib net/http.ServeMux treats a trailing "/" as a subtree prefix (it'd
+// match "/api/v1/archives/garbage" as archives_setup, or silently absorb an
+// extra path segment into channels_add) rather than gorilla/mux's exact-path
+// behavior this route group's callers (temp/controller/openapi.yaml's
+// msm/controller) were built against.
 func (s *Server) routes() {
-	s.mux.HandleFunc("/api/v1/archives/", s.handleArchiveSetup).Methods(http.MethodPut)
-	s.mux.HandleFunc("/api/v1/archives/", s.handleArchiveDetach).Methods(http.MethodDelete)
-	s.mux.HandleFunc("/api/v1/archives/{aid}/channels/", s.handleArchiveChannelsAdd).Methods(http.MethodPost)
-	s.mux.HandleFunc("/api/v1/archives/{aid}/channels/", s.handleArchiveChannelsDel).Methods(http.MethodDelete)
-	s.mux.HandleFunc("/api/v1/archives/{aid}/channels/config/", s.handleArchiveChannelsConfigUpdate).Methods(http.MethodPatch)
-	s.mux.HandleFunc("/api/v1/archives/{aid}/recording/start", s.handleArchiveRecordingStart).Methods(http.MethodPost)
-	s.mux.HandleFunc("/api/v1/archives/{aid}/recording/stop", s.handleArchiveRecordingStop).Methods(http.MethodPost)
-	s.mux.HandleFunc("/api/v1/archives/{aid}/ttl/", s.handleArchiveTTLSet).Methods(http.MethodPut)
+	s.mux.HandleFunc("PUT /api/v1/archives/{$}", s.handleArchiveSetup)
+	s.mux.HandleFunc("DELETE /api/v1/archives/{$}", s.handleArchiveDetach)
+	s.mux.HandleFunc("POST /api/v1/archives/{aid}/channels/{$}", s.handleArchiveChannelsAdd)
+	s.mux.HandleFunc("DELETE /api/v1/archives/{aid}/channels/{$}", s.handleArchiveChannelsDel)
+	s.mux.HandleFunc("PATCH /api/v1/archives/{aid}/channels/config/{$}", s.handleArchiveChannelsConfigUpdate)
+	s.mux.HandleFunc("POST /api/v1/archives/{aid}/recording/start", s.handleArchiveRecordingStart)
+	s.mux.HandleFunc("POST /api/v1/archives/{aid}/recording/stop", s.handleArchiveRecordingStop)
+	s.mux.HandleFunc("PUT /api/v1/archives/{aid}/ttl/{$}", s.handleArchiveTTLSet)
 }
 
 // archiveErrorBody is models.errors.Error: {code,message}.
@@ -308,7 +312,7 @@ func (s *Server) handleArchiveDetach(w http.ResponseWriter, r *http.Request) {
 // so this needs no separate existence check.
 func (s *Server) handleArchiveChannelsAdd(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	aid := mux.Vars(r)["aid"]
+	aid := r.PathValue("aid")
 	var req []archiveChannelConfigNew
 	err := decodeJSON(r, &req)
 	if err != nil {
@@ -328,7 +332,7 @@ func (s *Server) handleArchiveChannelsAdd(w http.ResponseWriter, r *http.Request
 // handleArchiveChannelsDel is DELETE /api/v1/archives/{aid}/channels/.
 func (s *Server) handleArchiveChannelsDel(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	aid := mux.Vars(r)["aid"]
+	aid := r.PathValue("aid")
 	if !requireArchive(ctx, w, s.client, aid) {
 		return
 	}
@@ -359,7 +363,7 @@ func (s *Server) handleArchiveChannelsDel(w http.ResponseWriter, r *http.Request
 // (in-place param update) rather than remove-then-recreate.
 func (s *Server) handleArchiveChannelsConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	aid := mux.Vars(r)["aid"]
+	aid := r.PathValue("aid")
 	if !requireArchive(ctx, w, s.client, aid) {
 		return
 	}
@@ -398,7 +402,7 @@ type archiveRecordingRequest struct {
 // (POST /api/v1/archives/{aid}/recording/{start,stop}).
 func (s *Server) handleArchiveRecording(w http.ResponseWriter, r *http.Request, start bool) {
 	ctx := r.Context()
-	aid := mux.Vars(r)["aid"]
+	aid := r.PathValue("aid")
 	if !requireArchive(ctx, w, s.client, aid) {
 		return
 	}
@@ -439,7 +443,7 @@ type archiveTTLRequest struct {
 // unknown aid surfaces as the 404 farcd's own PATCH /storages/{id} returns.
 func (s *Server) handleArchiveTTLSet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	aid := mux.Vars(r)["aid"]
+	aid := r.PathValue("aid")
 	var req archiveTTLRequest
 	err := decodeJSON(r, &req)
 	if err != nil {

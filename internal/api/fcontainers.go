@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gorilla/mux"
-
 	"github.com/traycers/farc/internal/storage"
 	"github.com/traycers/farc/toc"
 )
@@ -17,7 +15,7 @@ func (s *HttpApiServer) resolveUnitAndUUID(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return nil, [16]byte{}, false
 	}
-	uuid, err := parseUUID(mux.Vars(r)["uuid"])
+	uuid, err := parseUUID(r.PathValue("uuid"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return nil, [16]byte{}, false
@@ -30,7 +28,7 @@ func (s *HttpApiServer) resolveUnitAndUUID(w http.ResponseWriter, r *http.Reques
 // needs a plain storage lookup (no fcontainer uuid alongside it, unlike
 // resolveUnitAndUUID above).
 func (s *HttpApiServer) resolveUnit(w http.ResponseWriter, r *http.Request) (*storage.Unit, string, bool) {
-	id := mux.Vars(r)["id"]
+	id := r.PathValue("id")
 	unit, ok := s.reg.Get(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("api: unknown storage %q", id))

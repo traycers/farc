@@ -38,6 +38,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 
 	"github.com/traycers/farc/fblock"
@@ -481,9 +482,10 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 		if len(parts) != 1 || len(parts[0].Tracks) != 1 || len(parts[0].Tracks[0].Samples) != 2 {
 			t.Fatalf("parts = %+v, want 1 part, 1 track, 2 samples", parts)
 		}
-		nalus, err := parts[0].Tracks[0].Samples[0].GetH264()
+		var nalus h264.AVCC
+		err = nalus.Unmarshal(parts[0].Tracks[0].Samples[0].Payload)
 		if err != nil {
-			t.Fatalf("GetH264: %v", err)
+			t.Fatalf("AVCC.Unmarshal: %v", err)
 		}
 		if len(nalus) != 1 || !bytes.Equal(nalus[0], videoFrame) {
 			t.Fatalf("decoded NAL = %x, want %x (exactly what was written to the source fcontainer)", nalus, videoFrame)

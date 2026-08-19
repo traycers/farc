@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/mux"
-
 	"github.com/traycers/farc/internal/hlsclient"
 	"github.com/traycers/farc/internal/segmentcache"
 	"github.com/traycers/farc/internal/tocindex"
@@ -57,16 +55,14 @@ func (s *channelSet) Remove(id uint16) {
 }
 
 // Server wires internal/playlist/internal/segment/internal/segmentcache
-// onto one gorilla/mux Router, matching internal/api/server.go's own style
-// (net/http.ServeMux's own method+{param} patterns need Go 1.22; this
-// module targets go1.21.0 — see go.mod).
+// onto one net/http.ServeMux, matching internal/api/server.go's own style.
 type Server struct {
 	index     *tocindex.Index
 	client    hlsclient.API // the one farcd this hls_server talks to (ADR-020)
 	channels  *channelSet   // which channels this hls_server is configured to serve
 	cache     *segmentcache.Cache
 	targetDur time.Duration
-	mux       *mux.Router
+	mux       *http.ServeMux
 }
 
 // New builds a Server. client is the hlsclient.Client for the one farcd
@@ -82,7 +78,7 @@ type Server struct {
 // RecordSegments must both be called with for a segment index to mean the
 // same thing on both the playlist and the segment route.
 func New(index *tocindex.Index, client hlsclient.API, channels map[uint16]bool, cache *segmentcache.Cache, targetDur time.Duration) *Server {
-	s := &Server{index: index, client: client, channels: newChannelSet(channels), cache: cache, targetDur: targetDur, mux: mux.NewRouter()}
+	s := &Server{index: index, client: client, channels: newChannelSet(channels), cache: cache, targetDur: targetDur, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
@@ -97,8 +93,8 @@ func (s *Server) RemoveChannel(id uint16) { s.channels.Remove(id) }
 func (s *Server) Handler() http.Handler { return s.mux }
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("/channels/{channel}/hls/{t1}/{t2}/playlist.m3u8", s.handlePlaylist).Methods(http.MethodGet)
-	s.mux.HandleFunc("/segments/{channel}/{storage}/{uuid}/init.mp4", s.handleInit).Methods(http.MethodGet)
-	s.mux.HandleFunc("/segments/{channel}/{storage}/{uuid}/{n}/seg.m4s", s.handleMedia).Methods(http.MethodGet)
-	s.mux.HandleFunc("/timeline", s.handleTimeline).Methods(http.MethodGet)
+	s.mux.HandleFunc("GET /channels/{channel}/hls/{t1}/{t2}/playlist.m3u8", s.handlePlaylist)
+	s.mux.HandleFunc("GET /segments/{channel}/{storage}/{uuid}/init.mp4", s.handleInit)
+	s.mux.HandleFunc("GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s", s.handleMedia)
+	s.mux.HandleFunc("GET /timeline", s.handleTimeline)
 }

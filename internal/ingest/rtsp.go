@@ -6,13 +6,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bluenviron/gortsplib/v4"
-	"github.com/bluenviron/gortsplib/v4/pkg/base"
-	"github.com/bluenviron/gortsplib/v4/pkg/description"
-	"github.com/bluenviron/gortsplib/v4/pkg/format"
-	"github.com/bluenviron/gortsplib/v4/pkg/format/rtph264"
-	"github.com/bluenviron/gortsplib/v4/pkg/format/rtph265"
-	"github.com/bluenviron/gortsplib/v4/pkg/headers"
+	"github.com/bluenviron/gortsplib/v5"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph265"
+	"github.com/bluenviron/gortsplib/v5/pkg/headers"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
 	"github.com/pion/rtp"
@@ -28,7 +28,7 @@ import (
 // inject a fake, or (for the one real end-to-end test) point a real Client
 // at an in-process loopback gortsplib server.
 type rtspSource interface {
-	Start(scheme, host string) error
+	Start() error
 	Close()
 	Wait() error
 	Describe(u *base.URL) (*description.Session, *base.Response, error)
@@ -45,6 +45,8 @@ func NewClient(rtspURL string, readTimeout, writeTimeout time.Duration) (*gortsp
 		return nil, nil, fmt.Errorf("ingest: parse RTSP URL: %w", err)
 	}
 	c := &gortsplib.Client{
+		Scheme:       u.Scheme,
+		Host:         u.Host,
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
 	}
