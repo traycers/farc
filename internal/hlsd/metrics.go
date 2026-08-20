@@ -24,14 +24,22 @@ func (c *hlsdCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(connectedChannelsDesc, prometheus.GaugeValue, float64(c.h.ConnectedChannels()))
 }
 
-// newMetricsHandler builds h's /metrics handler: client_golang's Go/process
-// runtime collectors plus hlsdCollector.
-func newMetricsHandler(h *Hlsd) http.Handler {
+// newMetricsRegistry builds h's metrics registry: client_golang's Go/process
+// runtime collectors plus hlsdCollector. Split out from the /metrics handler
+// itself (below) so tracing.HTTPMetrics can register onto this same
+// registry -- registering HTTP request metrics on a separate registry would
+// make them silently unreachable on scrape.
+func newMetricsRegistry(h *Hlsd) *prometheus.Registry {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		&hlsdCollector{h: h},
 	)
+	return reg
+}
+
+// newMetricsHandler serves reg (built by newMetricsRegistry) as /metrics.
+func newMetricsHandler(reg *prometheus.Registry) http.Handler {
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 }

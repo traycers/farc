@@ -13,7 +13,10 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/traycers/farc/internal/levellog"
 )
@@ -23,6 +26,13 @@ const (
 	HeaderRequestID = "X-Request-Id"
 	HeaderSessionID = "X-Session-Id"
 )
+
+// UnmatchedPattern is the HTTPMetrics pattern label Middleware records for
+// any request a *http.ServeMux couldn't route to a registered pattern (a
+// genuine 404, or the mux's automatic 405 on a path that exists under a
+// different method) -- see Middleware's own doc comment for why this must
+// stay a fixed value rather than falling back to the raw request path.
+const UnmatchedPattern = "unmatched"
 
 type ctxKey int
 
@@ -47,10 +57,11 @@ func SessionID(ctx context.Context) (string, bool) {
 
 // statusRecorder captures the status code a handler wrote, defaulting to 200
 // per http.ResponseWriter's own documented behavior when WriteHeader is never
-// called.
+// called, and whether the connection was hijacked out from under it.
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status   int
+	hijacked bool
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
@@ -63,13 +74,64 @@ func (r *statusRecorder) WriteHeader(status int) {
 // http.ResponseWriter.(http.Hijacker)), which would otherwise fail because
 // embedding the http.ResponseWriter interface alone does not promote
 // Hijacker, a separate interface, even when the concrete writer underneath
-// implements it.
+// implements it. A successful Hijack marks r so Middleware skips HTTPMetrics
+// entirely for this request -- once hijacked, time.Since(start) measures the
+// hijacked connection's whole lifetime (a WS session can run for hours), not
+// one request's duration.
 func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hj, ok := r.ResponseWriter.(http.Hijacker)
 	if !ok {
 		return nil, nil, errors.New("tracing: underlying ResponseWriter does not implement http.Hijacker")
 	}
-	return hj.Hijack()
+	conn, buf, err := hj.Hijack()
+	if err == nil {
+		r.hijacked = true
+	}
+	return conn, buf, err
+}
+
+// httpDurationBuckets adds an explicit 0.3s boundary to prometheus.DefBuckets
+// (which has none), so a "% of requests under 300ms" panel can read a real
+// histogram bucket instead of interpolating one.
+var httpDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.3, 0.5, 1, 2.5, 5, 10}
+
+// HTTPMetrics is the pair of Prometheus collectors Middleware feeds on every
+// non-hijacked request. Total's code label carries the exact status code
+// (not a computed "is this an error" verdict, and not a status class) --
+// deriving 4xx/5xx counts is a dashboard-query concern, not this package's.
+// Both label sets stay low-cardinality by construction: method is one of a
+// handful of HTTP verbs, pattern is a *http.ServeMux route pattern (bounded
+// by however many routes are registered) rather than the raw request path,
+// and code is bounded by the HTTP status code space.
+type HTTPMetrics struct {
+	Duration *prometheus.HistogramVec
+	Total    *prometheus.CounterVec
+}
+
+// NewHTTPMetrics builds HTTPMetrics and registers it on reg. Callers must
+// pass the same registry their own /metrics handler serves from (e.g.
+// api.HttpApiServer.Registerer()) -- registering on a different or
+// standalone registry would make these families silently unreachable on
+// scrape.
+func NewHTTPMetrics(reg prometheus.Registerer) *HTTPMetrics {
+	m := &HTTPMetrics{
+		Duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "HTTP request duration in seconds. Excludes hijacked connections (e.g. WebSocket upgrades), whose lifetime isn't one request's duration.",
+			Buckets: httpDurationBuckets,
+		}, []string{"method", "pattern"}),
+		Total: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "Total HTTP requests completed. Excludes hijacked connections, same as http_request_duration_seconds.",
+		}, []string{"method", "pattern", "code"}),
+	}
+	reg.MustRegister(m.Duration, m.Total)
+	return m
+}
+
+func (m *HTTPMetrics) observe(method, pattern string, code int, dur time.Duration) {
+	m.Duration.WithLabelValues(method, pattern).Observe(dur.Seconds())
+	m.Total.WithLabelValues(method, pattern, strconv.Itoa(code)).Inc()
 }
 
 // Middleware returns a net/http middleware (works on any http.Handler, not
@@ -77,9 +139,25 @@ func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // bare *api.EventPushServer, not routed through a mux) that, for each
 // request, carries X-Request-Id/X-Session-Id (only the ones actually
 // present -- a missing header never fabricates an id) on the request's
-// context and logs one access-log line via logf after the handler returns.
-func Middleware(logf func(format string, args ...any)) func(http.Handler) http.Handler {
+// context, logs one access-log line via logf after the handler returns, and
+// -- if metrics is non-nil and the connection wasn't hijacked -- records
+// HTTPMetrics. metrics may be nil (no metrics recorded, e.g. in tests that
+// don't care about them).
+//
+// When next is a *http.ServeMux, the metrics' pattern label is the matched
+// route pattern (via (*http.ServeMux).Handler, the same lookup next's own
+// ServeHTTP does internally) rather than r.URL.Path -- this codebase's
+// UUID/index/channel-keyed routes would otherwise make that label unbounded.
+// (*http.ServeMux).Handler returns an EMPTY pattern for a request that
+// matches no registered route (a genuine 404) or matches one only under a
+// different method (the mux's automatic 405) -- both collapse onto the
+// fixed UnmatchedPattern label, not r.URL.Path, or every malformed/mistyped/
+// malicious request path would reopen the same unbounded-label problem.
+// For any other next (the one real case being farcd's dedicated WS
+// listener, which exposes exactly one route), the raw path is used as-is.
+func Middleware(logf func(format string, args ...any), metrics *HTTPMetrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
+		mux, isMux := next.(*http.ServeMux)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 			reqID := r.Header.Get(HeaderRequestID)
@@ -95,6 +173,17 @@ func Middleware(logf func(format string, args ...any)) func(http.Handler) http.H
 			start := time.Now()
 			next.ServeHTTP(rec, r.WithContext(ctx))
 			dur := time.Since(start)
+
+			if metrics != nil && !rec.hijacked {
+				pattern := r.URL.Path
+				if isMux {
+					pattern = UnmatchedPattern
+					if _, p := mux.Handler(r); p != "" {
+						pattern = p
+					}
+				}
+				metrics.observe(r.Method, pattern, rec.status, dur)
+			}
 
 			ids := ""
 			if reqID != "" {

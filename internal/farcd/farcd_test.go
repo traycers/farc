@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -460,6 +461,56 @@ func TestRun_ServesAndShutsDownGracefully(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after context cancellation")
+	}
+}
+
+// TestRun_HTTPMetrics_ReachableOnMetricsEndpoint guards the wiring in New
+// (httpMetrics := tracing.NewHTTPMetrics(apiServer.Registerer())): it's easy
+// to build tracing.HTTPMetrics on a registry that never backs f.metricsSrv,
+// leaving it silently unreachable on scrape even though every
+// internal/tracing unit test passes. Drives a real request through
+// f.httpSrv, then asserts the resulting metrics appear on f.metricsSrv's own
+// /metrics -- not a registry this test constructs itself.
+func TestRun_HTTPMetrics_ReachableOnMetricsEndpoint(t *testing.T) {
+	cfg, path := testConfig(t, nil)
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	defer cancel()
+
+	waitForServer(t, cfg.HTTP.String())
+
+	resp, err := http.Get("http://" + cfg.HTTP.String() + "/storages")
+	if err != nil {
+		t.Fatalf("GET /storages: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /storages status = %d, want 200", resp.StatusCode)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var body string
+	for time.Now().Before(deadline) {
+		metricsResp, err := http.Get("http://" + cfg.Metrics.String() + "/metrics")
+		if err != nil {
+			t.Fatalf("GET /metrics: %v", err)
+		}
+		b, _ := io.ReadAll(metricsResp.Body)
+		metricsResp.Body.Close()
+		body = string(b)
+		if strings.Contains(body, `http_requests_total{code="200",method="GET",pattern="GET /storages"} 1`) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(body, `http_requests_total{code="200",method="GET",pattern="GET /storages"} 1`) {
+		t.Fatalf("body missing the GET /storages http_requests_total sample; got:\n%s", body)
 	}
 }
 

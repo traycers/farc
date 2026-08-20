@@ -20,6 +20,7 @@ type HttpApiServer struct {
 	ing        *ingest.IngestManager
 	push       *EventPushServer
 	mux        *http.ServeMux
+	promReg    *prometheus.Registry
 	metricsSrv http.Handler
 
 	onStorageCreated func(id, path, catalogPath, name string) error
@@ -43,6 +44,7 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 
 	s := &HttpApiServer{
 		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
+		promReg:          promReg,
 		metricsSrv:       promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
 		onStorageCreated: func(string, string, string, string) error { return nil },
 		onStorageUpdated: func(string, string) error { return nil },
@@ -130,6 +132,13 @@ func (s *HttpApiServer) SetOnChannelRemoved(fn func(id uint16) error) {
 // Handler returns the server's http.Handler, e.g. for http.Server.Handler or
 // httptest.NewServer.
 func (s *HttpApiServer) Handler() http.Handler { return s.mux }
+
+// Registerer returns the registry backing this server's own /metrics
+// (MetricsHandler/the "GET /metrics" route) -- callers that need their own
+// metrics to show up on the same scrape (e.g. internal/farcd building
+// tracing.HTTPMetrics for its tracing.Middleware) must register on this
+// registry, not a separate one, or their metrics are silently unreachable.
+func (s *HttpApiServer) Registerer() prometheus.Registerer { return s.promReg }
 
 // MetricsHandler returns a handler serving just GET /metrics, for mounting
 // on MetricsEndpoint's own address -- docs/docs/archive/

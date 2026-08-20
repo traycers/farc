@@ -185,8 +185,13 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	// New, so capturing f.logf itself would forever bind to its
 	// no-op default above.
 	trace := func(format string, args ...any) { f.logf(format, args...) }
-	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: tracing.Middleware(trace)(apiServer.Handler()), ReadHeaderTimeout: readHeaderTimeout}
-	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: tracing.Middleware(trace)(push), ReadHeaderTimeout: readHeaderTimeout}
+	// Both servers' metrics land on apiServer's own registry -- the one
+	// apiServer.MetricsHandler() (below, f.metricsSrv) actually serves -- so
+	// they show up on the same scrape as farcd's existing go_*/process_*
+	// metrics instead of a second, unreachable registry.
+	httpMetrics := tracing.NewHTTPMetrics(apiServer.Registerer())
+	f.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: tracing.Middleware(trace, httpMetrics)(apiServer.Handler()), ReadHeaderTimeout: readHeaderTimeout}
+	f.wsSrv = &http.Server{Addr: cfg.WS.String(), Handler: tracing.Middleware(trace, httpMetrics)(push), ReadHeaderTimeout: readHeaderTimeout}
 	// metricsSrv is left unwrapped -- internal scrape traffic, not proxied
 	// through envoy, so there's no X-Request-Id/X-Session-Id to correlate.
 	f.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: apiServer.MetricsHandler(), ReadHeaderTimeout: readHeaderTimeout}

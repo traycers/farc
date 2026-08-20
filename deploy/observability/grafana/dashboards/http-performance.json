@@ -1,0 +1,91 @@
+{
+  "title": "HTTP Performance",
+  "uid": "farc-http-performance",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "tags": ["farc"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP request latency (p50/p95)",
+      "description": "internal/tracing.HTTPMetrics -- excludes hijacked connections (WebSocket upgrades), so this is one-shot HTTP request duration only, not connection lifetime.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 0.3, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(http_request_duration_seconds_bucket{job=~\"farc|hls_server\"}[5m])) by (le, job))",
+          "legendFormat": "{{job}} p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"farc|hls_server\"}[5m])) by (le, job))",
+          "legendFormat": "{{job}} p95",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Resident memory (RAM)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "process_resident_memory_bytes{job=~\"farc|hls_server\"}", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "HTTP errors (4xx/5xx rate)",
+      "description": "internal/tracing.HTTPMetrics's http_requests_total -- code is the exact HTTP status code, grouped into 4xx/5xx here at query time rather than in application code.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=~\"farc|hls_server\", code=~\"5..\"}[5m])) by (job)",
+          "legendFormat": "{{job}} 5xx",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(http_requests_total{job=~\"farc|hls_server\", code=~\"4..\"}[5m])) by (job)",
+          "legendFormat": "{{job}} 4xx",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "CPU usage",
+      "description": "rate(process_cpu_seconds_total[5m]) -- fraction of one CPU core, so 1.0 = 100% of one core, matching the percentunit unit below.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        { "expr": "rate(process_cpu_seconds_total{job=~\"farc|hls_server\"}[5m])", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    }
+  ]
+}

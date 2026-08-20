@@ -141,10 +141,15 @@ func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 	// New, so capturing h.logf itself would forever bind to its no-op
 	// default set above.
 	trace := func(format string, args ...any) { h.logf(format, args...) }
-	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: tracing.Middleware(trace)(h.apiServer.Handler()), ReadHeaderTimeout: readHeaderTimeout}
+	// httpMetrics registers onto the same registry newMetricsHandler serves
+	// below, so it shows up on the same scrape as the existing
+	// go_*/process_*/hls_server_connected_channels metrics.
+	metricsReg := newMetricsRegistry(h)
+	httpMetrics := tracing.NewHTTPMetrics(metricsReg)
+	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: tracing.Middleware(trace, httpMetrics)(h.apiServer.Handler()), ReadHeaderTimeout: readHeaderTimeout}
 	// metricsSrv is left unwrapped -- internal scrape traffic, not proxied
 	// through envoy, matching internal/farcd's identical convention.
-	h.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: newMetricsHandler(h), ReadHeaderTimeout: readHeaderTimeout}
+	h.metricsSrv = &http.Server{Addr: cfg.Metrics.String(), Handler: newMetricsHandler(metricsReg), ReadHeaderTimeout: readHeaderTimeout}
 
 	return h, nil
 }
