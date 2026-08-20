@@ -10,16 +10,18 @@ import (
 
 // StorageInfo is StorageRegistry's public listing shape for GET /storages.
 type StorageInfo struct {
-	ID       string           `json:"id"`
-	Path     string           `json:"path"`
-	Name     string           `json:"name,omitempty"`
-	Geometry storage.Geometry `json:"geometry"`
+	ID       string             `json:"id"`
+	Path     string             `json:"path"`
+	Name     string             `json:"name,omitempty"`
+	Geometry storage.Geometry   `json:"geometry"`
+	Pool     storage.PoolTuning `json:"pool"`
 }
 
 type registeredStorage struct {
 	unit *storage.Unit
 	path string
 	name string
+	pool storage.PoolTuning
 }
 
 // StorageRegistry maps operator-chosen storage ids to already-open
@@ -39,13 +41,13 @@ func NewStorageRegistry() *StorageRegistry {
 // registered — the caller (POST /storages' handler) is expected to close
 // unit and report a conflict in that case, rather than silently replacing a
 // live Storage some other request may be using.
-func (r *StorageRegistry) Register(id string, unit *storage.Unit, path string, name string) error {
+func (r *StorageRegistry) Register(id string, unit *storage.Unit, path string, name string, pool storage.PoolTuning) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.units[id]; exists {
 		return fmt.Errorf("api: storage id %q already registered", id)
 	}
-	r.units[id] = &registeredStorage{unit: unit, path: path, name: name}
+	r.units[id] = &registeredStorage{unit: unit, path: path, name: name, pool: pool}
 	return nil
 }
 
@@ -59,6 +61,19 @@ func (r *StorageRegistry) SetName(id, name string) bool {
 		return false
 	}
 	e.name = name
+	return true
+}
+
+// SetPoolTuning updates an already-registered storage's cached pool tuning
+// in place. Returns false if id isn't registered.
+func (r *StorageRegistry) SetPoolTuning(id string, pool storage.PoolTuning) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.units[id]
+	if !ok {
+		return false
+	}
+	e.pool = pool
 	return true
 }
 
@@ -96,7 +111,7 @@ func (r *StorageRegistry) List() []StorageInfo {
 	defer r.mu.RUnlock()
 	out := make([]StorageInfo, 0, len(r.units))
 	for id, e := range r.units {
-		out = append(out, StorageInfo{ID: id, Path: e.path, Name: e.name, Geometry: e.unit.Geometry()})
+		out = append(out, StorageInfo{ID: id, Path: e.path, Name: e.name, Geometry: e.unit.Geometry(), Pool: e.pool})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

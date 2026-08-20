@@ -1,6 +1,6 @@
 # 05 — StorageEditPage.tsx: pool-tuning fields, grouped save, real-value prefill
 
-Status: open
+Status: resolved
 Blocked by: 03
 
 ## Task
@@ -78,3 +78,16 @@ rendering correctly for the fetched values.
 ## Verify
 
 `cd web && npx tsc -b && npx vitest run`
+
+## Comments
+
+Implemented as specced: three fields prefilled from the fetched
+`storage.pool` (fixture deliberately set to 8/4/8, distinct from the UI's
+own 4/2/4 default, to prove it's a real prefill and not a fallback), one
+grouped `onSavePool` handler/button posting all three under a single `pool`
+key with the restart-required status message, RAM/percentage helper text
+reusing issue 04's pattern, and the stale "fixed at creation time" copy
+updated. `npx tsc -b` and `npx vitest run` (full suite, 133 tests) both
+clean. No lint script exists for the web package (`package.json` scripts
+are dev/build/preview/test only) -- `tsc -b` + `vitest run` are the full
+verification gate here.

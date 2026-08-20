@@ -17,7 +17,7 @@ func TestHandleMetrics(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestHandleMetrics_PerFblockSizeGaugesOneSeriesPerCompletedFblock(t *testing
 	u := newTestUnit(t)
 	writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "frame-a", 100, 1000)
 	writeVideoFrame(t, u, []uint16{1}, 1, 300, 400, "frame-b", 300, 2000)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestHandleMetrics_SurvivesFblockIndexReuse(t *testing.T) {
 		t.Fatalf("FblockSizes() = %d records, want exactly 1 (index 0 reused, not duplicated)", got)
 	}
 
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestHandleMetrics_SurvivesFblockIndexReuse(t *testing.T) {
 func TestHandleMetrics_RTSPBytesReceivedSumsAcrossStorageChannels(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

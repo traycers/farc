@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/storage"
 )
 
 // HttpApiServer wires StorageRegistry, an optional IngestManager (channel
@@ -23,9 +24,10 @@ type HttpApiServer struct {
 	promReg    *prometheus.Registry
 	metricsSrv http.Handler
 
-	onStorageCreated func(id, path, catalogPath, name string) error
-	onStorageUpdated func(id, name string) error
-	onStorageRemoved func(id string) error
+	onStorageCreated func(id, path, catalogPath, name string, pool storage.PoolTuning) error
+	onStorageUpdated     func(id, name string) error
+	onStoragePoolUpdated func(id string, pool storage.PoolTuning) error
+	onStorageRemoved     func(id string) error
 	onChannelCreated func(spec ChannelSpec) error
 	onChannelUpdated func(spec ChannelSpec) error
 	onChannelRemoved func(id uint16) error
@@ -46,8 +48,9 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 		reg: reg, ing: ing, push: push, mux: http.NewServeMux(),
 		promReg:          promReg,
 		metricsSrv:       promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
-		onStorageCreated: func(string, string, string, string) error { return nil },
-		onStorageUpdated: func(string, string) error { return nil },
+		onStorageCreated: func(string, string, string, string, storage.PoolTuning) error { return nil },
+		onStorageUpdated:     func(string, string) error { return nil },
+		onStoragePoolUpdated: func(string, storage.PoolTuning) error { return nil },
 		onStorageRemoved: func(string) error { return nil },
 		onChannelCreated: func(ChannelSpec) error { return nil },
 		onChannelUpdated: func(ChannelSpec) error { return nil },
@@ -66,9 +69,9 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 // registered and usable for this process's lifetime — persistence failing
 // doesn't undo an already-completed (and possibly expensive) Init. A nil fn
 // restores the default no-op, matching this package's original behavior.
-func (s *HttpApiServer) SetOnStorageCreated(fn func(id, path, catalogPath, name string) error) {
+func (s *HttpApiServer) SetOnStorageCreated(fn func(id, path, catalogPath, name string, pool storage.PoolTuning) error) {
 	if fn == nil {
-		fn = func(string, string, string, string) error { return nil }
+		fn = func(string, string, string, string, storage.PoolTuning) error { return nil }
 	}
 	s.onStorageCreated = fn
 }
@@ -83,6 +86,19 @@ func (s *HttpApiServer) SetOnStorageUpdated(fn func(id, name string) error) {
 		fn = func(string, string) error { return nil }
 	}
 	s.onStorageUpdated = fn
+}
+
+// SetOnStoragePoolUpdated installs a hook run synchronously by PATCH
+// /storages/{id} when the request includes a pool group, after the
+// registry's own in-memory SetPoolTuning succeeds but before the response is
+// written -- kept separate from SetOnStorageUpdated's name-only signature
+// rather than overloading it, mirroring its role for internal/farcd to keep
+// the config file in sync. A nil fn restores the default no-op.
+func (s *HttpApiServer) SetOnStoragePoolUpdated(fn func(id string, pool storage.PoolTuning) error) {
+	if fn == nil {
+		fn = func(string, storage.PoolTuning) error { return nil }
+	}
+	s.onStoragePoolUpdated = fn
 }
 
 // SetOnStorageRemoved installs a hook run synchronously by

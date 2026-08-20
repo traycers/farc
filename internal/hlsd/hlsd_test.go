@@ -19,6 +19,7 @@ import (
 
 	"github.com/traycers/farc/internal/hlsconfig"
 	"github.com/traycers/farc/internal/hlsd"
+	"github.com/traycers/farc/internal/storage"
 	"github.com/traycers/farc/mediatree"
 )
 
@@ -224,7 +225,7 @@ func TestRun_ChannelMovedToDifferentStorage_ReindexesFromNewStorage(t *testing.T
 	}, 0, 1_000_000, 2000)
 
 	farcd := newFarcdTestServer(t, unitS1, 1) // channel 1 starts on s1
-	err := farcd.reg.Register("s2", unitS2, "/dev/null", "")
+	err := farcd.reg.Register("s2", unitS2, "/dev/null", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register s2: %v", err)
 	}

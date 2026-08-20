@@ -12,6 +12,7 @@ import (
 
 	"github.com/traycers/farc/fblock"
 	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/storage"
 )
 
 func dialFblockLiveTree(t *testing.T, srv *httptest.Server, storageID string, idx uint32) *websocket.Conn {
@@ -56,7 +57,7 @@ func TestHandleFblockLiveTreeWS_UnknownStorage(t *testing.T) {
 func TestHandleFblockLiveTreeWS_NoIngestManager(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg) // ing == nil
@@ -73,7 +74,7 @@ func TestHandleFblockLiveTreeWS_NoIngestManager(t *testing.T) {
 func TestHandleFblockLiveTreeWS_IndexOutOfRange(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	im := ingest.NewIngestManager()
@@ -95,7 +96,7 @@ func TestHandleFblockLiveTreeWS_IndexOutOfRange(t *testing.T) {
 func TestHandleFblockLiveTreeWS_NotInProgress(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t) // freshly initialized: fblock 0 is "uninitialized", not in_progress
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	im := ingest.NewIngestManager()
@@ -131,7 +132,7 @@ func TestHandleFblockLiveTreeWS_ConnectsAndSendsEmptyTreeWhenNoIngestData(t *tes
 	if _, _, _, err := u.BeginSegment([]uint16{1}, 100); err != nil {
 		t.Fatalf("BeginSegment: %v", err)
 	}
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	im := ingest.NewIngestManager()

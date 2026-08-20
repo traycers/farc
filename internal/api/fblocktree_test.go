@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/traycers/farc/internal/storage"
 	"github.com/traycers/farc/mediatree"
 )
 
@@ -58,7 +59,7 @@ func TestHandleReadFblockTree(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -119,7 +120,7 @@ func TestHandleGetFblock(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -152,7 +153,7 @@ func TestHandleGetFblock(t *testing.T) {
 func TestHandleGetFblock_OutOfRange(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)

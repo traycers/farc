@@ -103,6 +103,10 @@ func (u *Unit) EngineQueueDepth() int            { return u.engine.QueueDepth() 
 // signal ADR-011 wiring now sources from, superseding EngineLevel.
 func (u *Unit) PoolStatus() PoolStatus { return u.pool.Status() }
 
+// PoolTuning reports the resolved buffer-pool tuning this Unit was opened
+// with.
+func (u *Unit) PoolTuning() PoolTuning { return u.pool.Tuning() }
+
 // PoolSlots reports one row per pool slot (.scratch/fblocks-ui/issues/
 // 04-pool-status-list-plan.md's live pool-status list), with
 // prolog/catalog/epilog filled from this Storage's *current*

@@ -1,6 +1,6 @@
 # 02 — POST /storages applies+persists per-storage pool tuning; GET /storages returns it
 
-Status: open
+Status: resolved
 Blocked by: 01
 
 ## Task
@@ -94,3 +94,34 @@ listing reports the values actually in effect (spec decisions 1, 6, 8).
 ## Verify
 
 `go build ./... && go test ./internal/api/... ./internal/farcd/...`
+
+## Comments
+
+Implemented as specced. One deviation considered and rejected after
+checking with a second opinion: rather than adding pool via a separate
+`SetPoolTuning`-after-`Register` two-call construction (which would have
+avoided touching ~46 unrelated `Register(...)` call sites across
+`internal/hlsd`, `hlsclient`, `hlsapi`, `segment`, `tocindex` and this
+package's own tests), `StorageRegistry.Register` got the extra `pool
+storage.PoolTuning` parameter as originally specced -- a two-call
+construction would let a future caller silently forget the second call and
+leave `Pool: {0,0,0}` in `GET /storages`, which is a real value (not
+"unset"), unlike the resolved default. All ~46 call sites were mechanically
+updated (a script inserting `, storage.PoolTuning{}` before each call's
+closing paren, then `goimports -w` for the newly-needed `internal/storage`
+imports); the two production call sites (`storages.go`, `farcd.go`) pass the
+actually-resolved `unit.PoolTuning()`, not a zero value.
+
+Added beyond the issue's own test list (per review feedback): a registry
+test proving `List()` reports the *cached* pool, not `e.unit.PoolTuning()`
+(registers a unit opened with defaults under a different pool value and
+asserts `List()` shows the registered one) -- this is the assertion that
+actually guards issue 03's "PATCH visible immediately in GET, before
+restart" behavior; and a create-storage test proving an omitted `pool` in
+the POST body resolves to `4/2/4` in the response (catches the
+"echo `req.Pool` verbatim" bug class that a naive implementation could pass
+without actually reading `unit.PoolTuning()` back).
+
+`go build ./...`, `go test ./...` (whole repo, including the indirectly
+touched hlsd/hlsclient/hlsapi/segment/tocindex packages), and
+`golangci-lint run ./...` all clean.

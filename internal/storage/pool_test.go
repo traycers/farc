@@ -218,6 +218,20 @@ func TestPool_Slots_ContentAndTOCSizesTrackLiveFill(t *testing.T) {
 	}
 }
 
+func TestPool_Tuning_EchoesResolvedValues(t *testing.T) {
+	p := newTestPool(8, 4, 8)
+	if got := p.Tuning(); got != (PoolTuning{Size: 8, WarningAt: 4, BackpressureAt: 8}) {
+		t.Fatalf("Tuning() = %+v, want {8 4 8}", got)
+	}
+}
+
+func TestPool_Tuning_ZeroValueResolvesToDefaults(t *testing.T) {
+	p := newPool(PoolTuning{})
+	if got := p.Tuning(); got != DefaultPoolTuning() {
+		t.Fatalf("Tuning() = %+v, want defaults %+v", got, DefaultPoolTuning())
+	}
+}
+
 func TestPool_StatusThresholds(t *testing.T) {
 	p := newTestPool(4, 2, 3)
 	if got := p.Status(); got != PoolNormal {

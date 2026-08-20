@@ -91,12 +91,23 @@ func (a WSAddr) String() string { return fmt.Sprintf("%s:%d", a.IP, a.Port) }
 
 // Storage is one entry in the top-level "storages" list. CatalogPath is
 // optional (ADR-007's SSD mirror). No geometry/params fields exist here —
-// see this package's doc comment on why.
+// see this package's doc comment on why. PoolSize/PoolWarningAt/
+// PoolBackpressureAt back storage.PoolTuning — a per-storage, persisted
+// operational knob (how many fblocks this Storage's write-buffer pool may
+// hold in RAM at once), unlike Geometry/Params: it's not part of the on-disk
+// header, so it can be set here and changed later without touching an
+// already-initialized Storage. Zero (omitted) means "use
+// storage.DefaultPoolTuning()", the same convention storage.PoolTuning's own
+// zero-field handling already uses.
 type Storage struct {
 	ID          string `json:"id"`
 	Path        string `json:"path"`
 	CatalogPath string `json:"catalog_path,omitempty"`
 	Name        string `json:"name,omitempty"`
+
+	PoolSize           int `json:"pool_size,omitempty"`
+	PoolWarningAt      int `json:"pool_warning_at,omitempty"`
+	PoolBackpressureAt int `json:"pool_backpressure_at,omitempty"`
 }
 
 // CapturePolicyType names, as they appear in the config file's
@@ -140,20 +151,6 @@ type Config struct {
 	// log lines to (farcd.log), alongside stderr. Optional -- empty means
 	// stderr only, matching the process's behavior before this field existed.
 	LogDir string `json:"-"`
-
-	// StoragePool{Size,WarningAt,BackpressureAt} are FARC_STORAGE_POOL_SIZE/
-	// _WARNING_AT/_BACKPRESSURE_AT: the buffer-pool occupancy thresholds
-	// backing storage.PoolTuning (an operational, per-process tuning knob,
-	// not site-specific topology, hence env rather than the JSON file — same
-	// reasoning as HTTP/WS/Metrics above). Left as plain ints rather than
-	// storage.PoolTuning directly, matching this package's stdlib-only
-	// dependency rule (see package doc) -- internal/farcd, which already
-	// depends on both packages, does the int->storage.PoolTuning translation.
-	// 0 (unset) means "let storage.DefaultPoolTuning() decide", exactly like
-	// storage.PoolTuning's own zero-field convention -- not rejected here.
-	StoragePoolSize           int `json:"-"`
-	StoragePoolWarningAt      int `json:"-"`
-	StoragePoolBackpressureAt int `json:"-"`
 
 	// StorageBackend is FARC_STORAGE_BACKEND: selects internal/ioengine's
 	// Backend implementation ("direct"/"standard"/"" for the platform
@@ -258,19 +255,6 @@ func loadEnv(cfg *Config) error {
 
 	cfg.LogDir = os.Getenv("FARC_LOG_DIR")
 
-	cfg.StoragePoolSize, err = envInt("FARC_STORAGE_POOL_SIZE")
-	if err != nil {
-		return err
-	}
-	cfg.StoragePoolWarningAt, err = envInt("FARC_STORAGE_POOL_WARNING_AT")
-	if err != nil {
-		return err
-	}
-	cfg.StoragePoolBackpressureAt, err = envInt("FARC_STORAGE_POOL_BACKPRESSURE_AT")
-	if err != nil {
-		return err
-	}
-
 	cfg.StorageBackend = os.Getenv("FARC_STORAGE_BACKEND")
 
 	return nil
@@ -297,6 +281,16 @@ func envInt(key string) (int, error) {
 	return n, nil
 }
 
+// defaultPool{Size,WarningAt,BackpressureAt} mirror storage.DefaultPoolTuning
+// numbers -- duplicated here (rather than importing internal/storage) per
+// this package's stdlib-only dependency rule (see package doc). Keep these
+// in sync with storage.DefaultPoolTuning() by hand.
+const (
+	defaultPoolSize           = 4
+	defaultPoolWarningAt      = 2
+	defaultPoolBackpressureAt = 4
+)
+
 func (cfg *Config) validate() error {
 	if cfg.HTTP.Port == 0 {
 		return errors.New("http.port is required")
@@ -320,6 +314,20 @@ func (cfg *Config) validate() error {
 			return fmt.Errorf("storages[%d]: duplicate id %q", i, s.ID)
 		}
 		storageIDs[s.ID] = true
+
+		poolSize, warningAt, backpressureAt := s.PoolSize, s.PoolWarningAt, s.PoolBackpressureAt
+		if poolSize == 0 {
+			poolSize = defaultPoolSize
+		}
+		if warningAt == 0 {
+			warningAt = defaultPoolWarningAt
+		}
+		if backpressureAt == 0 {
+			backpressureAt = defaultPoolBackpressureAt
+		}
+		if warningAt < 1 || backpressureAt < warningAt || poolSize < backpressureAt {
+			return fmt.Errorf("storages[%d]: pool tuning must satisfy 1 <= warning_at <= backpressure_at <= size", i)
+		}
 	}
 
 	channelIDs := make(map[uint16]bool, len(cfg.Channels))

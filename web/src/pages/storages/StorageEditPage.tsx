@@ -33,6 +33,9 @@ export default function StorageEditPage() {
   const [retentionDays, setRetentionDays] = useState(30)
   const [writeMode, setWriteMode] = useState('')
   const [name, setName] = useState('')
+  const [poolSize, setPoolSize] = useState(4)
+  const [poolWarningAt, setPoolWarningAt] = useState(2)
+  const [poolBackpressureAt, setPoolBackpressureAt] = useState(4)
 
   useEffect(() => {
     listStorages()
@@ -41,6 +44,12 @@ export default function StorageEditPage() {
         setStorage(found)
         if (found) {
           setName(found.name ?? '')
+          // Unlike retentionDays/writeMode above, GET /storages does report
+          // the real pool tuning in effect (issues 02/03) -- prefill from
+          // it rather than a UI default.
+          setPoolSize(found.pool.Size)
+          setPoolWarningAt(found.pool.WarningAt)
+          setPoolBackpressureAt(found.pool.BackpressureAt)
         }
       })
       .catch((e) => setError(String(e)))
@@ -79,6 +88,19 @@ export default function StorageEditPage() {
     try {
       await patchStorage(id!, { write_mode: mode })
       setStatus(`write mode set to ${mode}`)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function onSavePool() {
+    setError(null)
+    setStatus(null)
+    try {
+      await patchStorage(id!, {
+        pool: { Size: poolSize, WarningAt: poolWarningAt, BackpressureAt: poolBackpressureAt },
+      })
+      setStatus('pool tuning saved (takes effect after farcd restart)')
     } catch (e) {
       setError(String(e))
     }
@@ -140,7 +162,8 @@ export default function StorageEditPage() {
             <div className="card-body">
               <h2 className="card-title h5">Mutable settings</h2>
               <p className="card-text text-body-secondary">
-                Everything above is fixed at creation time. Only retention and write mode can still change.
+                Everything above is fixed at creation time. Retention, write mode, name, and pool tuning can still
+                change.
               </p>
               <div className="d-flex flex-column gap-3">
                 <div>
@@ -188,6 +211,57 @@ export default function StorageEditPage() {
                       ))}
                     </select>
                   </label>
+                </div>
+                <div>
+                  <label className="form-label">
+                    pool size (fblocks in RAM)
+                    <input
+                      type="number"
+                      className="form-control"
+                      value={poolSize}
+                      onChange={(e) => setPoolSize(Number(e.target.value))}
+                    />
+                  </label>
+                  <div className="form-text">
+                    ≈ {formatGiB(poolSize * storage.geometry.FblockSize)} GiB RAM when the pool is full
+                  </div>
+                </div>
+                <div>
+                  <label className="form-label">
+                    pool warning at
+                    <input
+                      type="number"
+                      className="form-control"
+                      value={poolWarningAt}
+                      onChange={(e) => setPoolWarningAt(Number(e.target.value))}
+                    />
+                  </label>
+                  <div className="form-text">
+                    {poolSize === 0
+                      ? '—'
+                      : `${poolWarningAt} of ${poolSize} slots (${Math.round((100 * poolWarningAt) / poolSize)}%)`}
+                  </div>
+                </div>
+                <div>
+                  <label className="form-label">
+                    pool backpressure at
+                    <input
+                      type="number"
+                      className="form-control"
+                      value={poolBackpressureAt}
+                      onChange={(e) => setPoolBackpressureAt(Number(e.target.value))}
+                    />
+                  </label>
+                  <div className="form-text">
+                    {poolSize === 0
+                      ? '—'
+                      : `${poolBackpressureAt} of ${poolSize} slots (${Math.round((100 * poolBackpressureAt) / poolSize)}%)`}
+                  </div>
+                </div>
+                <div>
+                  <button type="button" className="btn btn-outline-secondary" onClick={onSavePool}>
+                    Save pool tuning
+                  </button>
                 </div>
               </div>
             </div>

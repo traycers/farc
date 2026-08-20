@@ -1,6 +1,6 @@
 # 01 — Per-storage pool-tuning config schema + storage-package accessors
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -128,3 +128,23 @@ today's single global env value (see spec decisions 1-3).
 ## Verify
 
 `go build ./... && go test ./internal/config/... ./internal/storage/... ./internal/farcd/...`
+
+## Comments
+
+Implemented as specced: `config.Storage.PoolSize/PoolWarningAt/PoolBackpressureAt`
+replace the removed global `Config.StoragePool*`/env vars;
+`storage.PoolTuning.Validate()`, `Pool.Tuning()`, `Unit.PoolTuning()` added;
+`config.validate()` checks the ordering with locally duplicated default
+constants; `farcd.openStorage` now reads `sc.PoolSize`/etc. per storage.
+Added `TestNew_OpensEachStorageWithItsOwnConfiguredPoolTuning` to prove two
+storages in the same config resolve independently (one explicit, one
+defaulted). `go build ./...`, `go test ./internal/config/... ./internal/storage/... ./internal/farcd/...`,
+and `golangci-lint run` on the three packages all clean.
+
+**Addendum (added while fixing a bug found during issue 03's review):**
+`internal/storage/tuning.go` also gained `PoolTuning.Resolved() PoolTuning`
+(returns `t.withDefaults()`) -- `Validate()` only returns `error` and
+discards the resolved copy it builds internally, so any caller that needs
+to *store* a possibly-partial `PoolTuning` after validating it (issue 03's
+PATCH branch) needs this to avoid persisting a partial group's zero fields
+verbatim. See issue 03's Comments for the full story.

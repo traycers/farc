@@ -9,6 +9,10 @@ const storage: StorageInfo = {
   path: '/data/s1',
   name: 'Storage One',
   geometry: { FblockSize: 1_000_000, N: 4, MaxChannels: 8 },
+  // Deliberately not the UI's own default (4/2/4) -- distinguishes a real
+  // prefill from listStorages() from a hardcoded default the component
+  // might fall back to.
+  pool: { Size: 8, WarningAt: 4, BackpressureAt: 8 },
 }
 
 const { patchStorage, deleteStorage } = vi.hoisted(() => ({
@@ -70,5 +74,43 @@ describe('StorageEditPage detach button', () => {
 
     await screen.findByText(/still has channel 3 attached/)
     expect(screen.queryByTestId('storages-index')).toBeNull()
+  })
+})
+
+describe('StorageEditPage pool tuning fields', () => {
+  beforeEach(() => {
+    patchStorage.mockClear()
+  })
+
+  it('pre-fills the three fields from the fetched storage.pool, not a UI default', async () => {
+    renderPage()
+
+    expect(await screen.findByLabelText(/pool size/i)).toHaveValue(8)
+    expect(screen.getByLabelText(/pool warning at/i)).toHaveValue(4)
+    expect(screen.getByLabelText(/pool backpressure at/i)).toHaveValue(8)
+  })
+
+  it('shows the percentage/RAM helper text for the fetched values', async () => {
+    renderPage()
+
+    await screen.findByLabelText(/pool size/i)
+    // fblockSize = 1_000_000 bytes, poolSize = 8 -> ~0.01 GiB (well under 1 GiB)
+    expect(screen.getByText(/GiB RAM when the pool is full/i)).toBeInTheDocument()
+    expect(screen.getByText(/4 of 8 slots \(50%\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/8 of 8 slots \(100%\)/i)).toBeInTheDocument()
+  })
+
+  it('saves all three fields together under one pool key with a single button', async () => {
+    renderPage()
+
+    await screen.findByLabelText(/pool size/i)
+    fireEvent.change(screen.getByLabelText(/pool size/i), { target: { value: '16' } })
+    fireEvent.change(screen.getByLabelText(/pool warning at/i), { target: { value: '8' } })
+    fireEvent.change(screen.getByLabelText(/pool backpressure at/i), { target: { value: '16' } })
+    fireEvent.click(screen.getByRole('button', { name: /save pool/i }))
+
+    await screen.findByText(/takes effect after farcd restart/i)
+    expect(patchStorage).toHaveBeenCalledTimes(1)
+    expect(patchStorage).toHaveBeenCalledWith('s1', { pool: { Size: 16, WarningAt: 8, BackpressureAt: 16 } })
   })
 })

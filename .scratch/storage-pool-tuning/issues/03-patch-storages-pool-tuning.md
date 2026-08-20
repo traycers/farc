@@ -1,6 +1,6 @@
 # 03 — PATCH /storages/{id}: grouped pool-tuning update
 
-Status: open
+Status: resolved
 Blocked by: 02
 
 ## Task
@@ -98,3 +98,38 @@ registry cache (decision 8, same mechanism issue 02 wired up for create).
 ## Verify
 
 `go build ./... && go test ./internal/api/... ./internal/farcd/...`
+
+## Comments
+
+Implemented as specced: `patchStorageRequest.Pool *storage.PoolTuning`,
+validated via `Validate()` then applied via `SetPoolTuning` +
+`onStoragePoolUpdated`; `onStoragePoolUpdated` added as its own hook on
+`HttpApiServer` (kept separate from `onStorageUpdated`'s name-only
+signature); `persistUpdatedStoragePool` mirrors `persistUpdatedStorage`.
+Tests cover: PATCH's pool visible immediately in a subsequent GET (registry
+cache, no restart); invalid ordering rejected 400 and leaves the registry's
+previous value untouched; a pool-less PATCH (existing `retention_days`-only
+case) leaves it unchanged; the hook receives id+pool; and a farcd-level test
+that a PATCH's pool values survive a restart via the saved config file.
+
+**Correction, caught by a second-opinion review after the above first
+landed:** step 2's claim above ("`Validate()`, which already applies
+`withDefaults()` internally, ... is exactly what goes to registry+config")
+was wrong -- `Validate()` only returns `error`; the resolved copy it builds
+internally to check the ordering was discarded, so a *partial* group (e.g.
+`{"pool":{"Size":8}}`, leaving `WarningAt`/`BackpressureAt` at their JSON
+zero value) validated fine but then stored `{8,0,0}` verbatim in the
+registry/config -- a real, wrong value indistinguishable from "unset",
+unlike the create path (issue 02), which was already correct because it
+reads back `unit.PoolTuning()` post-`Open` rather than trusting the
+request. Fixed by adding `PoolTuning.Resolved()` (issue 01's package,
+`internal/storage/tuning.go` -- returns `t.withDefaults()`, i.e. exposes
+what `Validate()` already computed but threw away) and using
+`req.Pool.Resolved()` -- not `*req.Pool` -- for both `SetPoolTuning` and
+`onStoragePoolUpdated`. Added
+`TestHandlePatchStorage_Pool_PartialGroupIsResolvedBeforeStoring` (a
+partial `{Size:8}` group must resolve to `{8,2,4}` in the registry, not
+`{8,0,0}`) and a `TestPoolTuning_Resolved` table test in
+`internal/storage/tuning_test.go`.
+
+`go build ./...`, `go test ./...`, and `golangci-lint run ./...` all clean.

@@ -56,6 +56,41 @@ func initAndOpen(t *testing.T, dir string, geo Geometry, catalogPath string) *Un
 	return openExisting(t, imgPath, catalogPath)
 }
 
+// initAndOpenWithPoolTuning is initAndOpen but opens with a caller-chosen
+// PoolTuning instead of letting it default.
+func initAndOpenWithPoolTuning(t *testing.T, dir string, geo Geometry, poolTuning PoolTuning) *Unit {
+	t.Helper()
+	imgPath := filepath.Join(dir, "storage.img")
+	err := CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
+	if err != nil {
+		t.Fatalf("CreateSizedFile: %v", err)
+	}
+	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatalf("OpenStandard: %v", err)
+	}
+	err = Init(b, InitConfig{Geometry: geo, Params: smallParams(), Now: 1})
+	if err != nil {
+		b.Close()
+		t.Fatalf("Init: %v", err)
+	}
+	err = b.Close()
+	if err != nil {
+		t.Fatalf("close after init: %v", err)
+	}
+
+	b2, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	u, err := Open(OpenConfig{Backend: b2, PoolTuning: poolTuning})
+	if err != nil {
+		b2.Close()
+		t.Fatalf("Open: %v", err)
+	}
+	return u
+}
+
 func openExisting(t *testing.T, imgPath, catalogPath string) *Unit {
 	t.Helper()
 	b, err := ioengine.OpenStandard(imgPath, os.O_RDWR, 0o644)

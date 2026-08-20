@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/traycers/farc/internal/storage"
 )
 
 // TestHandleGetCatalog is the bulk-catalog endpoint's core contract
@@ -16,7 +18,7 @@ func TestHandleGetCatalog(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "hello-frame", 150, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)
@@ -68,7 +70,7 @@ func TestHandleGetCatalog_IncludesProtectedFlag(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 200, "hello-frame", 150, 1000)
-	if err := reg.Register("s1", u, "s1.img", ""); err != nil {
+	if err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	srv := newTestServer(t, reg)

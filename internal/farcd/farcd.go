@@ -124,7 +124,7 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 			return nil, fmt.Errorf("farcd: open storage %q: %w", sc.ID, err)
 		}
 		f.units = append(f.units, unit)
-		err = f.registry.Register(sc.ID, unit, sc.Path, sc.Name)
+		err = f.registry.Register(sc.ID, unit, sc.Path, sc.Name, unit.PoolTuning())
 		if err != nil {
 			f.closeUnits()
 			return nil, fmt.Errorf("farcd: register storage %q: %w", sc.ID, err)
@@ -183,6 +183,7 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 	apiServer := api.NewHttpApiServer(f.registry, f.ing, push)
 	apiServer.SetOnStorageCreated(f.persistNewStorage)
 	apiServer.SetOnStorageUpdated(f.persistUpdatedStorage)
+	apiServer.SetOnStoragePoolUpdated(f.persistUpdatedStoragePool)
 	apiServer.SetOnStorageRemoved(f.persistRemovedStorage)
 	apiServer.SetOnChannelCreated(f.persistNewChannel)
 	apiServer.SetOnChannelUpdated(f.persistUpdatedChannel)
@@ -228,9 +229,9 @@ func openStorage(sc config.Storage, cfg *config.Config) (*storage.Unit, error) {
 		CatalogPath: sc.CatalogPath,
 		Tuning:      storage.DefaultEngineTuning(),
 		PoolTuning: storage.PoolTuning{
-			Size:           cfg.StoragePoolSize,
-			WarningAt:      cfg.StoragePoolWarningAt,
-			BackpressureAt: cfg.StoragePoolBackpressureAt,
+			Size:           sc.PoolSize,
+			WarningAt:      sc.PoolWarningAt,
+			BackpressureAt: sc.PoolBackpressureAt,
 		},
 	})
 	if err != nil {
@@ -329,14 +330,17 @@ func (f *Farcd) withConfigMutation(errCtx string, mutate func() (rollback func()
 // only reason a runtime-created storage survives farcd's next restart
 // (config.Load is the only thing New's own storage-opening loop ever reads;
 // it never Inits, see this package's own doc comment).
-func (f *Farcd) persistNewStorage(id, path, catalogPath, name string) error {
+func (f *Farcd) persistNewStorage(id, path, catalogPath, name string, pool storage.PoolTuning) error {
 	mutated, err := f.withConfigMutation(fmt.Sprintf("persist storage %q", id), func() (func(), error) {
 		for _, s := range f.cfg.Storages {
 			if s.ID == id {
 				return nil, nil //nolint:nilnil // withConfigMutation's own documented "nothing to do" signal, not an error
 			}
 		}
-		f.cfg.Storages = append(f.cfg.Storages, config.Storage{ID: id, Path: path, CatalogPath: catalogPath, Name: name})
+		f.cfg.Storages = append(f.cfg.Storages, config.Storage{
+			ID: id, Path: path, CatalogPath: catalogPath, Name: name,
+			PoolSize: pool.Size, PoolWarningAt: pool.WarningAt, PoolBackpressureAt: pool.BackpressureAt,
+		})
 		return func() {
 			f.cfg.Storages = f.cfg.Storages[:len(f.cfg.Storages)-1]
 		}, nil
@@ -369,6 +373,36 @@ func (f *Farcd) persistUpdatedStorage(id, name string) error {
 		f.cfg.Storages[idx].Name = name
 		return func() {
 			f.cfg.Storages[idx].Name = old
+		}, nil
+	})
+	return err
+}
+
+// persistUpdatedStoragePool persists an existing storage's pool-tuning group
+// (PATCH /storages/{id} with a pool field), wired into HttpApiServer via
+// SetOnStoragePoolUpdated. Only the config file changes here -- the live
+// Unit's Pool keeps its original tuning until farcd's next restart re-opens
+// the Storage (Pool has no resize method), while GET /storages already
+// reflects the new value immediately via the registry cache
+// (StorageRegistry.SetPoolTuning, done by the caller before this hook runs).
+func (f *Farcd) persistUpdatedStoragePool(id string, pool storage.PoolTuning) error {
+	_, err := f.withConfigMutation(fmt.Sprintf("persist storage %q pool tuning", id), func() (func(), error) {
+		idx := -1
+		for i, s := range f.cfg.Storages {
+			if s.ID == id {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil, fmt.Errorf("farcd: persist storage %q pool tuning: not present in config", id)
+		}
+		old := f.cfg.Storages[idx]
+		f.cfg.Storages[idx].PoolSize = pool.Size
+		f.cfg.Storages[idx].PoolWarningAt = pool.WarningAt
+		f.cfg.Storages[idx].PoolBackpressureAt = pool.BackpressureAt
+		return func() {
+			f.cfg.Storages[idx] = old
 		}, nil
 	})
 	return err

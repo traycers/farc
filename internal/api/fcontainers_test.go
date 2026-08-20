@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/traycers/farc/internal/storage"
 	"github.com/traycers/farc/mediatree"
 	"github.com/traycers/farc/toc"
 )
@@ -32,7 +33,7 @@ func TestHandleReadTOC(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestHandleReadContent_WholeExport(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestHandleReadContent_Ranges(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestHandleSetProtected(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
 	uuid := writeVideoFrame(t, u, []uint16{1}, 1, 100, 100, "hello-frame", 100, 1000)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestHandleSetProtected(t *testing.T) {
 func TestHandleSetProtected_UnknownUUID(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

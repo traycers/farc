@@ -112,23 +112,23 @@ func TestLoad_CustomEnvAddr(t *testing.T) {
 	}
 }
 
-func TestLoad_StoragePoolEnv(t *testing.T) {
+func TestLoad_StoragePoolTuning_PerStorageJSONField(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("FARC_STORAGE_POOL_SIZE", "8")
-	t.Setenv("FARC_STORAGE_POOL_WARNING_AT", "4")
-	t.Setenv("FARC_STORAGE_POOL_BACKPRESSURE_AT", "8")
-
-	const doc = `{"storages": [{"id":"disk0","path":"/dev/sdb1"}], "channels": []}`
+	const doc = `{
+  "storages": [{"id":"disk0","path":"/dev/sdb1","pool_size":8,"pool_warning_at":4,"pool_backpressure_at":8}],
+  "channels": []
+}`
 	cfg, err := Load(writeConfig(t, doc))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.StoragePoolSize != 8 || cfg.StoragePoolWarningAt != 4 || cfg.StoragePoolBackpressureAt != 8 {
-		t.Fatalf("StoragePool* = %d/%d/%d, want 8/4/8", cfg.StoragePoolSize, cfg.StoragePoolWarningAt, cfg.StoragePoolBackpressureAt)
+	s := cfg.Storages[0]
+	if s.PoolSize != 8 || s.PoolWarningAt != 4 || s.PoolBackpressureAt != 8 {
+		t.Fatalf("Storage.Pool* = %d/%d/%d, want 8/4/8", s.PoolSize, s.PoolWarningAt, s.PoolBackpressureAt)
 	}
 }
 
-func TestLoad_StoragePoolEnvUnsetDefaultsToZero(t *testing.T) {
+func TestLoad_StoragePoolTuning_UnsetDefaultsToZero(t *testing.T) {
 	setRequiredEnv(t)
 	const doc = `{"storages": [{"id":"disk0","path":"/dev/sdb1"}], "channels": []}`
 	cfg, err := Load(writeConfig(t, doc))
@@ -136,10 +136,35 @@ func TestLoad_StoragePoolEnvUnsetDefaultsToZero(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	// Zero here means "use storage.DefaultPoolTuning()" (PoolTuning.
-	// withDefaults' job, one layer up in internal/farcd, not loadEnv's) --
-	// unset must not be rejected.
-	if cfg.StoragePoolSize != 0 || cfg.StoragePoolWarningAt != 0 || cfg.StoragePoolBackpressureAt != 0 {
-		t.Fatalf("StoragePool* = %d/%d/%d, want 0/0/0 when unset", cfg.StoragePoolSize, cfg.StoragePoolWarningAt, cfg.StoragePoolBackpressureAt)
+	// withDefaults' job, one layer up in internal/storage) -- unset must not
+	// be rejected.
+	s := cfg.Storages[0]
+	if s.PoolSize != 0 || s.PoolWarningAt != 0 || s.PoolBackpressureAt != 0 {
+		t.Fatalf("Storage.Pool* = %d/%d/%d, want 0/0/0 when unset", s.PoolSize, s.PoolWarningAt, s.PoolBackpressureAt)
+	}
+}
+
+func TestLoad_StoragePoolTuning_ValidOrderingAccepted(t *testing.T) {
+	setRequiredEnv(t)
+	const doc = `{
+  "storages": [{"id":"disk0","path":"/dev/sdb1","pool_size":8,"pool_warning_at":4,"pool_backpressure_at":8}],
+  "channels": []
+}`
+	_, err := Load(writeConfig(t, doc))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+}
+
+func TestLoad_StoragePoolTuning_InvalidOrderingRejected(t *testing.T) {
+	setRequiredEnv(t)
+	const doc = `{
+  "storages": [{"id":"disk0","path":"/dev/sdb1","pool_size":4,"pool_warning_at":6,"pool_backpressure_at":8}],
+  "channels": []
+}`
+	_, err := Load(writeConfig(t, doc))
+	if err == nil {
+		t.Fatalf("Load: want error for pool_size < pool_backpressure_at, got nil")
 	}
 }
 
@@ -269,6 +294,32 @@ func TestSave_RoundTripsThroughLoad(t *testing.T) {
 	}
 	if got.HTTP.String() != cfg.HTTP.String() || len(got.Channels) != len(cfg.Channels) {
 		t.Fatalf("Save lost unrelated fields: got = %+v", got)
+	}
+}
+
+func TestSave_StoragePoolTuningRoundTripsThroughLoad(t *testing.T) {
+	setRequiredEnv(t)
+	path := writeConfig(t, docExample)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Storages[0].PoolSize = 8
+	cfg.Storages[0].PoolWarningAt = 4
+	cfg.Storages[0].PoolBackpressureAt = 8
+	err = Save(path, cfg)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	s := got.Storages[0]
+	if s.PoolSize != 8 || s.PoolWarningAt != 4 || s.PoolBackpressureAt != 8 {
+		t.Fatalf("Storage.Pool* after round-trip = %d/%d/%d, want 8/4/8", s.PoolSize, s.PoolWarningAt, s.PoolBackpressureAt)
 	}
 }
 

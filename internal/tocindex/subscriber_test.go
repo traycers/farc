@@ -11,6 +11,7 @@ import (
 
 	"github.com/traycers/farc/internal/api"
 	"github.com/traycers/farc/internal/hlsclient"
+	"github.com/traycers/farc/internal/storage"
 	"github.com/traycers/farc/internal/toccache"
 	"github.com/traycers/farc/internal/tocindex"
 	"github.com/traycers/farc/toc"
@@ -145,7 +146,7 @@ func TestEventSubscriber_LiveEventSkipsGetTOC(t *testing.T) {
 	uuid1 := writeVideoFrame(t, unit, []uint16{9}, 9, 100, 100, "f1", 100, 1000)
 
 	reg := api.NewStorageRegistry()
-	if err := reg.Register("s1", unit, "/dev/null", ""); err != nil {
+	if err := reg.Register("s1", unit, "/dev/null", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := api.NewEventPushServer(reg)
@@ -204,7 +205,7 @@ func TestEventSubscriber_BootstrapUsesCacheDiff(t *testing.T) {
 	uuid1 := writeVideoFrame(t, unit, []uint16{9}, 9, 100, 100, "f1", 100, 1000)
 
 	reg := api.NewStorageRegistry()
-	if err := reg.Register("s1", unit, "/dev/null", ""); err != nil {
+	if err := reg.Register("s1", unit, "/dev/null", "", storage.PoolTuning{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	push := api.NewEventPushServer(reg)

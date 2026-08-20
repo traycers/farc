@@ -30,8 +30,8 @@ describe('ChannelNewPage rtsp_url generate button', () => {
 
 describe('ChannelNewPage default storage selection', () => {
   const twoStorages = [
-    { id: 's1', name: 'Storage One', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } },
-    { id: 's2', name: 'Storage Two', path: '/data/s2', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } },
+    { id: 's1', name: 'Storage One', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } },
+    { id: 's2', name: 'Storage Two', path: '/data/s2', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } },
   ]
 
   it('defaults to the storage named in the ?storage= query param', async () => {
@@ -51,8 +51,8 @@ describe('ChannelNewPage default storage selection', () => {
 
 describe('ChannelNewPage full-storage guard', () => {
   const oneFullOneNot = [
-    { id: 's1', name: 'Storage One', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 1 } },
-    { id: 's2', name: 'Storage Two', path: '/data/s2', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } },
+    { id: 's1', name: 'Storage One', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 1 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } },
+    { id: 's2', name: 'Storage Two', path: '/data/s2', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } },
   ]
   const oneChannelOnS1 = [
     { channel: 1, rtsp_url: 'rtsp://a', storage: 's1', capture_policy_type: 'continuous' as const, prerecord_ns: 0, postrecord_ns: 0 },

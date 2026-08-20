@@ -62,6 +62,14 @@ export default function StorageNewPage() {
   const n = Math.max(1, Math.floor((desiredSizeGiB * GiB) / fblockSize))
   const actualSizeBytes = n * fblockSize
   const [maxChannels, setMaxChannels] = useState(8)
+  // Pool size/warning/backpressure: how many fblocks this Storage's
+  // write-buffer pool may hold in RAM at once (storage.PoolTuning) --
+  // farcd's own default (storage.DefaultPoolTuning()) is 4/2/4, mirrored
+  // here rather than left unset, since the UI is the only place this is
+  // ever configured for a new storage.
+  const [poolSize, setPoolSize] = useState(4)
+  const [poolWarningAt, setPoolWarningAt] = useState(2)
+  const [poolBackpressureAt, setPoolBackpressureAt] = useState(4)
   const [writeMode, setWriteMode] = useState<(typeof WRITE_MODES)[number]>('cyclic')
   const [retentionDays, setRetentionDays] = useState(30)
   const [minContainerShare, setMinContainerShare] = useState(0.1)
@@ -89,6 +97,7 @@ export default function StorageNewPage() {
         force,
         catalog_path: '',
         backend: '',
+        pool: { Size: poolSize, WarningAt: poolWarningAt, BackpressureAt: poolBackpressureAt },
       })
       navigate('/storages')
     } catch (e) {
@@ -205,6 +214,52 @@ export default function StorageNewPage() {
                   onChange={(e) => setMaxChannels(Number(e.target.value))}
                 />
               </label>
+            </div>
+            <div>
+              <label className="form-label">
+                pool size (fblocks in RAM)
+                <input
+                  type="number"
+                  className="form-control"
+                  value={poolSize}
+                  onChange={(e) => setPoolSize(Number(e.target.value))}
+                />
+              </label>
+              <div className="form-text">
+                ≈ {formatGiB(poolSize * fblockSize)} GiB RAM when the pool is full
+              </div>
+            </div>
+            <div>
+              <label className="form-label">
+                pool warning at
+                <input
+                  type="number"
+                  className="form-control"
+                  value={poolWarningAt}
+                  onChange={(e) => setPoolWarningAt(Number(e.target.value))}
+                />
+              </label>
+              <div className="form-text">
+                {poolSize === 0
+                  ? '—'
+                  : `${poolWarningAt} of ${poolSize} slots (${Math.round((100 * poolWarningAt) / poolSize)}%)`}
+              </div>
+            </div>
+            <div>
+              <label className="form-label">
+                pool backpressure at
+                <input
+                  type="number"
+                  className="form-control"
+                  value={poolBackpressureAt}
+                  onChange={(e) => setPoolBackpressureAt(Number(e.target.value))}
+                />
+              </label>
+              <div className="form-text">
+                {poolSize === 0
+                  ? '—'
+                  : `${poolBackpressureAt} of ${poolSize} slots (${Math.round((100 * poolBackpressureAt) / poolSize)}%)`}
+              </div>
             </div>
             <div>
               <label className="form-label">

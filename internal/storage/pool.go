@@ -93,6 +93,13 @@ func newPool(tuning PoolTuning) *Pool {
 	return &Pool{size: t.Size, warnAt: t.WarningAt, pressAt: t.BackpressureAt}
 }
 
+// Tuning reports the resolved PoolTuning this Pool was constructed with
+// (defaults already applied by newPool) -- internal/api's GET /storages
+// uses this at Storage-open time to learn what's actually in effect.
+func (p *Pool) Tuning() PoolTuning {
+	return PoolTuning{Size: p.size, WarningAt: p.warnAt, BackpressureAt: p.pressAt}
+}
+
 // Status reports the pool's current occupancy level.
 func (p *Pool) Status() PoolStatus {
 	p.mu.Lock()

@@ -437,7 +437,7 @@ func TestHandleStopRecording_NoIngestManager(t *testing.T) {
 
 func regTestUnit(t *testing.T, reg *StorageRegistry, id string) {
 	t.Helper()
-	err := reg.Register(id, newTestUnit(t), id+".img", "")
+	err := reg.Register(id, newTestUnit(t), id+".img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register(%q): %v", id, err)
 	}
@@ -445,7 +445,7 @@ func regTestUnit(t *testing.T, reg *StorageRegistry, id string) {
 
 func regTestUnitWithGeometry(t *testing.T, reg *StorageRegistry, id string, geo storage.Geometry) {
 	t.Helper()
-	err := reg.Register(id, newTestUnitWithGeometry(t, geo), id+".img", "")
+	err := reg.Register(id, newTestUnitWithGeometry(t, geo), id+".img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register(%q): %v", id, err)
 	}

@@ -28,7 +28,7 @@ func dialWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
 func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestEventPushServer_ForwardsMatchingEvent(t *testing.T) {
 func TestEventPushServer_PerStorageIncludePool(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestEventPushServer_PerStorageIncludePool(t *testing.T) {
 func TestEventPushServer_PerStorageWithoutIncludePool(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestEventPushServer_PerStorageWithoutIncludePool(t *testing.T) {
 func TestEventPushServer_FiltersByWant(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestEventPushServer_FiltersByChannel(t *testing.T) {
 	if !ok {
 		t.Fatalf("ResolveUUID: not found")
 	}
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestEventPushServer_ConcurrentPublishAndConnect(t *testing.T) {
 func TestEventPushServer_GlobalIncludeTOC(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestEventPushServer_GlobalIncludeTOC(t *testing.T) {
 func TestEventPushServer_PerStorageIncludeTOC(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestEventPushServer_PerStorageIncludeTOC(t *testing.T) {
 func TestEventPushServer_PerStorageWithoutIncludeTOC(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestEventPushServer_PerStorageWithoutIncludeTOC(t *testing.T) {
 func TestEventPushServer_GlobalWithoutIncludeTOC(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("s1", u, "s1.img", "")
+	err := reg.Register("s1", u, "s1.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

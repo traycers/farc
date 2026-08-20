@@ -34,6 +34,11 @@ type createStorageRequest struct {
 	// Name is an optional human-readable label -- purely cosmetic, no
 	// uniqueness constraint, id remains the only identity key.
 	Name string `json:"name,omitempty"`
+	// Pool sizes the write-buffer pool this Storage's Unit is opened with --
+	// how many fblocks may be filling/queued/actively-written in RAM at
+	// once (storage.PoolTuning). Zero fields resolve to
+	// storage.DefaultPoolTuning() (4/2/4).
+	Pool storage.PoolTuning `json:"pool"`
 }
 
 // createStorage is handleCreateStorage's HTTP-free core: Init+Open+Register
@@ -47,9 +52,13 @@ func (s *HttpApiServer) createStorage(req createStorageRequest) (StorageInfo, er
 	if _, exists := s.reg.Get(req.ID); exists {
 		return StorageInfo{}, apiErr(http.StatusConflict, fmt.Errorf("api: storage id %q already registered", req.ID))
 	}
+	err := req.Pool.Validate()
+	if err != nil {
+		return StorageInfo{}, apiErr(http.StatusBadRequest, err)
+	}
 
 	size := int64(req.Geometry.FblockSize) * int64(req.Geometry.N)
-	err := storage.CreateSizedFile(req.Path, size, 0o600)
+	err = storage.CreateSizedFile(req.Path, size, 0o600)
 	if err != nil {
 		return StorageInfo{}, err
 	}
@@ -74,24 +83,28 @@ func (s *HttpApiServer) createStorage(req createStorageRequest) (StorageInfo, er
 		return StorageInfo{}, err
 	}
 
-	unit, err := storage.Open(storage.OpenConfig{Backend: backend, CatalogPath: req.CatalogPath, Tuning: tuning})
+	unit, err := storage.Open(storage.OpenConfig{Backend: backend, CatalogPath: req.CatalogPath, Tuning: tuning, PoolTuning: req.Pool})
 	if err != nil {
 		_ = backend.Close()
 		return StorageInfo{}, err
 	}
+	// resolvedPool, not req.Pool, which may have zero fields storage.Open
+	// already resolved via PoolTuning.withDefaults() -- this is what's
+	// actually in effect, for both the registry cache and the response.
+	resolvedPool := unit.PoolTuning()
 
-	err = s.reg.Register(req.ID, unit, req.Path, req.Name)
+	err = s.reg.Register(req.ID, unit, req.Path, req.Name, resolvedPool)
 	if err != nil {
 		_ = unit.Close()
 		return StorageInfo{}, apiErr(http.StatusConflict, err)
 	}
 
-	err = s.onStorageCreated(req.ID, req.Path, req.CatalogPath, req.Name)
+	err = s.onStorageCreated(req.ID, req.Path, req.CatalogPath, req.Name, resolvedPool)
 	if err != nil {
 		return StorageInfo{}, fmt.Errorf("api: persist storage %q: %w", req.ID, err)
 	}
 
-	return StorageInfo{ID: req.ID, Path: req.Path, Name: req.Name, Geometry: req.Geometry}, nil
+	return StorageInfo{ID: req.ID, Path: req.Path, Name: req.Name, Geometry: req.Geometry, Pool: resolvedPool}, nil
 }
 
 // handleCreateStorage runs Initializer inline (ADR-006 makes this cheap —
@@ -181,6 +194,13 @@ type patchStorageRequest struct {
 	RetentionDays *int64  `json:"retention_days,omitempty"`
 	WriteMode     *string `json:"write_mode,omitempty"`
 	Name          *string `json:"name,omitempty"`
+	// Pool, if present, updates Size/WarningAt/BackpressureAt together as
+	// one atomic group -- persisted to config immediately but applied to
+	// the live Unit only after farcd's next restart (Pool has no resize
+	// method), though reflected in GET /storages immediately via the
+	// registry cache (StorageRegistry.SetPoolTuning), same mechanism
+	// createStorage uses.
+	Pool *storage.PoolTuning `json:"pool,omitempty"`
 }
 
 func (s *HttpApiServer) handlePatchStorage(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +225,25 @@ func (s *HttpApiServer) handlePatchStorage(w http.ResponseWriter, r *http.Reques
 		err := s.onStorageUpdated(id, *req.Name)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q rename: %w", id, err))
+			return
+		}
+	}
+	if req.Pool != nil {
+		err := req.Pool.Validate()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// Resolved, not *req.Pool verbatim: a partial group (e.g. only Size
+		// set) must store what it actually resolves to, or the registry
+		// (and therefore GET /storages) would show a stale zero for a field
+		// that's actually defaulting to something else -- same reasoning as
+		// createStorage's own resolvedPool.
+		resolvedPool := req.Pool.Resolved()
+		s.reg.SetPoolTuning(id, resolvedPool)
+		err = s.onStoragePoolUpdated(id, resolvedPool)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("api: persist storage %q pool tuning: %w", id, err))
 			return
 		}
 	}

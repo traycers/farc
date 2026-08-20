@@ -1,6 +1,6 @@
 # 04 — StorageNewPage.tsx: pool-tuning fields (Size/WarningAt/BackpressureAt)
 
-Status: open
+Status: resolved
 Blocked by: 02
 
 ## Task
@@ -65,3 +65,16 @@ doesn't crash or show `NaN%`).
 ## Verify
 
 `cd web && npx tsc -b && npx vitest run`
+
+## Comments
+
+Implemented as specced. `StorageInfo.pool`/`CreateStorageInput.pool`
+becoming required (matching `Geometry`'s own existing convention) required
+updating every other test file's `StorageInfo` fixture literal that didn't
+already carry a `pool` field (ChannelEditPage/ChannelNewPage/
+ChannelsIndexPage/StoragesIndexPage tests, plus StorageEditPage's own
+fixture used by issue 05) -- mechanical, no behavior change there. New
+`StorageNewPage.test.tsx` covers: default 4/2/4 submitted untouched, edited
+values submitted, RAM-estimate and percentage helper text, and the
+`poolSize = 0` edge case (renders `—`, never `NaN%`/`Infinity%`).
+`npx tsc -b` and `npx vitest run` (full suite, 130 tests) both clean.

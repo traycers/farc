@@ -5,8 +5,8 @@ import StoragesIndexPage from './StoragesIndexPage'
 import type { ChannelInfo, StorageInfo } from '../../api/farcd'
 
 const storages: StorageInfo[] = [
-  { id: 's1', name: 'Storage One', path: '/data/s1', geometry: { FblockSize: 1024, N: 1, MaxChannels: 8 } },
-  { id: 's2', name: 'Storage Two', path: '/data/s2', geometry: { FblockSize: 1024, N: 1, MaxChannels: 4 } },
+  { id: 's1', name: 'Storage One', path: '/data/s1', geometry: { FblockSize: 1024, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } },
+  { id: 's2', name: 'Storage Two', path: '/data/s2', geometry: { FblockSize: 1024, N: 1, MaxChannels: 4 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } },
 ]
 
 const channels: ChannelInfo[] = [

@@ -417,6 +417,39 @@ func TestNew_OpensStorageAndBuildsChannelConfig(t *testing.T) {
 	}
 }
 
+func TestNew_OpensEachStorageWithItsOwnConfiguredPoolTuning(t *testing.T) {
+	cfg, path := testConfigTwoStorages(t, nil)
+	cfg.Storages[0].PoolSize, cfg.Storages[0].PoolWarningAt, cfg.Storages[0].PoolBackpressureAt = 8, 4, 8
+	// disk1 left at zero -- must resolve to storage.DefaultPoolTuning(), not
+	// inherit disk0's explicit values.
+	err := config.Save(path, cfg)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer f.closeUnits()
+
+	disk0, ok := f.registry.Get("disk0")
+	if !ok {
+		t.Fatalf("disk0 not registered")
+	}
+	if got := disk0.PoolTuning(); got != (storage.PoolTuning{Size: 8, WarningAt: 4, BackpressureAt: 8}) {
+		t.Fatalf("disk0 PoolTuning() = %+v, want {8 4 8}", got)
+	}
+
+	disk1, ok := f.registry.Get("disk1")
+	if !ok {
+		t.Fatalf("disk1 not registered")
+	}
+	if got := disk1.PoolTuning(); got != storage.DefaultPoolTuning() {
+		t.Fatalf("disk1 PoolTuning() = %+v, want defaults %+v", got, storage.DefaultPoolTuning())
+	}
+}
+
 func TestNew_UnknownStorageReferenceCleansUpAndErrors(t *testing.T) {
 	cfg, path := testConfig(t, []config.Channel{
 		{ID: 1, RTSPURL: "rtsp://127.0.0.1:1/x", Storage: "nope",
@@ -599,6 +632,66 @@ func TestRun_CreateStorageOverHTTP_PersistsToConfigFile(t *testing.T) {
 	}
 }
 
+func TestRun_PatchStoragePoolOverHTTP_PersistsToConfigFile(t *testing.T) {
+	cfg, path := testConfig(t, nil) // disk0 already registered
+	f, err := New(cfg, path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- f.Run(ctx) }()
+	waitForServer(t, cfg.HTTP.String())
+
+	body := map[string]any{"pool": map[string]any{"Size": 8, "WarningAt": 4, "BackpressureAt": 8}}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPatch, "http://"+cfg.HTTP.String()+"/storages/disk0", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /storages/disk0: %v", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after context cancellation")
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load after restart: %v", err)
+	}
+	var found bool
+	for _, s := range reloaded.Storages {
+		if s.ID == "disk0" {
+			found = true
+			if s.PoolSize != 8 || s.PoolWarningAt != 4 || s.PoolBackpressureAt != 8 {
+				t.Fatalf("disk0 pool config = %+v, want 8/4/8", s)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("disk0 not present after restart: %+v", reloaded.Storages)
+	}
+}
+
 func TestRun_CreateChannelOverHTTP_PersistsToConfigFile(t *testing.T) {
 	cfg, path := testConfig(t, nil) // disk0 already registered
 	f, err := New(cfg, path)
@@ -703,7 +796,7 @@ func TestFarcd_PersistNewStorage_AlreadyPresentSkipsSave(t *testing.T) {
 	defer f.closeUnits()
 
 	f.configPath = filepath.Join(t.TempDir(), "does-not-exist", "farc.config.json")
-	err = f.persistNewStorage("disk0", "irrelevant", "", "irrelevant") // disk0 is already in cfg.Storages
+	err = f.persistNewStorage("disk0", "irrelevant", "", "irrelevant", storage.PoolTuning{}) // disk0 is already in cfg.Storages
 	if err != nil {
 		t.Fatalf("persistNewStorage (already present) = %v, want nil (idempotent, Save never attempted)", err)
 	}
@@ -722,7 +815,7 @@ func TestFarcd_PersistNewStorage_RollsBackOnSaveFailure(t *testing.T) {
 
 	before := len(f.cfg.Storages)
 	f.configPath = filepath.Join(t.TempDir(), "does-not-exist", "farc.config.json")
-	err = f.persistNewStorage("disk1", "/tmp/disk1.img", "", "Disk 1")
+	err = f.persistNewStorage("disk1", "/tmp/disk1.img", "", "Disk 1", storage.PoolTuning{})
 	if err == nil {
 		t.Fatal("persistNewStorage = nil error, want the Save failure to surface")
 	}

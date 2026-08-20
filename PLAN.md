@@ -248,6 +248,33 @@ All phases below are complete (`[x]`). This file is the running summary of *what
   Fixed with `IngestManager.retainedRTSPBytes map[string]int64`, folded in
   by `RemoveChannel` before a `ChannelIngest` is discarded, summed with
   live channels' current counts by the new `RTSPBytesReceivedForStorage`.
+- [x] Phase 29 — per-storage write-buffer pool tuning, exposed on the
+  storage add/edit pages (`.scratch/storage-pool-tuning/`, `spec.md` +
+  `issues/01`–`05`). `storage.PoolTuning`'s `Size`/`WarningAt`/
+  `BackpressureAt` moved from a single global, env-only, process-wide
+  setting (`Config.StoragePoolSize`/etc., `FARC_STORAGE_POOL_SIZE`/etc. —
+  removed, breaking change) to a per-storage field on `config.Storage`
+  (`pool_size`/`pool_warning_at`/`pool_backpressure_at`, zero means
+  `storage.DefaultPoolTuning()`), so different storages can size their pool
+  differently and the value survives a restart. New `PoolTuning.Validate()`
+  (`1 <= warning_at <= backpressure_at <= size`), `Pool.Tuning()`/
+  `Unit.PoolTuning()` accessors. `POST`/`GET`/`PATCH /storages` all carry a
+  `pool` object; `GET` reflects the registry's *cached* value (updated by
+  `PATCH` immediately, independent of the live `Unit`, mirroring the
+  existing `name`/`path` cache) rather than the live `Unit`'s, so an
+  operator sees their PATCH take effect in the list right away even though
+  it only actually applies to the running pool after farcd's next restart
+  (`Pool` has no resize method). `StorageNewPage`/`StorageEditPage` gained
+  three fields (size/warning/backpressure) with RAM-estimate and
+  percentage-of-size helper text; the edit page prefills from the real
+  `GET /storages` value and saves all three as one atomic group. Adding a
+  `pool storage.PoolTuning` parameter to `StorageRegistry.Register` (rather
+  than a lower-blast-radius `Register`-then-`SetPoolTuning` two-call
+  construction) was deliberately chosen despite touching ~46 call sites
+  across `internal/api`/`hlsd`/`hlsclient`/`hlsapi`/`segment`/`tocindex`
+  tests — a two-call construction would let a future caller silently forget
+  the second call and leave `Pool: {0,0,0}` in a response, which is a real
+  (wrong) value, not "unset".
 
 ## Context
 
@@ -292,7 +319,7 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 | `web/src/api/ns.ts` | `bigint` helpers for Unix-nanosecond timestamps: `nsFromDate`, `nsToDate`, `parseCandidatesJSON` |
 | `web/src/api/farcd.ts` | Typed fetch client: `listStorages`, `createStorage`, `patchStorage`, `candidates`, `setProtected`, `setCapturePolicy`, `triggerEvent`, `listChannels`, `createChannel`, `updateChannel`, `removeChannel` |
 | `web/src/api/events.ts` | Phase 18: `subscribeJournal`, an auto-reconnecting WS client for the Journal feed |
-| `web/src/pages/storages/{StoragesIndexPage,StorageNewPage,StorageEditPage}.tsx` | Rails-style split: list-only index + per-row "Edit" link; create form; edit page (retention/write_mode patch) |
+| `web/src/pages/storages/{StoragesIndexPage,StorageNewPage,StorageEditPage}.tsx` | Rails-style split: list-only index + per-row "Edit" link; create form (incl. pool tuning); edit page (retention/write_mode/name/pool-tuning patches) |
 | `web/src/pages/channels/{ChannelsIndexPage,ChannelNewPage,ChannelEditPage}.tsx` | Storage-filtered list + remove/trigger/start-stop-recording actions; create/edit forms with a storage `<select>` |
 | `web/src/pages/PlayerPage.tsx` | Storage+channel+time-range form → candidates list → protected toggle + hls.js playback |
 | `web/src/pages/JournalPage.tsx` | Phase 18: live event table, connect/reconnect status, client-side "Clear" |

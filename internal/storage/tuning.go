@@ -1,6 +1,10 @@
 package storage
 
-import "github.com/traycers/farc/internal/storageengine"
+import (
+	"fmt"
+
+	"github.com/traycers/farc/internal/storageengine"
+)
 
 // EngineTuning are the storageengine.Config knobs that aren't part of the
 // on-disk fblock.Params JSON (docs/docs/archive/03-storage-format.md §5.2
@@ -73,6 +77,27 @@ func (t PoolTuning) withDefaults() PoolTuning {
 		t.BackpressureAt = d.BackpressureAt
 	}
 	return t
+}
+
+// Resolved returns t with every zero field replaced by
+// DefaultPoolTuning's -- the actual values a caller who only specified part
+// of the group (e.g. just Size) ends up with. Callers that persist or cache
+// a PoolTuning after validating it (PATCH /storages/{id}'s pool group,
+// POST /storages before storage.Open resolves it internally) must store
+// this, not the raw, possibly-partial input, or a stored zero field would
+// misrepresent an in-effect default as "0" instead of what it actually
+// resolves to.
+func (t PoolTuning) Resolved() PoolTuning { return t.withDefaults() }
+
+// Validate reports whether t's fully-resolved (default-applied) values
+// satisfy 1 <= WarningAt <= BackpressureAt <= Size -- the ordering
+// backpressure's occupancy check (Pool.statusLocked) assumes.
+func (t PoolTuning) Validate() error {
+	r := t.withDefaults()
+	if r.WarningAt < 1 || r.BackpressureAt < r.WarningAt || r.Size < r.BackpressureAt {
+		return fmt.Errorf("storage: pool tuning must satisfy 1 <= warning_at <= backpressure_at <= size (got size=%d warning_at=%d backpressure_at=%d)", r.Size, r.WarningAt, r.BackpressureAt)
+	}
+	return nil
 }
 
 func engineConfig(fchunkSize, readChunkSize int64, tuning EngineTuning) storageengine.Config {

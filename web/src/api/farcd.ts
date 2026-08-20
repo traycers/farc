@@ -10,6 +10,14 @@ export type Geometry = {
   MaxChannels: number
 }
 
+// storage.PoolTuning has no json tags in Go either -- PascalCase, same
+// reasoning as Geometry above.
+export type PoolTuning = {
+  Size: number
+  WarningAt: number
+  BackpressureAt: number
+}
+
 export type Retention = { days: number }
 
 export type Params = {
@@ -25,6 +33,7 @@ export type StorageInfo = {
   path: string
   name?: string
   geometry: Geometry
+  pool: PoolTuning
 }
 
 async function ok(res: Response): Promise<Response> {
@@ -48,6 +57,7 @@ export type CreateStorageInput = {
   force: boolean
   catalog_path: string
   backend: string
+  pool: PoolTuning
 }
 
 export async function createStorage(input: CreateStorageInput): Promise<StorageInfo> {
@@ -64,7 +74,7 @@ export async function createStorage(input: CreateStorageInput): Promise<StorageI
 
 export async function patchStorage(
   id: string,
-  patch: { retention_days?: number; write_mode?: string; name?: string },
+  patch: { retention_days?: number; write_mode?: string; name?: string; pool?: PoolTuning },
 ): Promise<void> {
   await ok(
     await fetch(`${BASE}/storages/${encodeURIComponent(id)}`, {

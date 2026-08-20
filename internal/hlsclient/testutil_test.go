@@ -116,7 +116,7 @@ type testServer struct {
 func newTestServer(t *testing.T, unit *storage.Unit, channels ...uint16) *testServer {
 	t.Helper()
 	reg := api.NewStorageRegistry()
-	err := reg.Register("s1", unit, "/dev/null", "")
+	err := reg.Register("s1", unit, "/dev/null", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

@@ -5,7 +5,7 @@ import ChannelsIndexPage from './ChannelsIndexPage'
 import type { ChannelInfo, StorageInfo } from '../../api/farcd'
 import type { JournalEvent } from '../../api/events'
 
-let storages: StorageInfo[] = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } }]
+let storages: StorageInfo[] = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } }]
 let channels: ChannelInfo[] = []
 
 vi.mock('../../api/farcd', () => ({
@@ -28,7 +28,7 @@ vi.mock('../../api/events', () => ({
 
 beforeEach(() => {
   onJournalEvent = () => {}
-  storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } }]
+  storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } }]
   channels = []
 })
 
@@ -106,7 +106,7 @@ describe('ChannelsIndexPage', () => {
 
 describe('ChannelsIndexPage "New channel" capacity guard', () => {
   it('disables New channel with an explanatory title when the filtered storage is full', async () => {
-    storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 1 } }]
+    storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 1 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } }]
     channels = [
       { channel: 1, name: 'cam1', rtsp_url: 'rtsp://a', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0 },
     ]
@@ -118,7 +118,7 @@ describe('ChannelsIndexPage "New channel" capacity guard', () => {
   })
 
   it('keeps New channel as a working link to the storage-scoped form when there is room', async () => {
-    storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } }]
+    storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } }]
     channels = []
     renderPage()
 

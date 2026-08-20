@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/traycers/farc/internal/ingest"
+	"github.com/traycers/farc/internal/storage"
 )
 
 func postJSON(t *testing.T, srv *httptest.Server, path string, body any) *http.Response {
@@ -92,10 +93,13 @@ func TestHandleCreateStorage_CallsOnStorageCreatedHook(t *testing.T) {
 	reg := NewStorageRegistry()
 	s := NewHttpApiServer(reg, nil, nil)
 
-	type call struct{ id, path, catalogPath, name string }
+	type call struct {
+		id, path, catalogPath, name string
+		pool                        storage.PoolTuning
+	}
 	var got *call
-	s.SetOnStorageCreated(func(id, path, catalogPath, name string) error {
-		got = &call{id, path, catalogPath, name}
+	s.SetOnStorageCreated(func(id, path, catalogPath, name string, pool storage.PoolTuning) error {
+		got = &call{id, path, catalogPath, name, pool}
 		return nil
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -122,12 +126,15 @@ func TestHandleCreateStorage_CallsOnStorageCreatedHook(t *testing.T) {
 	if got.id != "hooked" || got.path != req.Path || got.catalogPath != catalogPath {
 		t.Fatalf("hook called with %+v", got)
 	}
+	if got.pool != storage.DefaultPoolTuning() {
+		t.Fatalf("hook called with pool = %+v, want resolved defaults %+v (req.Pool was left zero-valued)", got.pool, storage.DefaultPoolTuning())
+	}
 }
 
 func TestHandleCreateStorage_OnStorageCreatedErrorFailsRequestButKeepsRegistration(t *testing.T) {
 	reg := NewStorageRegistry()
 	s := NewHttpApiServer(reg, nil, nil)
-	s.SetOnStorageCreated(func(id, path, catalogPath, name string) error {
+	s.SetOnStorageCreated(func(id, path, catalogPath, name string, pool storage.PoolTuning) error {
 		return errors.New("disk full")
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -148,6 +155,112 @@ func TestHandleCreateStorage_OnStorageCreatedErrorFailsRequestButKeepsRegistrati
 		t.Fatalf("storage should stay registered in-memory even though persistence failed")
 	}
 	u.Close()
+}
+
+// TestHandleCreateStorage_ExplicitPoolRoundTripsThroughList proves an
+// explicit pool object in the request survives Open+Register and is what a
+// subsequent GET /storages reports -- not the request's raw value read back
+// blindly, but resolvedPool == unit.PoolTuning() (createStorage's own doc
+// comment on why: req.Pool may have zero fields storage.Open resolves).
+func TestHandleCreateStorage_ExplicitPoolRoundTripsThroughList(t *testing.T) {
+	reg := NewStorageRegistry()
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req := createStorageRequest{
+		ID: "pooled", Path: filepath.Join(t.TempDir(), "storage.img"),
+		Geometry: smallGeometry(), Params: smallParams(), Backend: "standard",
+		Pool: storage.PoolTuning{Size: 8, WarningAt: 4, BackpressureAt: 8},
+	}
+	resp := postJSON(t, srv, "/storages", req)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, body)
+	}
+	if u, ok := reg.Get("pooled"); ok {
+		defer u.Close()
+	}
+
+	var info StorageInfo
+	if err := decodeBody(resp, &info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if info.Pool != (storage.PoolTuning{Size: 8, WarningAt: 4, BackpressureAt: 8}) {
+		t.Fatalf("response Pool = %+v, want {8 4 8}", info.Pool)
+	}
+
+	listResp, err := http.Get(srv.URL + "/storages")
+	if err != nil {
+		t.Fatalf("GET /storages: %v", err)
+	}
+	defer listResp.Body.Close()
+	var list []StorageInfo
+	if err := decodeBody(listResp, &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list) != 1 || list[0].Pool != (storage.PoolTuning{Size: 8, WarningAt: 4, BackpressureAt: 8}) {
+		t.Fatalf("GET /storages list = %+v, want Pool {8 4 8}", list)
+	}
+}
+
+// TestHandleCreateStorage_OmittedPoolResolvesToDefaults is the assertion
+// that actually distinguishes reading back unit.PoolTuning() (correct) from
+// echoing req.Pool verbatim (a bug: req.Pool would be the zero value here,
+// not the resolved 4/2/4).
+func TestHandleCreateStorage_OmittedPoolResolvesToDefaults(t *testing.T) {
+	reg := NewStorageRegistry()
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req := createStorageRequest{
+		ID: "defaulted", Path: filepath.Join(t.TempDir(), "storage.img"),
+		Geometry: smallGeometry(), Params: smallParams(), Backend: "standard",
+		// Pool deliberately omitted (zero value).
+	}
+	resp := postJSON(t, srv, "/storages", req)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (body=%s)", resp.StatusCode, body)
+	}
+	if u, ok := reg.Get("defaulted"); ok {
+		defer u.Close()
+	}
+
+	var info StorageInfo
+	if err := decodeBody(resp, &info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if info.Pool != storage.DefaultPoolTuning() {
+		t.Fatalf("response Pool = %+v, want resolved defaults %+v", info.Pool, storage.DefaultPoolTuning())
+	}
+}
+
+// TestHandleCreateStorage_InvalidPoolOrderingRejected400 guards
+// createStorage's req.Pool.Validate() check.
+func TestHandleCreateStorage_InvalidPoolOrderingRejected400(t *testing.T) {
+	reg := NewStorageRegistry()
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req := createStorageRequest{
+		ID: "bad-pool", Path: filepath.Join(t.TempDir(), "storage.img"),
+		Geometry: smallGeometry(), Params: smallParams(), Backend: "standard",
+		Pool: storage.PoolTuning{Size: 4, WarningAt: 6, BackpressureAt: 8},
+	}
+	resp := postJSON(t, srv, "/storages", req)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400 (body=%s)", resp.StatusCode, body)
+	}
+	if _, ok := reg.Get("bad-pool"); ok {
+		t.Fatalf("storage must not be registered when pool validation rejects the request")
+	}
 }
 
 func TestHandleCreateStorage_DuplicateIDConflicts(t *testing.T) {
@@ -180,7 +293,7 @@ func TestHandleCreateStorage_DuplicateIDConflicts(t *testing.T) {
 func TestHandleListStorages(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("a", u, "/x/a.img", "")
+	err := reg.Register("a", u, "/x/a.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -206,7 +319,7 @@ func TestHandleListStorages(t *testing.T) {
 func TestHandlePatchStorage_RetentionDays(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("a", u, "a.img", "")
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -233,10 +346,192 @@ func TestHandlePatchStorage_RetentionDays(t *testing.T) {
 	}
 }
 
+func TestHandlePatchStorage_Pool_UpdatesRegistryImmediately(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{Size: 4, WarningAt: 2, BackpressureAt: 4})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	pool := storage.PoolTuning{Size: 8, WarningAt: 4, BackpressureAt: 8}
+	buf, _ := json.Marshal(patchStorageRequest{Pool: &pool})
+	httpReq, err := http.NewRequest(http.MethodPatch, srv.URL+"/storages/a", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204 (body=%s)", resp.StatusCode, body)
+	}
+
+	listResp, err := http.Get(srv.URL + "/storages")
+	if err != nil {
+		t.Fatalf("GET /storages: %v", err)
+	}
+	defer listResp.Body.Close()
+	var list []StorageInfo
+	if err := decodeBody(listResp, &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 || list[0].Pool != pool {
+		t.Fatalf("GET /storages after PATCH = %+v, want Pool %+v reflected immediately (registry cache, no restart)", list, pool)
+	}
+}
+
+// TestHandlePatchStorage_Pool_PartialGroupIsResolvedBeforeStoring guards
+// against storing the raw (possibly zero-field) request: PATCH with only
+// Size set must resolve WarningAt/BackpressureAt to their defaults before
+// landing in the registry (and therefore GET /storages), not leave them at
+// the request's own zero value -- which would misrepresent the pool actually
+// in effect after farcd's next restart (config.Storage.PoolWarningAt=0
+// resolves to the default there too).
+func TestHandlePatchStorage_Pool_PartialGroupIsResolvedBeforeStoring(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{Size: 4, WarningAt: 2, BackpressureAt: 4})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	partial := storage.PoolTuning{Size: 8} // WarningAt/BackpressureAt left zero
+	buf, _ := json.Marshal(patchStorageRequest{Pool: &partial})
+	httpReq, err := http.NewRequest(http.MethodPatch, srv.URL+"/storages/a", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204 (body=%s)", resp.StatusCode, body)
+	}
+
+	want := storage.PoolTuning{Size: 8, WarningAt: 2, BackpressureAt: 4}
+	if got := reg.List()[0].Pool; got != want {
+		t.Fatalf("registry Pool after partial PATCH = %+v, want resolved %+v (not the raw partial request)", got, want)
+	}
+}
+
+func TestHandlePatchStorage_Pool_InvalidOrderingRejected400AndLeavesPreviousValue(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	original := storage.PoolTuning{Size: 4, WarningAt: 2, BackpressureAt: 4}
+	err := reg.Register("a", u, "a.img", "", original)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	bad := storage.PoolTuning{Size: 4, WarningAt: 6, BackpressureAt: 8}
+	buf, _ := json.Marshal(patchStorageRequest{Pool: &bad})
+	httpReq, err := http.NewRequest(http.MethodPatch, srv.URL+"/storages/a", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400 (body=%s)", resp.StatusCode, body)
+	}
+
+	if got := reg.List()[0].Pool; got != original {
+		t.Fatalf("registry Pool after rejected PATCH = %+v, want unchanged %+v", got, original)
+	}
+}
+
+func TestHandlePatchStorage_OmittedPoolLeavesItUnchanged(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	original := storage.PoolTuning{Size: 4, WarningAt: 2, BackpressureAt: 4}
+	err := reg.Register("a", u, "a.img", "", original)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	days := int64(7)
+	buf, _ := json.Marshal(patchStorageRequest{RetentionDays: &days})
+	httpReq, err := http.NewRequest(http.MethodPatch, srv.URL+"/storages/a", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	if got := reg.List()[0].Pool; got != original {
+		t.Fatalf("registry Pool after pool-less PATCH = %+v, want unchanged %+v", got, original)
+	}
+}
+
+func TestHandlePatchStorage_Pool_CallsOnStoragePoolUpdatedHook(t *testing.T) {
+	reg := NewStorageRegistry()
+	u := newTestUnit(t)
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s := NewHttpApiServer(reg, nil, nil)
+	var gotID string
+	var gotPool storage.PoolTuning
+	s.SetOnStoragePoolUpdated(func(id string, pool storage.PoolTuning) error {
+		gotID, gotPool = id, pool
+		return nil
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	pool := storage.PoolTuning{Size: 8, WarningAt: 4, BackpressureAt: 8}
+	buf, _ := json.Marshal(patchStorageRequest{Pool: &pool})
+	httpReq, err := http.NewRequest(http.MethodPatch, srv.URL+"/storages/a", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if gotID != "a" || gotPool != pool {
+		t.Fatalf("onStoragePoolUpdated called with id=%q pool=%+v, want a/%+v", gotID, gotPool, pool)
+	}
+}
+
 func TestHandleRemoveStorage_UnregistersAndCloses(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("a", u, "a.img", "")
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -308,7 +603,7 @@ func TestHandleRemoveStorage_LeavesTheBackingFileOnDisk(t *testing.T) {
 func TestHandleRemoveStorage_RefusesWhileChannelsStillAttached(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("a", u, "a.img", "")
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -344,7 +639,7 @@ func TestHandleRemoveStorage_RefusesWhileChannelsStillAttached(t *testing.T) {
 func TestHandleRemoveStorage_CallsOnStorageRemovedHookBeforeClosing(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("a", u, "a.img", "")
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -383,7 +678,7 @@ func TestHandleRemoveStorage_CallsOnStorageRemovedHookBeforeClosing(t *testing.T
 func TestHandleRemoveStorage_OnStorageRemovedErrorKeepsStorageRegistered(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)
-	err := reg.Register("a", u, "a.img", "")
+	err := reg.Register("a", u, "a.img", "", storage.PoolTuning{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
