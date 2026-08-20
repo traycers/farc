@@ -1,11 +1,13 @@
 package api
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/traycers/farc/fblock"
+	"github.com/traycers/farc/internal/ingest"
 	"github.com/traycers/farc/internal/storage"
 	"github.com/traycers/farc/internal/storageengine"
 )
@@ -31,6 +33,17 @@ var (
 	storageStateDesc            = prometheus.NewDesc("farc_storage_state", "Storage state: 1=running (v1 has no async job state).", []string{"storage"}, nil)
 	channelRegistryUsedDesc     = prometheus.NewDesc("farc_channel_registry_used", "Occupied channel registry slots.", []string{"storage"}, nil)
 	channelRegistryCapacityDesc = prometheus.NewDesc("farc_channel_registry_capacity", "Total channel registry slots.", []string{"storage"}, nil)
+	rtspBytesReceivedDesc       = prometheus.NewDesc("farc_rtsp_bytes_received_total", "Total raw RTP payload bytes received across this storage's channels, before depacketize/decode.", []string{"storage"}, nil)
+	storageBytesWrittenDesc     = prometheus.NewDesc("farc_storage_bytes_written_total", "Total fblock content bytes successfully written.", []string{"storage"}, nil)
+	fblocksCompletedDesc        = prometheus.NewDesc("farc_fblocks_completed_total", "Total fblocks that transitioned to Ready (fblock rotation rate).", []string{"storage"}, nil)
+
+	// Per-fblock section sizes, recorded once at fblock completion (no
+	// backfill for fblocks already Ready before this shipped, no disk
+	// re-read) -- the first two-label (storage, fblock) metrics in this
+	// file, every other farc_* metric above being storage-only.
+	fblockCatalogSizeDesc = prometheus.NewDesc("farc_fblock_catalog_size_bytes", "Fblock catalog section size in bytes.", []string{"storage", "fblock"}, nil)
+	fblockTocSizeDesc     = prometheus.NewDesc("farc_fblock_toc_size_bytes", "Fblock TOC section size in bytes.", []string{"storage", "fblock"}, nil)
+	fblockContentSizeDesc = prometheus.NewDesc("farc_fblock_content_size_bytes", "Fblock content section size in bytes.", []string{"storage", "fblock"}, nil)
 )
 
 // storageCollector implements prometheus.Collector: Prometheus text
@@ -39,6 +52,10 @@ var (
 // external system like Prometheus/VictoriaMetrics owns aggregation).
 type storageCollector struct {
 	reg *StorageRegistry
+	// ing is nil-safe (mirrors HttpApiServer.ing's own optionality, see
+	// api.go's package doc): a nil ing simply emits 0 for
+	// farc_rtsp_bytes_received_total, since there are no channels to sum.
+	ing *ingest.IngestManager
 }
 
 func (c *storageCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -47,6 +64,8 @@ func (c *storageCollector) Describe(ch chan<- *prometheus.Desc) {
 		fblocksRetainedDesc, fblocksProtectedDesc, fblocksBadDesc, fblocksInProgressDesc,
 		writeQueueDepthDesc, writeQueueStatusDesc, writesTotalDesc, writeVerifyFailuresDesc,
 		readsInProgressDesc, storageStateDesc, channelRegistryUsedDesc, channelRegistryCapacityDesc,
+		rtspBytesReceivedDesc, storageBytesWrittenDesc, fblocksCompletedDesc,
+		fblockCatalogSizeDesc, fblockTocSizeDesc, fblockContentSizeDesc,
 	} {
 		ch <- d
 	}
@@ -58,11 +77,22 @@ func (c *storageCollector) Collect(ch chan<- prometheus.Metric) {
 		if !ok {
 			continue // removed between List() and Get() -- skip rather than error the whole scrape
 		}
-		collectUnitMetrics(ch, info.ID, unit)
+		collectUnitMetrics(ch, info.ID, unit, c.ing)
 	}
 }
 
-func collectUnitMetrics(ch chan<- prometheus.Metric, id string, unit *storage.Unit) {
+// rtspBytesReceivedForStorage wraps IngestManager.RTSPBytesReceivedForStorage
+// (which also accounts for channels since removed/replaced, so a channel
+// edit doesn't reset the metric -- see its own doc comment). ing may be nil
+// (no IngestManager wired into this HttpApiServer).
+func rtspBytesReceivedForStorage(ing *ingest.IngestManager, storageID string) float64 {
+	if ing == nil {
+		return 0
+	}
+	return float64(ing.RTSPBytesReceivedForStorage(storageID))
+}
+
+func collectUnitMetrics(ch chan<- prometheus.Metric, id string, unit *storage.Unit, ing *ingest.IngestManager) {
 	geo := unit.Geometry()
 	snap := unit.Index().Snapshot()
 	retentionNS := uint64(unit.Index().RetentionDays() * nsPerDay)
@@ -108,7 +138,7 @@ func collectUnitMetrics(ch chan<- prometheus.Metric, id string, unit *storage.Un
 		queueStatus = 2
 	}
 
-	writes, writeFailures, _ := unit.Health().Stats()
+	writes, writeFailures, _, bytesWritten := unit.Health().Stats()
 
 	gauge := func(d *prometheus.Desc, v float64) {
 		ch <- prometheus.MustNewConstMetric(d, prometheus.GaugeValue, v, id)
@@ -139,4 +169,18 @@ func collectUnitMetrics(ch chan<- prometheus.Metric, id string, unit *storage.Un
 	gauge(storageStateDesc, 1)
 	gauge(channelRegistryUsedDesc, float64(used))
 	gauge(channelRegistryCapacityDesc, float64(geo.MaxChannels))
+	counter(rtspBytesReceivedDesc, rtspBytesReceivedForStorage(ing, id))
+	counter(storageBytesWrittenDesc, float64(bytesWritten))
+	counter(fblocksCompletedDesc, float64(unit.Health().FblocksCompleted()))
+
+	// One gauge triplet per fblock actually completed since this feature
+	// shipped -- not one per storage like every metric above -- since
+	// there is no in-memory cache of these sizes for the full (possibly
+	// several-million-fblock) catalog to iterate over instead.
+	for _, rec := range unit.Health().FblockSizes() {
+		fblockLabel := strconv.FormatUint(uint64(rec.Index), 10)
+		ch <- prometheus.MustNewConstMetric(fblockCatalogSizeDesc, prometheus.GaugeValue, float64(rec.CatalogSize), id, fblockLabel)
+		ch <- prometheus.MustNewConstMetric(fblockTocSizeDesc, prometheus.GaugeValue, float64(rec.TocSize), id, fblockLabel)
+		ch <- prometheus.MustNewConstMetric(fblockContentSizeDesc, prometheus.GaugeValue, float64(rec.ContentSize), id, fblockLabel)
+	}
 }

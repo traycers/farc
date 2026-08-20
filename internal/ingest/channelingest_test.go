@@ -26,8 +26,8 @@ type onPacketOnlySource struct {
 }
 
 func (s *onPacketOnlySource) Start() error { return nil }
-func (s *onPacketOnlySource) Close()                          {}
-func (s *onPacketOnlySource) Wait() error                     { return nil }
+func (s *onPacketOnlySource) Close()       {}
+func (s *onPacketOnlySource) Wait() error  { return nil }
 func (s *onPacketOnlySource) Describe(*base.URL) (*description.Session, *base.Response, error) {
 	return nil, nil, nil
 }
@@ -72,6 +72,34 @@ func TestChannelIngest_SkipFramesWhileBackpressureSignalTrue(t *testing.T) {
 	}
 }
 
+// TestChannelIngest_RTSPBytesReceivedCountsRawPayloadBytes is
+// .scratch/storage-fblocks-dashboard-v2/issues/02-rtsp-in-vs-storage-write-
+// volume.md: the counter must reflect raw RTP payload bytes as they arrive,
+// regardless of what the codec-specific decode step does with them.
+func TestChannelIngest_RTSPBytesReceivedCountsRawPayloadBytes(t *testing.T) {
+	seg, _ := newTestSegment()
+	policy := NewCapturePolicy(1, seg, uint64(1000), PolicyContinuous, PolicyParams{})
+	if err := policy.StartRecording(0, nil); err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+	ci := NewChannelIngest(1, policy)
+
+	src := &onPacketOnlySource{}
+	f := &format.G711{PayloadTyp: 0, MULaw: true, SampleRate: 8000, ChannelCount: 1}
+	ci.setupG711(src, &description.Media{}, f, 0)
+
+	src.cb(&rtp.Packet{Payload: []byte{1, 2, 3}})
+	src.cb(&rtp.Packet{Payload: []byte{4, 5, 6, 7, 8}})
+
+	if got, want := ci.RTSPBytesReceived(), int64(8); got != want {
+		t.Fatalf("RTSPBytesReceived() = %d, want %d", got, want)
+	}
+
+	if err := policy.Close(2000); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 // dualMediaSource is an rtspSource fake that, unlike scriptedSource, records
 // every OnPacketRTP callback it's given (in registration order) so a test
 // can drive real per-media frames through ChannelIngest.run's actual
@@ -90,8 +118,8 @@ type dualMediaSource struct {
 }
 
 func (s *dualMediaSource) Start() error { return nil }
-func (s *dualMediaSource) Close()                          { s.closeOnce.Do(func() { close(s.closed) }) }
-func (s *dualMediaSource) Wait() error                     { <-s.closed; return nil }
+func (s *dualMediaSource) Close()       { s.closeOnce.Do(func() { close(s.closed) }) }
+func (s *dualMediaSource) Wait() error  { <-s.closed; return nil }
 func (s *dualMediaSource) Describe(*base.URL) (*description.Session, *base.Response, error) {
 	return s.desc, nil, nil
 }

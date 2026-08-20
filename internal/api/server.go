@@ -39,7 +39,7 @@ func NewHttpApiServer(reg *StorageRegistry, ing *ingest.IngestManager, push *Eve
 	promReg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		&storageCollector{reg: reg},
+		&storageCollector{reg: reg, ing: ing},
 	)
 
 	s := &HttpApiServer{

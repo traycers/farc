@@ -1,6 +1,6 @@
 # 02 — RTSP-in vs storage-write byte volume (metrics + panel)
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -81,3 +81,38 @@ manually: run the local dev stack (`docker compose up`), use the channel
 form's "Generate" button (this session's `mediamtx`/`ffmpeg-test` addition)
 to point a channel at the local RTSP test source, confirm both new series
 move on the dashboard panel.
+
+## Comments
+
+2026-08-20: Implemented, with one simplification vs. the original plan --
+`ChannelIngest` didn't need its own `StorageID` field:
+`IngestManager`'s `channelEntry.cfg.StorageID` already carries it, so only
+the byte counter was new. Added `rtspBytesReceived atomic.Int64` +
+`RTSPBytesReceived()` to `ChannelIngest`, incremented in all three
+`OnPacketRTP` closures (`internal/ingest/rtsp.go`). Added `bytesWritten
+atomic.Int64` + `RecordBytesWritten`/extended `Stats()` to `HealthMonitor`
+(`internal/storage/health.go`, new `health_test.go`); threaded a new
+`contentSize uint32` param into `completeFblockWrite`
+(`internal/storage/writetxn.go`) from both `segment.go` call sites. Wired
+`farc_rtsp_bytes_received_total`/`farc_storage_bytes_written_total` into
+`internal/api/metrics.go` (`storageCollector` gained a nil-safe `ing`
+field); added the combined panel to the dashboard JSON.
+
+Post-implementation review caught that `handleUpdateChannel`/`RemoveChannel`
+construct a brand-new `ChannelIngest` per edit/removal (`ReplaceChannel` is
+remove-then-add under the hood), so the naive "sum RTSPBytesReceived over
+`ing.List()`" design would zero a channel's contribution on any PUT
+`/channels/{id}` and drop it entirely on removal -- read by Prometheus as a
+counter reset. Fixed by adding `IngestManager.retainedRTSPBytes
+map[string]int64` (keyed by StorageID): `RemoveChannel` folds a departing
+`ChannelIngest`'s count in before discarding it, and the new
+`RTSPBytesReceivedForStorage(storageID)` sums retained + live channels'
+current counts. `internal/api/metrics.go` now calls that method directly
+instead of filtering `ing.List()` itself; the earlier
+`ChannelInfo.RTSPBytesReceived` field (unused once this landed) was
+removed. New tests: `TestIngestManager_RTSPBytesReceivedForStorage_
+SurvivesRemoveChannel`/`_SurvivesReplaceChannel`.
+
+All new/changed tests green (`go test ./internal/ingest/...
+./internal/storage/... ./internal/api/...`), full suite +
+`golangci-lint run` clean.

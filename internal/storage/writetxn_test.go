@@ -62,7 +62,7 @@ func TestUnit_BeginFblockWrite_PublishesFblockDeletedWhenReusingReadySlot(t *tes
 	if err != nil {
 		t.Fatalf("beginFblockWrite (first): %v", err)
 	}
-	if err := u.completeFblockWrite(idx, firstUUID, 1, 2, h.Prolog.WriteSequence, 2); err != nil {
+	if err := u.completeFblockWrite(idx, firstUUID, 1, 2, h.Prolog.WriteSequence, 2, 0, 0, 0); err != nil {
 		t.Fatalf("completeFblockWrite (first): %v", err)
 	}
 	drainEvents(events) // WriteStarted + WriteCompleted from the first cycle, not under test here
@@ -151,9 +151,9 @@ func TestUnit_CompleteFblockWrite_TransitionsToReadyAndRecordsHealth(t *testing.
 	events := u.Notify().Subscribe(8)
 	defer u.Notify().Unsubscribe(events)
 
-	writesBefore, failuresBefore, _ := u.Health().Stats()
+	writesBefore, failuresBefore, _, bytesWrittenBefore := u.Health().Stats()
 
-	if err := u.completeFblockWrite(idx, uuid, 10, 20, h.Prolog.WriteSequence, 30); err != nil {
+	if err := u.completeFblockWrite(idx, uuid, 10, 20, h.Prolog.WriteSequence, 30, 500, 64, 8); err != nil {
 		t.Fatalf("completeFblockWrite: %v", err)
 	}
 
@@ -161,12 +161,22 @@ func TestUnit_CompleteFblockWrite_TransitionsToReadyAndRecordsHealth(t *testing.
 		t.Fatalf("State(%d) = %v, want Ready", idx, got)
 	}
 
-	writesAfter, failuresAfter, _ := u.Health().Stats()
+	writesAfter, failuresAfter, _, bytesWrittenAfter := u.Health().Stats()
 	if writesAfter != writesBefore+1 {
 		t.Fatalf("writes = %d, want %d", writesAfter, writesBefore+1)
 	}
 	if failuresAfter != failuresBefore {
 		t.Fatalf("writeFailures = %d, want unchanged at %d", failuresAfter, failuresBefore)
+	}
+	if bytesWrittenAfter != bytesWrittenBefore+500 {
+		t.Fatalf("bytesWritten = %d, want %d", bytesWrittenAfter, bytesWrittenBefore+500)
+	}
+
+	sizes := u.Health().FblockSizes()
+	last := sizes[len(sizes)-1]
+	want := FblockSizeRecord{Index: idx, CatalogSize: 64, TocSize: 8, ContentSize: 500}
+	if last != want {
+		t.Fatalf("FblockSizes() last = %+v, want %+v", last, want)
 	}
 
 	got := drainEvents(events)
@@ -192,7 +202,7 @@ func TestUnit_FailFblockWrite_MarksBadAndRecordsHealth(t *testing.T) {
 	events := u.Notify().Subscribe(8)
 	defer u.Notify().Unsubscribe(events)
 
-	_, failuresBefore, _ := u.Health().Stats()
+	_, failuresBefore, _, _ := u.Health().Stats()
 
 	if err := u.failFblockWrite(idx, uuid); err != nil {
 		t.Fatalf("failFblockWrite: %v", err)
@@ -202,7 +212,7 @@ func TestUnit_FailFblockWrite_MarksBadAndRecordsHealth(t *testing.T) {
 		t.Fatalf("State(%d) = %v, want Bad", idx, got)
 	}
 
-	_, failuresAfter, _ := u.Health().Stats()
+	_, failuresAfter, _, _ := u.Health().Stats()
 	if failuresAfter != failuresBefore+1 {
 		t.Fatalf("writeFailures = %d, want %d", failuresAfter, failuresBefore+1)
 	}

@@ -215,6 +215,39 @@ All phases below are complete (`[x]`). This file is the running summary of *what
   vaa[-_]?block"` sweep returning nothing outside
   `.scratch/remove-msm-integration/`'s own files and other `.scratch/**`
   issue files with incidental, unrelated mentions left alone on purpose.
+- [x] Phase 28 — redesigned the "Storage & Fblocks" Grafana dashboard
+  (`.scratch/storage-fblocks-dashboard-v2/`, `spec.md` + `issues/01`–`04`):
+  pruned 4 of its 5 panels (fblock states, write queue depth/status,
+  channel registry usage — all redundant with other dashboards or rarely
+  actionable), kept write-verify failures, added 3 new panels backed by new
+  metrics. RTSP-in vs storage-write byte volume: `farc_rtsp_bytes_received_total{storage}`
+  (raw RTP payload bytes, counted in `internal/ingest/rtsp.go`'s three
+  `OnPacketRTP` closures before decode) vs `farc_storage_bytes_written_total{storage}`
+  (fblock content bytes only, from a new `HealthMonitor.bytesWritten`
+  threaded through `completeFblockWrite`), one combined panel with per-storage
+  and summed lines. Fblock completion rate: `farc_fblocks_completed_total{storage}`,
+  incremented once inside `completeFblockWrite` (both `segment.go` callers
+  already funnel through it), no summed line (a cross-storage sum of
+  differently-sized storages' rotation rates isn't meaningful). Per-fblock
+  catalog/TOC/content sizes: `farc_fblock_{catalog,toc,content}_size_bytes{storage,fblock}` —
+  `internal/api/metrics.go`'s first two-label metrics — emitted once at the
+  same completion point (no disk re-read, no backfill for fblocks already
+  `Ready` before this shipped), rendered as a Grafana `"xychart"` panel
+  (3 lines via `topk(50,...)` + a `joinByField` transform, not stacked bars,
+  since `catalog_size` is geometry-constant and bars would bury the
+  toc/content trend). `HealthMonitor.fblockSizes` is `map[uint32]FblockSizeRecord`
+  (not an append-only log) specifically because a cyclic storage completing
+  the same physical index twice would otherwise emit two Prometheus series
+  sharing one label set, which fails the *entire* `/metrics` scrape, not
+  just this panel — caught by a dedicated `N=1`-geometry regression test
+  before it could reach production. Also fixed a related staleness bug in
+  the RTSP-in counter: it lives on `ChannelIngest`, and `handleUpdateChannel`/
+  `RemoveChannel` construct a fresh one per edit (`ReplaceChannel` is
+  remove-then-add), which would have reset/dropped a channel's contribution
+  on every edit — Prometheus reads a metric decrease as a counter reset.
+  Fixed with `IngestManager.retainedRTSPBytes map[string]int64`, folded in
+  by `RemoveChannel` before a `ChannelIngest` is discarded, summed with
+  live channels' current counts by the new `RTSPBytesReceivedForStorage`.
 
 ## Context
 

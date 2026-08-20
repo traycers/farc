@@ -1,6 +1,6 @@
 # 03 — Fblock completion-rate metric + panel
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -42,3 +42,15 @@ expected inside `internal/index` itself).
 `go test ./internal/index/... ./internal/storage/... ./internal/api/...`;
 manually: use a small `MaxChannels`/`FblockSize` test storage so fblocks
 rotate quickly, record continuously, and watch the panel move.
+
+## Comments
+
+2026-08-20: Implemented. Added `fblocksCompleted atomic.Int64` +
+`RecordFblockCompleted`/`FblocksCompleted()` to `HealthMonitor`
+(`internal/storage/health.go`, `health_test.go`); called once inside
+`completeFblockWrite` (`internal/storage/writetxn.go`) -- no signature
+change needed there since both `segment.go` call sites already funnel
+through that one function, unlike issues 02/04's byte values. Wired
+`farc_fblocks_completed_total` into `internal/api/metrics.go`; added the
+per-storage panel (no total line) to the dashboard JSON. Tests green, full
+suite + `golangci-lint run` clean.

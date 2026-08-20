@@ -1,6 +1,6 @@
 # 04 — Per-fblock catalog/TOC/content size metrics + XY Chart panel
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -76,3 +76,38 @@ manually: run the local dev stack, let a channel complete a handful of
 fblocks on a small `FblockSize`/`N` test storage, confirm the XY Chart
 plots a flat catalog line and varying toc/content lines for those
 fblocks.
+
+## Comments
+
+2026-08-20: Implemented. Added `FblockSizeRecord`/`fblockSizes []FblockSizeRecord`
+(mutex-guarded) + `RecordFblockSizes`/`FblockSizes()` to `HealthMonitor`
+(`internal/storage/health.go`, `health_test.go`); extended
+`completeFblockWrite`'s signature with `catalogSize, tocSize uint32` (landed
+alongside issue 02's `contentSize`), threaded from both `segment.go` call
+sites (`h.Prolog.CatalogSize`/`len(tocBuf)` at `closeLocked`,
+`s.catalogSize`/`len(tocBuf)` at `writeTailLocked`). Added the first
+two-label (`storage`,`fblock`) descs to `internal/api/metrics.go` plus a
+new per-fblock emission loop in `collectUnitMetrics` (one gauge triplet per
+completed fblock, not per storage); test asserts exactly one series per
+completion, matching label counts (`prometheus/client_golang` sorts labels
+alphabetically -- `fblock` before `storage` -- which the test asserts
+against). Added the `"xychart"` panel with `topk(50, ...)` targets + a
+`joinByField` transform on `fblock` (authored from scratch, no automated
+test per this repo's convention for dashboard JSON -- verify by manual
+inspection in Grafana).
+
+Post-implementation review caught that the original append-only
+`[]FblockSizeRecord` design breaks on a cyclic storage's normal steady
+state: any physical fblock index gets completed more than once over the
+storage's lifetime, which would emit two Prometheus metrics with identical
+`{storage,fblock}` labels in one scrape -- `promhttp.HandlerFor`'s default
+`HTTPErrorOnError` turns that into a failed `/metrics` scrape for *every*
+metric, not just this feature's. Fixed by making `fblockSizes` a
+`map[uint32]FblockSizeRecord` (last-write-wins per index), with
+`FblockSizes()` returning entries sorted by index for a stable scrape.
+New tests: `TestHealthMonitor_RecordFblockSizes_ReusedIndexOverwritesNot
+Appends`, `_ReturnsRecordsSortedByIndex`, and an end-to-end
+`TestHandleMetrics_SurvivesFblockIndexReuse` (N=1 storage, two writes,
+confirms `/metrics` still returns 200).
+
+Tests green, full suite + `golangci-lint run` clean.

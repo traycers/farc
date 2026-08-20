@@ -528,7 +528,7 @@ func (s *segmentImpl) closeLocked(now uint64) ([16]byte, error) {
 			continue
 		}
 
-		err = u.completeFblockWrite(idx, s.uuid, s.begin, s.end, h.Prolog.WriteSequence, now)
+		err = u.completeFblockWrite(idx, s.uuid, s.begin, s.end, h.Prolog.WriteSequence, now, uint32(len(contentBuf)), h.Prolog.CatalogSize, uint32(len(tocBuf)))
 		if err != nil {
 			return s.uuid, err
 		}
@@ -574,7 +574,7 @@ func (s *segmentImpl) writeTailLocked(contentBuf, tocBuf []byte, now uint64) (ok
 		return false, nil
 	}
 
-	err = u.completeFblockWrite(s.idx, s.uuid, s.begin, s.end, s.writeSeq, now)
+	err = u.completeFblockWrite(s.idx, s.uuid, s.begin, s.end, s.writeSeq, now, uint32(len(contentBuf)), s.catalogSize, uint32(len(tocBuf)))
 	if err != nil {
 		return false, err
 	}

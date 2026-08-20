@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -20,6 +21,13 @@ import (
 type ChannelIngest struct {
 	channel uint16
 	policy  *CapturePolicy
+
+	// rtspBytesReceived counts raw RTP payload bytes as they arrive, before
+	// depacketize/decode -- farc_rtsp_bytes_received_total's per-channel
+	// source (.scratch/storage-fblocks-dashboard-v2/issues/
+	// 02-rtsp-in-vs-storage-write-volume.md), summed across channels sharing
+	// a storage by IngestManager.List().
+	rtspBytesReceived atomic.Int64
 
 	// now is the frame timestamp source. Frame.Time is documented as
 	// absolute Unix ns (fcontainer.Frame), but the docs never specify how
@@ -130,6 +138,12 @@ func (ci *ChannelIngest) SetLogger(logf func(format string, args ...any)) {
 
 func (ci *ChannelIngest) nowNS() uint64 {
 	return uint64(ci.now().UnixNano())
+}
+
+// RTSPBytesReceived returns the total raw RTP payload bytes received so far,
+// across every media this channel's RTSP session carries.
+func (ci *ChannelIngest) RTSPBytesReceived() int64 {
+	return ci.rtspBytesReceived.Load()
 }
 
 // SetOnConnectionChange installs a hook fired every time the RTSP session's

@@ -68,11 +68,15 @@ func (u *Unit) beginFblockWrite(now uint64, uuid [16]byte, positions map[uint16]
 // completeFblockWrite is the transaction's complete phase: transitions idx
 // to Ready with the written fcontainer's identity, mirrors the result to
 // the SSD catalog, publishes fblock.write.completed, and records the
-// write's health/bad-ratio impact. Excludes pool.release -- that needs the
-// caller's own *segmentImpl (as a poolSlot), which this method has no
-// business knowing about.
-func (u *Unit) completeFblockWrite(idx uint32, uuid [16]byte, begin, end, seq, now uint64) error {
+// write's health/bad-ratio impact -- including bytesWritten (fblock content
+// bytes only, not catalog/TOC/prolog/epilog) and the fblock-completion
+// count, both already known to the caller at this exact transition
+// (.scratch/storage-fblocks-dashboard-v2/issues/02, /03). Excludes
+// pool.release -- that needs the caller's own *segmentImpl (as a poolSlot),
+// which this method has no business knowing about.
+func (u *Unit) completeFblockWrite(idx uint32, uuid [16]byte, begin, end, seq, now uint64, contentSize, catalogSize, tocSize uint32) error {
 	u.health.RecordWrite(false)
+	u.health.RecordBytesWritten(int(contentSize))
 	err := u.mgr.CompleteWrite(idx, uuid, begin, end)
 	if err != nil {
 		return err
@@ -80,6 +84,8 @@ func (u *Unit) completeFblockWrite(idx uint32, uuid [16]byte, begin, end, seq, n
 	u.saveSSDCatalogBestEffort(u.mgr.Snapshot(), SSDCatalogMeta{WriteSequence: seq, CatalogTime: now, Cursor: idx})
 	u.notify.Publish(Event{Name: EventFblockWriteCompleted, Index: idx, UUID: uuid})
 	u.health.CheckBadRatio(u.mgr)
+	u.health.RecordFblockCompleted()
+	u.health.RecordFblockSizes(idx, catalogSize, tocSize, contentSize)
 	return nil
 }
 

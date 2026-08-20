@@ -10,43 +10,53 @@
   "tags": ["farc"],
   "panels": [
     {
-      "id": 1,
-      "title": "Fblock states by storage",
+      "id": 6,
+      "title": "RTSP-in vs storage-write byte rate",
       "type": "timeseries",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
       "targets": [
-        { "expr": "farc_fblocks_uninitialized_total", "legendFormat": "uninitialized {{storage}}", "refId": "A" },
-        { "expr": "farc_fblocks_ready_total", "legendFormat": "ready {{storage}}", "refId": "B" },
-        { "expr": "farc_fblocks_writable_total", "legendFormat": "writable {{storage}}", "refId": "C" },
-        { "expr": "farc_fblocks_retained_total", "legendFormat": "retained {{storage}}", "refId": "D" },
-        { "expr": "farc_fblocks_protected_total", "legendFormat": "protected {{storage}}", "refId": "E" },
-        { "expr": "farc_fblocks_bad_total", "legendFormat": "bad {{storage}}", "refId": "F" },
-        { "expr": "farc_fblocks_in_progress_total", "legendFormat": "in_progress {{storage}}", "refId": "G" }
+        { "expr": "rate(farc_rtsp_bytes_received_total[5m])", "legendFormat": "rtsp in {{storage}}", "refId": "A" },
+        { "expr": "sum(rate(farc_rtsp_bytes_received_total[5m]))", "legendFormat": "rtsp in total", "refId": "B" },
+        { "expr": "rate(farc_storage_bytes_written_total[5m])", "legendFormat": "written {{storage}}", "refId": "C" },
+        { "expr": "sum(rate(farc_storage_bytes_written_total[5m]))", "legendFormat": "written total", "refId": "D" }
       ]
     },
     {
-      "id": 2,
-      "title": "Write queue depth",
+      "id": 7,
+      "title": "Fblock completion rate",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "expr": "farc_write_queue_depth", "legendFormat": "{{storage}}", "refId": "A" }
+        { "expr": "rate(farc_fblocks_completed_total[5m])", "legendFormat": "{{storage}}", "refId": "A" }
       ]
     },
     {
-      "id": 3,
-      "title": "Write queue status (0=normal, 1=warning, 2=backpressure)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "id": 8,
+      "title": "Fblock catalog/TOC/content sizes",
+      "type": "xychart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 2 }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
       "targets": [
-        { "expr": "farc_write_queue_status", "legendFormat": "{{storage}}", "refId": "A" }
-      ]
+        { "expr": "topk(50, farc_fblock_catalog_size_bytes)", "legendFormat": "catalog {{storage}} {{fblock}}", "refId": "A", "instant": true, "format": "table" },
+        { "expr": "topk(50, farc_fblock_toc_size_bytes)", "legendFormat": "toc {{storage}} {{fblock}}", "refId": "B", "instant": true, "format": "table" },
+        { "expr": "topk(50, farc_fblock_content_size_bytes)", "legendFormat": "content {{storage}} {{fblock}}", "refId": "C", "instant": true, "format": "table" }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "fblock", "mode": "outer" } }
+      ],
+      "options": {
+        "seriesMapping": "manual",
+        "series": [
+          { "x": { "matcher": { "id": "byName", "options": "fblock" } }, "y": { "matcher": { "id": "byName", "options": "Value #A" } } },
+          { "x": { "matcher": { "id": "byName", "options": "fblock" } }, "y": { "matcher": { "id": "byName", "options": "Value #B" } } },
+          { "x": { "matcher": { "id": "byName", "options": "fblock" } }, "y": { "matcher": { "id": "byName", "options": "Value #C" } } }
+        ]
+      }
     },
     {
       "id": 4,
@@ -57,18 +67,6 @@
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "expr": "rate(farc_write_verify_failures_total[5m])", "legendFormat": "{{storage}}", "refId": "A" }
-      ]
-    },
-    {
-      "id": 5,
-      "title": "Channel registry usage",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "targets": [
-        { "expr": "farc_channel_registry_used", "legendFormat": "used {{storage}}", "refId": "A" },
-        { "expr": "farc_channel_registry_capacity", "legendFormat": "capacity {{storage}}", "refId": "B" }
       ]
     }
   ]

@@ -1,6 +1,6 @@
 # 01 — Prune Storage & Fblocks dashboard down to write-verify only
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -29,3 +29,9 @@ change, verified by inspection.
 edited JSON automatically within ~30s — no restart needed. Open Grafana →
 `farc` folder → "Storage & Fblocks" and confirm only "Write-verify
 failures / sec" remains (until issues 02-04 add their panels).
+
+## Comments
+
+2026-08-20: Implemented -- deleted panel objects `id: 1`, `2`, `3`, `5` from
+`deploy/observability/grafana/dashboards/storage-fblocks.json`, left `id: 4`
+byte-for-byte untouched. JSON validated with `python3 -m json.tool`.

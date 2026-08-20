@@ -223,6 +223,7 @@ func (ci *ChannelIngest) setupVideo(c rtspSource, medi *description.Media, f for
 	gate := newKeyframeGate(ci.channel, ci.logf)
 	shed := &gopShedGate{}
 	c.OnPacketRTP(medi, f, func(pkt *rtp.Packet) {
+		ci.rtspBytesReceived.Add(int64(len(pkt.Payload)))
 		au, err := strategy.decode(pkt)
 		if err != nil {
 			return // fragment/ordering errors are expected mid-stream
@@ -429,6 +430,7 @@ func (ci *ChannelIngest) setupG711(c rtspSource, medi *description.Media, f *for
 	})
 
 	c.OnPacketRTP(medi, f, func(pkt *rtp.Packet) {
+		ci.rtspBytesReceived.Add(int64(len(pkt.Payload)))
 		if ci.skipFrames() {
 			return
 		}
@@ -457,6 +459,7 @@ func (ci *ChannelIngest) setupAAC(c rtspSource, medi *description.Media, f *form
 	})
 
 	c.OnPacketRTP(medi, f, func(pkt *rtp.Packet) {
+		ci.rtspBytesReceived.Add(int64(len(pkt.Payload)))
 		aus, err := dec.Decode(pkt)
 		if err != nil {
 			return

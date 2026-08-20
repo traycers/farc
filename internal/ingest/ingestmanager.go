@@ -98,6 +98,15 @@ type IngestManager struct {
 	onRecordingChange  func(channel uint16, recording bool, t uint64)
 	onConnectionChange func(channel uint16, connected bool)
 	onConnectFailed    func(channel uint16, err error)
+
+	// retainedRTSPBytes holds bytes received by channels that are no
+	// longer running, keyed by StorageID -- RemoveChannel folds a
+	// departing ChannelIngest's RTSPBytesReceived() in here before
+	// discarding it, so a channel edit (ReplaceChannel: remove-then-add,
+	// a fresh ChannelIngest under the same id) or removal doesn't drop
+	// farc_rtsp_bytes_received_total, which Prometheus would otherwise
+	// read as a counter reset.
+	retainedRTSPBytes map[string]int64
 }
 
 // NewIngestManager creates an empty IngestManager.
@@ -109,6 +118,7 @@ func NewIngestManager() *IngestManager {
 		onRecordingChange:  func(uint16, bool, uint64) {},
 		onConnectionChange: func(uint16, bool) {},
 		onConnectFailed:    func(uint16, error) {},
+		retainedRTSPBytes:  make(map[string]int64),
 	}
 }
 
@@ -313,11 +323,29 @@ func (m *IngestManager) RemoveChannel(channel uint16) (ChannelConfig, error) {
 		return ChannelConfig{}, fmt.Errorf("ingest: unknown channel %d", channel)
 	}
 	delete(m.channels, channel)
+	m.retainedRTSPBytes[e.cfg.StorageID] += e.ingest.RTSPBytesReceived()
 	m.mu.Unlock()
 
 	e.cancel()
 	<-e.done
 	return e.cfg, nil
+}
+
+// RTSPBytesReceivedForStorage returns the total raw RTP payload bytes ever
+// received by any channel assigned to storageID -- both channels currently
+// running and bytes retained from channels since removed or replaced (see
+// retainedRTSPBytes's doc comment). internal/api sums this for
+// farc_rtsp_bytes_received_total.
+func (m *IngestManager) RTSPBytesReceivedForStorage(storageID string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	total := m.retainedRTSPBytes[storageID]
+	for _, e := range m.channels {
+		if e.cfg.StorageID == storageID {
+			total += e.ingest.RTSPBytesReceived()
+		}
+	}
+	return total
 }
 
 // ReplaceChannel atomically (from the caller's point of view) swaps

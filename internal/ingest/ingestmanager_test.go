@@ -66,6 +66,77 @@ func TestIngestManager_AddChannel_ThenListReportsIt(t *testing.T) {
 	}
 }
 
+// TestIngestManager_RTSPBytesReceivedForStorage_SurvivesRemoveChannel is
+// .scratch/storage-fblocks-dashboard-v2/issues/02-rtsp-in-vs-storage-write-
+// volume.md: rtspBytesReceived lives on ChannelIngest, and RemoveChannel
+// discards that ChannelIngest entirely -- without folding its count into a
+// retained total first, farc_rtsp_bytes_received_total would drop on any
+// channel removal, which Prometheus reads as a counter reset (rate()
+// mis-attributes a negative delta).
+func TestIngestManager_RTSPBytesReceivedForStorage_SurvivesRemoveChannel(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	if err := m.AddChannel(testChannelConfig(1, "disk0")); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+	m.mu.Lock()
+	m.channels[1].ingest.rtspBytesReceived.Store(42)
+	m.mu.Unlock()
+
+	if got := m.RTSPBytesReceivedForStorage("disk0"); got != 42 {
+		t.Fatalf("RTSPBytesReceivedForStorage (before remove) = %d, want 42", got)
+	}
+
+	if _, err := m.RemoveChannel(1); err != nil {
+		t.Fatalf("RemoveChannel: %v", err)
+	}
+
+	if got := m.RTSPBytesReceivedForStorage("disk0"); got != 42 {
+		t.Fatalf("RTSPBytesReceivedForStorage (after remove) = %d, want 42 (retained)", got)
+	}
+}
+
+// TestIngestManager_RTSPBytesReceivedForStorage_SurvivesReplaceChannel
+// covers handleUpdateChannel's actual code path (ReplaceChannel, a
+// remove-then-add under the hood that constructs a brand-new ChannelIngest
+// for the same channel id) -- any PUT /channels/{id} must not zero this
+// channel's contribution to its storage's total.
+func TestIngestManager_RTSPBytesReceivedForStorage_SurvivesReplaceChannel(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	if err := m.AddChannel(testChannelConfig(1, "disk0")); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+	m.mu.Lock()
+	m.channels[1].ingest.rtspBytesReceived.Store(42)
+	m.mu.Unlock()
+
+	newCfg := testChannelConfig(1, "disk0")
+	newCfg.RTSPURL = "rtsp://127.0.0.1:1/edited"
+	if _, err := m.ReplaceChannel(1, newCfg); err != nil {
+		t.Fatalf("ReplaceChannel: %v", err)
+	}
+
+	if got := m.RTSPBytesReceivedForStorage("disk0"); got != 42 {
+		t.Fatalf("RTSPBytesReceivedForStorage (after replace) = %d, want 42 (retained, not reset)", got)
+	}
+
+	// Storage-scoped, not global: a channel on a different storage must
+	// never contribute.
+	if err := m.AddChannel(testChannelConfig(2, "disk1")); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+	m.mu.Lock()
+	m.channels[2].ingest.rtspBytesReceived.Store(999)
+	m.mu.Unlock()
+
+	if got := m.RTSPBytesReceivedForStorage("disk0"); got != 42 {
+		t.Fatalf("RTSPBytesReceivedForStorage(disk0) = %d, want 42 (unaffected by disk1's channel)", got)
+	}
+}
+
 func TestIngestManager_AddChannel_DuplicateRejected(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()
