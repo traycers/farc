@@ -103,6 +103,19 @@ describe('StorageNewPage min container share field', () => {
     )
   })
 
+  it('shows the resulting absolute size helper for the default 70%/1 GiB fblock', () => {
+    renderPage()
+    // 70% of a 1024 MiB (1 GiB) fblock = 716.8 MiB / 1.00 GiB
+    expect(screen.getByText(/716\.80 MiB \/ 1\.00 GiB/i)).toBeInTheDocument()
+  })
+
+  it('updates the absolute size helper when the percentage changes', () => {
+    renderPage()
+    fireEvent.change(screen.getByLabelText(/min container share/i), { target: { value: '50' } })
+
+    expect(screen.getByText(/512\.00 MiB \/ 1\.00 GiB/i)).toBeInTheDocument()
+  })
+
   it('converts an edited percentage back to a fraction on submit', async () => {
     renderPage()
     fillRequiredFields()

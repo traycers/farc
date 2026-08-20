@@ -22,6 +22,22 @@ function formatGiB(bytes: number): string {
   return (bytes / GiB).toFixed(2)
 }
 
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+
+// Auto-scaling 1024-based formatter, for showing what a percentage of a
+// single fblock (typically MiB-GiB) resolves to in absolute terms --
+// distinct from formatGiB above, which is fixed to GiB for whole-storage
+// totals.
+function formatBytes(bytes: number): string {
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return `${unitIndex === 0 ? value : value.toFixed(2)} ${BYTE_UNITS[unitIndex]}`
+}
+
 // crypto.randomUUID() would be simpler, but it requires a secure context
 // (HTTPS or localhost) -- the docker-compose nginx deployment isn't
 // guaranteed to have TLS, so this uses the unrestricted getRandomValues
@@ -304,6 +320,9 @@ export default function StorageNewPage() {
                   onChange={(e) => setMinContainerSharePercent(Number(e.target.value))}
                 />
               </label>
+              <div className="form-text">
+                {formatBytes((fblockSize * minContainerSharePercent) / 100)} / {formatBytes(fblockSize)}
+              </div>
             </div>
             <div>
               <div className="form-check">
