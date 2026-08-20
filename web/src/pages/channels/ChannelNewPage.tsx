@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { createChannel, listChannels, listStorages, type StorageInfo } from '../../api/farcd'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { createChannel, listChannels, listStorages, type ChannelInfo, type StorageInfo } from '../../api/farcd'
 
 const POLICY_TYPES = ['continuous', 'event'] as const
 
@@ -13,9 +13,12 @@ function generateName(prefix: string): string {
 
 export default function ChannelNewPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const requestedStorage = searchParams.get('storage') ?? ''
 
   const [storages, setStorages] = useState<StorageInfo[]>([])
-  const [storage, setStorage] = useState('')
+  const [channels, setChannels] = useState<ChannelInfo[]>([])
+  const [storage, setStorage] = useState(requestedStorage)
   const [id, setId] = useState(1)
   const [name, setName] = useState('')
   const [rtspURL, setRtspURL] = useState('')
@@ -29,13 +32,23 @@ export default function ChannelNewPage() {
     listStorages()
       .then((s) => {
         setStorages(s)
-        setStorage((cur) => cur || (s.length > 0 ? s[0].id : ''))
+        setStorage((cur) => (s.some((st) => st.id === cur) ? cur : s.length > 0 ? s[0].id : ''))
       })
       .catch((e) => setError(String(e)))
     listChannels()
-      .then((channels) => setId((channels.reduce((max, c) => Math.max(max, c.channel), 0) || 0) + 1))
+      .then((c) => {
+        setChannels(c)
+        setId((c.reduce((max, ch) => Math.max(max, ch.channel), 0) || 0) + 1)
+      })
       .catch((e) => setError(String(e)))
   }, [])
+
+  function isFull(storageID: string): boolean {
+    const s = storages.find((st) => st.id === storageID)
+    return s !== undefined && channels.filter((c) => c.storage === storageID).length >= s.geometry.MaxChannels
+  }
+
+  const selectedStorageFull = isFull(storage)
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -102,11 +115,16 @@ export default function ChannelNewPage() {
               <label className="form-label">
                 storage
                 <select className="form-select" value={storage} onChange={(e) => setStorage(e.target.value)}>
-                  {storages.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name || s.id}
-                    </option>
-                  ))}
+                  {storages.map((s) => {
+                    const full = isFull(s.id)
+                    const count = channels.filter((c) => c.storage === s.id).length
+                    return (
+                      <option key={s.id} value={s.id} disabled={full}>
+                        {s.name || s.id}
+                        {full ? ` (full, ${count}/${s.geometry.MaxChannels})` : ''}
+                      </option>
+                    )
+                  })}
                 </select>
               </label>
             </div>
@@ -187,7 +205,7 @@ export default function ChannelNewPage() {
               </>
             )}
             <div>
-              <button type="submit" className="btn btn-primary">
+              <button type="submit" className="btn btn-primary" disabled={selectedStorageFull}>
                 Add channel
               </button>
             </div>

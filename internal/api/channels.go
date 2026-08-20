@@ -272,6 +272,21 @@ type channelCapturePolicyRequest struct {
 	PostrecordNS       uint64 `json:"postrecord_ns,omitempty"`
 }
 
+// channelCountForStorage returns how many channels are currently configured
+// on storageID -- used to reject creating/moving a channel onto a storage
+// already at its geometry.MaxChannels (deliberately simpler than, and not a
+// replacement for, internal/index's own lazy ErrChannelRegistryFull check;
+// see .scratch/storage-channel-capacity/spec.md decision 2).
+func (s *HttpApiServer) channelCountForStorage(storageID string) int {
+	count := 0
+	for _, c := range s.ing.List() {
+		if c.StorageID == storageID {
+			count++
+		}
+	}
+	return count
+}
+
 func queueDepthFor(policyType ingest.PolicyType, req channelCapturePolicyRequest) uint64 {
 	if policyType == ingest.PolicyEvent {
 		return req.PrerecordNS
@@ -347,6 +362,9 @@ func (s *HttpApiServer) createChannel(req createChannelRequest) (channelInfo, er
 	unit, ok := s.reg.Get(req.Storage)
 	if !ok {
 		return channelInfo{}, apiErr(http.StatusBadRequest, fmt.Errorf("api: unknown storage %q", req.Storage))
+	}
+	if s.channelCountForStorage(req.Storage) >= int(unit.Geometry().MaxChannels) {
+		return channelInfo{}, apiErr(http.StatusConflict, fmt.Errorf("api: storage %q is full (max %d channels)", req.Storage, unit.Geometry().MaxChannels))
 	}
 	policyType, ok := parsePolicyTypeString(req.CapturePolicy.Type)
 	if !ok {
@@ -435,8 +453,16 @@ func (s *HttpApiServer) handleUpdateChannel(w http.ResponseWriter, r *http.Reque
 	// Existence check before ReplaceChannel, purely for the 404 -- same
 	// check-then-act race this function's own doc comment already accepts
 	// for a concurrent DELETE /storages/{req.Storage}.
-	if _, ok := s.ing.StorageOf(channel); !ok {
+	oldStorageID, ok := s.ing.StorageOf(channel)
+	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("ingest: unknown channel %d", channel))
+		return
+	}
+	// Only check capacity when the update actually moves the channel to a
+	// different storage -- it already occupies a slot on its current one,
+	// so re-checking that would reject a no-op storage "move".
+	if oldStorageID != req.Storage && s.channelCountForStorage(req.Storage) >= int(unit.Geometry().MaxChannels) {
+		writeError(w, http.StatusConflict, fmt.Errorf("api: storage %q is full (max %d channels)", req.Storage, unit.Geometry().MaxChannels))
 		return
 	}
 

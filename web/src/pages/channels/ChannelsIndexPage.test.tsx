@@ -5,7 +5,7 @@ import ChannelsIndexPage from './ChannelsIndexPage'
 import type { ChannelInfo, StorageInfo } from '../../api/farcd'
 import type { JournalEvent } from '../../api/events'
 
-const storages: StorageInfo[] = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } }]
+let storages: StorageInfo[] = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } }]
 let channels: ChannelInfo[] = []
 
 vi.mock('../../api/farcd', () => ({
@@ -28,6 +28,8 @@ vi.mock('../../api/events', () => ({
 
 beforeEach(() => {
   onJournalEvent = () => {}
+  storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } }]
+  channels = []
 })
 
 function renderPage() {
@@ -99,5 +101,28 @@ describe('ChannelsIndexPage', () => {
 
     act(() => onJournalEvent({ type: 'event', name: 'channel.rtsp.connected', channel: 1 }))
     expect(screen.queryByTestId('channel-connect-error-1')).not.toBeInTheDocument()
+  })
+})
+
+describe('ChannelsIndexPage "New channel" capacity guard', () => {
+  it('disables New channel with an explanatory title when the filtered storage is full', async () => {
+    storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 1 } }]
+    channels = [
+      { channel: 1, name: 'cam1', rtsp_url: 'rtsp://a', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0 },
+    ]
+    renderPage()
+
+    const btn = await screen.findByRole('button', { name: /new channel/i })
+    expect(btn).toBeDisabled()
+    expect(btn.title).toContain('1/1')
+  })
+
+  it('keeps New channel as a working link to the storage-scoped form when there is room', async () => {
+    storages = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 } }]
+    channels = []
+    renderPage()
+
+    const link = await screen.findByRole('link', { name: /new channel/i })
+    expect(link).toHaveAttribute('href', '/new?storage=s1')
   })
 })

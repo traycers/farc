@@ -31,9 +31,16 @@ func smallParams() fblock.Params {
 // t.Cleanup).
 func newTestUnit(t *testing.T) *storage.Unit {
 	t.Helper()
+	return newTestUnitWithGeometry(t, smallGeometry())
+}
+
+// newTestUnitWithGeometry is newTestUnit with a caller-chosen Geometry --
+// e.g. a small MaxChannels for capacity-limit tests (smallGeometry's
+// MaxChannels: 8 is too high to hit in a handful of requests).
+func newTestUnitWithGeometry(t *testing.T, geo storage.Geometry) *storage.Unit {
+	t.Helper()
 	dir := t.TempDir()
 	imgPath := filepath.Join(dir, "storage.img")
-	geo := smallGeometry()
 
 	err := storage.CreateSizedFile(imgPath, int64(geo.FblockSize)*int64(geo.N), 0o644)
 	if err != nil {

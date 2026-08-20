@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { listStorages, type StorageInfo } from '../../api/farcd'
+import { listChannels, listStorages, type ChannelInfo, type StorageInfo } from '../../api/farcd'
 
 const GiB = 1024 ** 3
 
@@ -26,13 +26,21 @@ function formatBytes(bytes: number): string {
 
 export default function StoragesIndexPage() {
   const [storages, setStorages] = useState<StorageInfo[]>([])
+  const [channels, setChannels] = useState<ChannelInfo[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     listStorages()
       .then(setStorages)
       .catch((e) => setError(String(e)))
+    listChannels()
+      .then(setChannels)
+      .catch((e) => setError(String(e)))
   }, [])
+
+  function channelCount(storageID: string): number {
+    return channels.filter((c) => c.storage === storageID).length
+  }
 
   return (
     <section>
@@ -52,6 +60,7 @@ export default function StoragesIndexPage() {
               <th>path</th>
               <th>size</th>
               <th>fblock size</th>
+              <th>channels</th>
               <th>max channels</th>
               <th></th>
             </tr>
@@ -63,6 +72,7 @@ export default function StoragesIndexPage() {
                 <td>{s.path}</td>
                 <td>{formatGiB(s.geometry.FblockSize * s.geometry.N)} GiB</td>
                 <td>{formatBytes(s.geometry.FblockSize)}</td>
+                <td>{channelCount(s.id)}</td>
                 <td>{s.geometry.MaxChannels}</td>
                 <td>
                   <div className="btn-group btn-group-sm">
@@ -81,7 +91,7 @@ export default function StoragesIndexPage() {
             ))}
             {storages.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-body-secondary">
+                <td colSpan={7} className="text-body-secondary">
                   no storages yet
                 </td>
               </tr>

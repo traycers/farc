@@ -1,6 +1,6 @@
 # 01 — Storages page: current channel count column
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -31,3 +31,10 @@ first). Mock `listStorages`/`listChannels`, assert:
 ## Verify
 
 `cd web && npx tsc -b && npx vitest run`
+
+## Comments
+
+2026-08-20: Implemented test-first (`StoragesIndexPage.test.tsx`, new file).
+`StoragesIndexPage.tsx` now fetches `listChannels()` alongside `listStorages()`
+and a `channelCount(storageID)` helper feeds a new `channels` `<td>` placed
+between `fblock size` and `max channels`; empty-state `colSpan` bumped to 7.

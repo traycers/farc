@@ -1,6 +1,6 @@
 # Storage channel capacity — current count column + blocking full storages
 
-Status: open — grilled 2026-08-20
+Status: resolved — grilled 2026-08-20, implemented test-first 2026-08-20 (see each issue's Comments)
 
 Two requests filed together because they hinge on the same underlying data
 point: "how many channels currently point at this storage" (`GET /channels`

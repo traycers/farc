@@ -1,6 +1,6 @@
 # 01 — Pass selected storage from Channels to New Channel via query param
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -33,3 +33,12 @@ session:
 ## Verify
 
 `cd web && npx tsc -b && npx vitest run`
+
+## Comments
+
+2026-08-20: Implemented test-first. `ChannelsIndexPage.tsx`'s link is now
+`` new?storage=${encodeURIComponent(storage)} ``; `ChannelNewPage.tsx` reads
+`useSearchParams()` for the initial `storage` state and, once
+`listStorages()` resolves, keeps it only if it's among the fetched
+storages, falling back to the first storage otherwise. Extended
+`ChannelNewPage.test.tsx` with both cases.

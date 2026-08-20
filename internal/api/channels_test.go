@@ -443,6 +443,14 @@ func regTestUnit(t *testing.T, reg *StorageRegistry, id string) {
 	}
 }
 
+func regTestUnitWithGeometry(t *testing.T, reg *StorageRegistry, id string, geo storage.Geometry) {
+	t.Helper()
+	err := reg.Register(id, newTestUnitWithGeometry(t, geo), id+".img", "")
+	if err != nil {
+		t.Fatalf("Register(%q): %v", id, err)
+	}
+}
+
 func TestHandleCreateChannel_StartsItAndListsIt(t *testing.T) {
 	reg := NewStorageRegistry()
 	regTestUnit(t, reg, "s1")
@@ -603,6 +611,102 @@ func TestHandleUpdateChannel_UnknownChannelIs404(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func oneChannelGeometry() storage.Geometry {
+	geo := smallGeometry()
+	geo.MaxChannels = 1
+	return geo
+}
+
+func TestHandleCreateChannel_FullStorageRejected(t *testing.T) {
+	reg := NewStorageRegistry()
+	regTestUnitWithGeometry(t, reg, "s1", oneChannelGeometry())
+	im := ingest.NewIngestManager()
+	t.Cleanup(im.Stop)
+	s := NewHttpApiServer(reg, im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	first := postJSON(t, srv, "/channels", createChannelRequest{
+		ID: 1, RTSPURL: "rtsp://x/y", Storage: "s1", CapturePolicy: channelCapturePolicyRequest{Type: "continuous"},
+	})
+	first.Body.Close()
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("first create status = %d, want 201", first.StatusCode)
+	}
+
+	second := postJSON(t, srv, "/channels", createChannelRequest{
+		ID: 2, RTSPURL: "rtsp://x/z", Storage: "s1", CapturePolicy: channelCapturePolicyRequest{Type: "continuous"},
+	})
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusConflict {
+		t.Fatalf("second create status = %d, want 409", second.StatusCode)
+	}
+}
+
+func TestHandleUpdateChannel_SameStorageSkipsCapacityCheck(t *testing.T) {
+	reg := NewStorageRegistry()
+	regTestUnitWithGeometry(t, reg, "s1", oneChannelGeometry())
+	im := ingest.NewIngestManager()
+	t.Cleanup(im.Stop)
+	s := NewHttpApiServer(reg, im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	create := postJSON(t, srv, "/channels", createChannelRequest{
+		ID: 1, RTSPURL: "rtsp://old/x", Storage: "s1", CapturePolicy: channelCapturePolicyRequest{Type: "continuous"},
+	})
+	create.Body.Close()
+	if create.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", create.StatusCode)
+	}
+
+	// s1 is already at its MaxChannels: 1 capacity because of this very
+	// channel -- an update that leaves it on s1 must not be rejected.
+	update := putJSON(t, srv, "/channels/1", updateChannelRequest{
+		RTSPURL: "rtsp://new/y", Storage: "s1", CapturePolicy: channelCapturePolicyRequest{Type: "continuous"},
+	})
+	defer update.Body.Close()
+	if update.StatusCode != http.StatusOK {
+		t.Fatalf("same-storage update status = %d, want 200", update.StatusCode)
+	}
+}
+
+func TestHandleUpdateChannel_DifferentFullStorageRejected(t *testing.T) {
+	reg := NewStorageRegistry()
+	regTestUnitWithGeometry(t, reg, "s1", smallGeometry())
+	regTestUnitWithGeometry(t, reg, "s2", oneChannelGeometry())
+	im := ingest.NewIngestManager()
+	t.Cleanup(im.Stop)
+	s := NewHttpApiServer(reg, im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	create1 := postJSON(t, srv, "/channels", createChannelRequest{
+		ID: 1, RTSPURL: "rtsp://a", Storage: "s1", CapturePolicy: channelCapturePolicyRequest{Type: "continuous"},
+	})
+	create1.Body.Close()
+	if create1.StatusCode != http.StatusCreated {
+		t.Fatalf("create channel 1 status = %d, want 201", create1.StatusCode)
+	}
+	create2 := postJSON(t, srv, "/channels", createChannelRequest{
+		ID: 2, RTSPURL: "rtsp://b", Storage: "s2", CapturePolicy: channelCapturePolicyRequest{Type: "continuous"},
+	})
+	create2.Body.Close()
+	if create2.StatusCode != http.StatusCreated {
+		t.Fatalf("create channel 2 status = %d, want 201", create2.StatusCode)
+	}
+
+	// s2 is now at its MaxChannels: 1 capacity (channel 2). Moving channel 1
+	// from s1 onto s2 must be rejected.
+	update := putJSON(t, srv, "/channels/1", updateChannelRequest{
+		RTSPURL: "rtsp://a", Storage: "s2", CapturePolicy: channelCapturePolicyRequest{Type: "continuous"},
+	})
+	defer update.Body.Close()
+	if update.StatusCode != http.StatusConflict {
+		t.Fatalf("move-to-full-storage status = %d, want 409", update.StatusCode)
 	}
 }
 

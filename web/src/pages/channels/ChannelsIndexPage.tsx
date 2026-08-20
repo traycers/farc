@@ -107,14 +107,28 @@ export default function ChannelsIndexPage() {
   }
 
   const shown = channels.filter((c) => c.storage === storage)
+  const selectedStorage = storages.find((s) => s.id === storage)
+  const channelCount = shown.length
+  const storageFull = selectedStorage !== undefined && channelCount >= selectedStorage.geometry.MaxChannels
 
   return (
     <section>
       <div className="d-flex justify-content-between align-items-center mb-3">
         <h1 className="mb-0">Channels</h1>
-        <Link to="new" className="btn btn-primary">
-          New channel
-        </Link>
+        {storageFull ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled
+            title={`Storage full (${channelCount}/${selectedStorage!.geometry.MaxChannels} channels)`}
+          >
+            New channel
+          </button>
+        ) : (
+          <Link to={`new?storage=${encodeURIComponent(storage)}`} className="btn btn-primary">
+            New channel
+          </Link>
+        )}
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
       {connectFailedBanner && <div className="alert alert-danger">{connectFailedBanner}</div>}

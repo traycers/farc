@@ -10,8 +10,10 @@ export default function ChannelEditPage() {
   const navigate = useNavigate()
 
   const [storages, setStorages] = useState<StorageInfo[]>([])
+  const [channels, setChannels] = useState<ChannelInfo[]>([])
   const [found, setFound] = useState<ChannelInfo | null | undefined>(undefined) // undefined = loading
   const [storage, setStorage] = useState('')
+  const [originalStorage, setOriginalStorage] = useState('')
   const [name, setName] = useState('')
   const [rtspURL, setRtspURL] = useState('')
   const [policyType, setPolicyType] = useState<(typeof POLICY_TYPES)[number]>('continuous')
@@ -25,11 +27,13 @@ export default function ChannelEditPage() {
       .then(setStorages)
       .catch((e) => setError(String(e)))
     listChannels()
-      .then((channels) => {
-        const c = channels.find((c) => c.channel === channel) ?? null
+      .then((cs) => {
+        setChannels(cs)
+        const c = cs.find((c) => c.channel === channel) ?? null
         setFound(c)
         if (c) {
           setStorage(c.storage)
+          setOriginalStorage(c.storage)
           setName(c.name ?? '')
           setRtspURL(c.rtsp_url)
           setPolicyType(c.capture_policy_type)
@@ -39,6 +43,14 @@ export default function ChannelEditPage() {
       })
       .catch((e) => setError(String(e)))
   }, [channel])
+
+  function isFull(storageID: string): boolean {
+    if (storageID === originalStorage) return false
+    const s = storages.find((st) => st.id === storageID)
+    return s !== undefined && channels.filter((c) => c.storage === storageID).length >= s.geometry.MaxChannels
+  }
+
+  const selectedStorageFull = isFull(storage)
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -99,11 +111,16 @@ export default function ChannelEditPage() {
                 <label className="form-label">
                   storage
                   <select className="form-select" value={storage} onChange={(e) => setStorage(e.target.value)}>
-                    {storages.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name || s.id}
-                      </option>
-                    ))}
+                    {storages.map((s) => {
+                      const full = isFull(s.id)
+                      const count = channels.filter((c) => c.storage === s.id).length
+                      return (
+                        <option key={s.id} value={s.id} disabled={full}>
+                          {s.name || s.id}
+                          {full ? ` (full, ${count}/${s.geometry.MaxChannels})` : ''}
+                        </option>
+                      )
+                    })}
                   </select>
                 </label>
               </div>
@@ -180,7 +197,7 @@ export default function ChannelEditPage() {
                 </>
               )}
               <div>
-                <button type="submit" className="btn btn-primary">
+                <button type="submit" className="btn btn-primary" disabled={selectedStorageFull}>
                   Save changes
                 </button>
               </div>

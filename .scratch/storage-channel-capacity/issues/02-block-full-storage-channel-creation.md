@@ -1,6 +1,6 @@
 # 02 — Block channel creation/move into a full storage (frontend + backend)
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -93,3 +93,26 @@ when full.
 ## Verify
 
 `go test ./internal/api/...` and `cd web && npx tsc -b && npx vitest run`.
+
+## Comments
+
+2026-08-20: Implemented test-first. Backend (`internal/api/channels.go`):
+added `channelCountForStorage`; `createChannel` and `handleUpdateChannel`
+(only when `oldStorageID != req.Storage`, captured from the existing
+`s.ing.StorageOf(channel)` call) reject with 409 when the destination is at
+`MaxChannels`. Test support: `newTestUnitWithGeometry`/
+`regTestUnitWithGeometry` added to `testutil_test.go`/`channels_test.go` for
+a `MaxChannels: 1` storage; three new tests
+(`TestHandleCreateChannel_FullStorageRejected`,
+`TestHandleUpdateChannel_SameStorageSkipsCapacityCheck`,
+`TestHandleUpdateChannel_DifferentFullStorageRejected`).
+
+Frontend: `ChannelsIndexPage.tsx`'s "New channel" renders a disabled
+`<button>` with a `title` when the filtered storage is full;
+`ChannelNewPage.tsx`/`ChannelEditPage.tsx` mark full storages `disabled` in
+the `<select>` with a "(full, X/Y)" label and disable their submit button
+accordingly, with `ChannelEditPage.tsx` tracking a separate
+`originalStorage` state so the channel's own current storage is never
+treated as full for itself. New test files
+`StoragesIndexPage.test.tsx`/`ChannelEditPage.test.tsx`, extended
+`ChannelsIndexPage.test.tsx`/`ChannelNewPage.test.tsx`.

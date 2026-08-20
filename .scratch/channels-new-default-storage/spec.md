@@ -1,6 +1,6 @@
 # Channels page: carry selected storage into "New channel"
 
-Status: open — grilled 2026-08-20
+Status: resolved — grilled 2026-08-20, implemented test-first 2026-08-20 (see issue's Comments)
 
 ## Decisions (settled during grilling)
 
