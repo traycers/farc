@@ -72,7 +72,11 @@ export default function StorageNewPage() {
   const [poolBackpressureAt, setPoolBackpressureAt] = useState(4)
   const [writeMode, setWriteMode] = useState<(typeof WRITE_MODES)[number]>('cyclic')
   const [retentionDays, setRetentionDays] = useState(30)
-  const [minContainerShare, setMinContainerShare] = useState(0.1)
+  // Shown/edited as a percentage (0-100) -- fblock.Params.MinContainerShare
+  // itself is a [0,1] fraction; converted back on submit. 70 matches
+  // fblock.DefaultMinContainerShare (the backend's own default), so an
+  // untouched field submits exactly what farcd would otherwise default to.
+  const [minContainerSharePercent, setMinContainerSharePercent] = useState(70)
   const [force, setForce] = useState(false)
 
   const [error, setError] = useState<string | null>(null)
@@ -92,7 +96,7 @@ export default function StorageNewPage() {
           fchunk_size: FCHUNK_SIZE,
           write_mode: writeMode,
           retention: { days: retentionDays },
-          min_container_share: minContainerShare,
+          min_container_share: minContainerSharePercent / 100,
         },
         force,
         catalog_path: '',
@@ -290,13 +294,14 @@ export default function StorageNewPage() {
             </div>
             <div>
               <label className="form-label">
-                min container share
+                min container share (%)
                 <input
                   type="number"
-                  step="0.01"
+                  min="0"
+                  max="100"
                   className="form-control"
-                  value={minContainerShare}
-                  onChange={(e) => setMinContainerShare(Number(e.target.value))}
+                  value={minContainerSharePercent}
+                  onChange={(e) => setMinContainerSharePercent(Number(e.target.value))}
                 />
               </label>
             </div>

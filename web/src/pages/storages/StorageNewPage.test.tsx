@@ -81,3 +81,38 @@ describe('StorageNewPage pool tuning fields', () => {
     expect(screen.getAllByText(/—/).length).toBeGreaterThan(0)
   })
 })
+
+describe('StorageNewPage min container share field', () => {
+  beforeEach(() => {
+    createStorage.mockClear()
+  })
+
+  // Matches fblock.DefaultMinContainerShare (internal/storage's own
+  // backend default) -- the UI default must not silently diverge from it.
+  it('submits the backend default of 0.7 (shown as 70%) when left untouched', async () => {
+    renderPage()
+    fillRequiredFields()
+
+    expect(screen.getByLabelText(/min container share/i)).toHaveValue(70)
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await screen.findByTestId('storages-index')
+    expect(createStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ min_container_share: 0.7 }) }),
+    )
+  })
+
+  it('converts an edited percentage back to a fraction on submit', async () => {
+    renderPage()
+    fillRequiredFields()
+
+    fireEvent.change(screen.getByLabelText(/min container share/i), { target: { value: '50' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await screen.findByTestId('storages-index')
+    expect(createStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ min_container_share: 0.5 }) }),
+    )
+  })
+})
