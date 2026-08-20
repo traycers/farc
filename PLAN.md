@@ -26,10 +26,11 @@ All phases below are complete (`[x]`). This file is the running summary of *what
 - [x] Phase 20 — fixed a real reallocation inefficiency in `internal/ingest/rtsp.go`'s `muxAnnexB` (pre-sized `make` once instead of repeated grow-and-copy `append` from `nil`, ~2-3 avoidable reallocations per keyframe access unit). A live555-style "checkout/return to a buffer pool" pattern was considered for the decoded-frame path and rejected: unlike live555's single-use network buffers, a decoded frame is retained by `CapturePolicy`'s `FrameQueue` for the channel's whole retention window with a variable, wall-clock-bounded lifetime — safe pooling would need cross-owner reference counting for an uncertain payoff
 - [x] Phase 21 — GitHub Actions: `.golangci.yaml` expanded from 2 linters to ~28 (fixed ~250 real findings this surfaced); `ci.yml` runs `test`/`lint`/`e2e-real-process`/`web-build`/`docker-build` on every push/PR to `main`; `release.yml` triggers on both a direct push to `main` and a PR merged into `main` — since merging a PR via the GitHub UI *also* pushes the merge/squash/rebase result to `main`, a `determine` job tells the two apart per-event via the GitHub API (whether the pushed commit is already associated with a merged PR) rather than guessing from the commit message, so a merge never double-releases. Versioned CalVer-style, `YYYY.MM.N` (git tag `vYYYY.MM.N`, Docker tag `YYYY.MM.N`), switched from an initial SemVer major.minor.patch scheme — `N` is a plain `git rev-list --count` of commits reachable from `HEAD` since the 1st of the current month, not a dependency on the previous tag's value, so there's no SemVer-style major/minor/patch judgment call left to make per commit. Publishes `farc-<version>.tar` (all three Docker images + a rendered `docker-compose.yaml`) as a GitHub Release. No registry push, no `--version` CLI flag or web UI version display — version is only ever the Docker image tag / git tag, by explicit choice. The new CI immediately caught two real, previously-latent bugs: an ADR-021 race in `internal/hlsd/hlsd.go`'s `reconcileOnce` (subscribed to the live event stream *after* the bootstrap list snapshot, leaving a window a channel-created-in-that-gap could miss for up to 30s) and a build-tag-only compile error in `tests/e2e_test.go` (6 `err := ...` sites redeclaring an already-declared `err`, invisible to a plain `go vet ./...` without `-tags e2e`). `actions/checkout`/`actions/setup-node` bumped `v4`→`v5` after GitHub deprecated Node.js 20 runners.
 - [x] Phase 22 — moved hosting from the internal Bolid GitLab (`gitlab.rigel.bolid.ru/rigel/services/archive/farc`) to a public GitHub repo, `github.com/traycers/farc`. `origin` repointed with the full, real commit history intact (no squash, no rewrite) — `.github/workflows/ci.yml`/`release.yml` needed no changes, since they were already GitHub-native and had been the live CI/release pipeline all along (no GitLab CI ever existed in this repo, and `main` has always been the branch both workflows trigger on). Follow-up cleanup once the repo was public: Go module path renamed `gitlab.rigel.bolid.ru/rigel/services/archive/farc` → `github.com/traycers/farc` across `go.mod` and all internal import paths; `docs/mkdocs.yaml`'s `site_url` updated to the new GitHub URL and `repo_url`/`repo_name` added for the docs theme's source link; the three service Dockerfiles and `web/Dockerfile` had their `FROM` lines switched from the internal-only registry mirror (`gitlab.rigel.bolid.ru:5050/mirror/...`, unreachable from public GitHub-hosted CI runners) to the same images pulled directly from Docker Hub, and `web/Dockerfile`'s unused `ARG NPM_MIRROR` (never actually wired into the `npm ci` call) was dropped as dead code.
-- [x] Phase 24 — трейсинг по `X-Request-Id`/`X-Session-Id` (envoy, sitting in front of the whole system, sets these on inbound requests) plus file-based logging in all three binaries. New `internal/tracing` package: `Middleware(logf)` wraps any `http.Handler` (works uniformly on the main API's router and on `internal/api.EventPushServer`'s bare WS handler, which isn't routed through it), reads both headers only if present (never fabricates an id), carries them on the request's `context.Context`, and logs one access-log line per request through the caller's existing `logf func(format string, args ...any)` — no change to that signature anywhere else in the codebase. Wired onto `farcd`'s `httpSrv`/`wsSrv` (`internal/farcd/farcd.go`, `metricsSrv` deliberately left unwrapped — internal scrape traffic, not proxied through envoy) and `hls_server`'s `httpSrv` (`internal/hlsd/hlsd.go`), both via a `func(format string, args ...any) { f.logf(format, args...) }` indirection — capturing `f.logf`/`h.logf` by value at server-construction time would have permanently bound to the no-op default, since `SetLogger` is only called by `cmd/farc`/`cmd/hls_server` after `New()` returns. Sequential trace: `hls_server`'s single outbound HTTP choke point (`internal/hlsclient/hlsclient.go`'s `do`) forwards the same headers onto its own calls to farcd, so one browser playback request shows the same `request_id` in both services' logs. Caught one real bug while wiring the WS server: wrapping `http.ResponseWriter` in a status-recording struct broke `internal/api.EventPushServer`'s `gorilla/websocket` upgrade, because embedding the `http.ResponseWriter` interface doesn't promote `http.Hijacker` (a separate interface) even when the concrete writer underneath implements it — fixed by forwarding `Hijack` explicitly, with a regression test (`internal/tracing/tracing_test.go`) that dials a real WS handshake through the middleware, since `httptest.NewRecorder` can't catch this (it doesn't implement `Hijacker` either way). File logging: `FARC_LOG_DIR`/`HLS_SERVER_LOG_DIR`/`MSM_SERVER_LOG_DIR` (all optional — empty means stderr only, unchanged from before) added to `internal/config`/`internal/hlsconfig`/`internal/msmconfig` following each package's existing env-parsing convention; `cmd/*/commands/default.go` open `<dir>/<service>.log` for append and log to `io.MultiWriter(os.Stderr, file)` via a plain `*log.Logger` — kept as three near-identical ~15-line blocks rather than a shared package, since the only difference is the service/env-var name. `log/slog` was considered and rejected: every long-lived component already logs through the string-formatted `logf` callback, and switching just the new access-log line to structured output while leaving everything else as-is would be an inconsistent half-migration for no real gain.
+- [x] Phase 24 — трейсинг по `X-Request-Id`/`X-Session-Id` (envoy, sitting in front of the whole system, sets these on inbound requests) plus file-based logging in all three binaries then existing (farcd, hls_server, msm_server — msm_server since removed, see Phase 27). New `internal/tracing` package: `Middleware(logf)` wraps any `http.Handler` (works uniformly on the main API's router and on `internal/api.EventPushServer`'s bare WS handler, which isn't routed through it), reads both headers only if present (never fabricates an id), carries them on the request's `context.Context`, and logs one access-log line per request through the caller's existing `logf func(format string, args ...any)` — no change to that signature anywhere else in the codebase. Wired onto `farcd`'s `httpSrv`/`wsSrv` (`internal/farcd/farcd.go`, `metricsSrv` deliberately left unwrapped — internal scrape traffic, not proxied through envoy) and `hls_server`'s `httpSrv` (`internal/hlsd/hlsd.go`), both via a `func(format string, args ...any) { f.logf(format, args...) }` indirection — capturing `f.logf`/`h.logf` by value at server-construction time would have permanently bound to the no-op default, since `SetLogger` is only called by `cmd/farc`/`cmd/hls_server` after `New()` returns. Sequential trace: `hls_server`'s single outbound HTTP choke point (`internal/hlsclient/hlsclient.go`'s `do`) forwards the same headers onto its own calls to farcd, so one browser playback request shows the same `request_id` in both services' logs. Caught one real bug while wiring the WS server: wrapping `http.ResponseWriter` in a status-recording struct broke `internal/api.EventPushServer`'s `gorilla/websocket` upgrade, because embedding the `http.ResponseWriter` interface doesn't promote `http.Hijacker` (a separate interface) even when the concrete writer underneath implements it — fixed by forwarding `Hijack` explicitly, with a regression test (`internal/tracing/tracing_test.go`) that dials a real WS handshake through the middleware, since `httptest.NewRecorder` can't catch this (it doesn't implement `Hijacker` either way). File logging: `FARC_LOG_DIR`/`HLS_SERVER_LOG_DIR` (all optional — empty means stderr only, unchanged from before) added to `internal/config`/`internal/hlsconfig` following each package's existing env-parsing convention (msm_server had its own equivalent `MSM_SERVER_LOG_DIR`/`internal/msmconfig` at the time, since removed); `cmd/*/commands/default.go` open `<dir>/<service>.log` for append and log to `io.MultiWriter(os.Stderr, file)` via a plain `*log.Logger` — kept as near-identical ~15-line blocks rather than a shared package, since the only difference is the service/env-var name. `log/slog` was considered and rejected: every long-lived component already logs through the string-formatted `logf` callback, and switching just the new access-log line to structured output while leaving everything else as-is would be an inconsistent half-migration for no real gain.
 - [x] Phase 25 — observability: structured log levels, real Prometheus
-  metrics in all three binaries, and a bundled Prometheus+Loki+Grafana
-  stack (`.scratch/observability/spec.md`). New `internal/levellog`
+  metrics in all three binaries then existing (farcd, hls_server,
+  msm_server — msm_server since removed, see Phase 27), and a bundled
+  Prometheus+Loki+Grafana stack (`.scratch/observability/spec.md`). New `internal/levellog`
   package wraps the existing `func(format string, args ...any)` logf
   callback with `.Info`/`.Warn`/`.Error` methods that just prepend
   `level=X ` to the format string — public `SetLogger` signatures are
@@ -63,18 +64,18 @@ All phases below are complete (`[x]`). This file is the running summary of *what
   api/metrics.go`'s hand-rolled
   `writeUnitMetrics` became a `prometheus.Collector` (same metric
   names/labels, still computed live at scrape time, no history —
-  `02-storage.md` §8's design unchanged); `hls_server`/`msm_server` each
-  gained a new `/metrics` (config: `HLS_SERVER_METRICS_IP/PORT`,
-  `MSM_SERVER_METRICS_IP/PORT`, both required like farcd's own) serving
-  free `go_*`/`process_*` runtime collectors plus one new domain gauge
-  each — `hls_server_connected_channels` (`internal/hlsd.Hlsd`'s
-  already-single-goroutine-owned `tracked` map's length, mirrored into
-  an `atomic.Int32` at its one mutation choke point, `persist`, for
-  lock-free concurrent reads) and `msm_server_ws_connected`
-  (`internal/msmd`'s WS-subscribe loop flips an `atomic.Bool` on
-  connect/disconnect). `docker-compose.yaml`/`deploy/docker-compose.
+  `02-storage.md` §8's design unchanged); `hls_server` (and, at the
+  time, `msm_server`, since removed — see Phase 27) each gained a new
+  `/metrics` (config: `HLS_SERVER_METRICS_IP/PORT`, required like
+  farcd's own) serving free `go_*`/`process_*` runtime collectors plus
+  one new domain gauge each — `hls_server_connected_channels`
+  (`internal/hlsd.Hlsd`'s already-single-goroutine-owned `tracked`
+  map's length, mirrored into an `atomic.Int32` at its one mutation
+  choke point, `persist`, for lock-free concurrent reads) and, for
+  msm_server at the time, a WS-connected-to-farcd gauge.
+  `docker-compose.yaml`/`deploy/docker-compose.
   release.yaml` gained `prometheus`/`loki`/`promtail`/`grafana`
-  services, always on (not an opt-in profile like `s3`/`msm`) since
+  services, always on (not an opt-in profile like `s3`) since
   observability was the explicit point of the request; `promtail`
   reads every container's stdout/stderr straight off `docker.sock` via
   `docker_sd_configs` (no host-level log-driver plugin, no code
@@ -105,8 +106,9 @@ All phases below are complete (`[x]`). This file is the running summary of *what
   `Sample.FillH264`/`GetH264` (inlined their own non-deprecated bodies)
   and `AudioSpecificConfig.ChannelCount` → `.ChannelConfig`. Removed
   `github.com/gorilla/mux` entirely, reverting the go1.22-`ServeMux`
-  workaround: `internal/api`, `internal/hlsapi`, `internal/archivesapi`
-  (~28 route registrations across the three) now use stdlib
+  workaround: `internal/api`, `internal/hlsapi`, and (at the time)
+  `internal/archivesapi` — since removed, see Phase 27 — (~28 route
+  registrations across the three) now use stdlib
   `net/http.ServeMux`'s own `"METHOD /path/{id}"` patterns and
   `r.PathValue`, confirmed a purely mechanical port (no regex-constrained
   patterns, custom 404/405 handlers, or router-level middleware were
@@ -147,7 +149,8 @@ All phases below are complete (`[x]`). This file is the running summary of *what
   PORT`, required since Phase 25, causing it to crash-loop). The
   browser-driven Playwright specs themselves did not run in this
   environment. One real router-behavior gap this same verification pass
-  caught in `internal/archivesapi`: every one of its routes ends in a
+  caught in `internal/archivesapi` (msm_server's inbound side at the
+  time, since removed — see Phase 27): every one of its routes ends in a
   literal `/` (`temp/controller/openapi.yaml`'s shape), which
   `gorilla/mux` always matched exactly, but stdlib `net/http.ServeMux`
   treats a trailing `/` as a subtree prefix by default -- an extra path
@@ -166,6 +169,52 @@ All phases below are complete (`[x]`). This file is the running summary of *what
   gap (missing `/segments/` — present in `web/nginx.conf` since Phase
   17) — neither introduced by this phase, confirmed via `git diff`/
   `git stash` against the pre-upgrade baseline.
+
+- [x] Phase 27 — removed the msm/controller integration from this repo
+  entirely (plan tracked at `.scratch/remove-msm-integration/`, `spec.md` +
+  `issues/01`–`05`) — it's moving to a new, separate repository, which this
+  effort does not create or seed, only deletes from here. Deleted
+  `cmd/msm_server/`, `internal/msmd/`, `internal/msmclient/`,
+  `internal/msmapi/`, `internal/msmconfig/`, `internal/archivesapi/`,
+  `internal/farcctl/`, `internal/vaablocks/`, and `Dockerfile.msm_server`
+  (plain deletion, no git-history extraction); `go mod tidy` dropped no
+  shared dependencies (`cobra`/`godotenv`/`client_golang` are all still used
+  by `farcd`/`hls_server`). Reworded doc comments in
+  `internal/api/{storages,channels,eventpush,helpers}.go`,
+  `internal/storage/writetxn.go`, `internal/farcd/farcd.go`,
+  `internal/ingest/{channelingest,policy}.go`, `internal/hlsclient/
+  {events,hlsclient_test}.go`, `internal/tocindex/{videopresence,
+  testutil_test}.go`, and `toc/query.go` that named the now-deleted
+  packages as callers/rationale, without changing any behavior — e.g.
+  `handleRemoveStorage`'s 409 guard is now described in its own terms
+  (any caller must remove every attached channel first) rather than
+  naming archivesapi as *the* caller, since `DELETE /storages/{id}` gets
+  a real second caller next (see the `storage-detach-button` UI work
+  below). Removed `taskfile.yaml`'s `build/msm_server` task and
+  `z_msm_name`/`z_msm_file_name` vars; `docker-compose.yaml`'s
+  `msm_server` service and its `msm` compose profile; the msm_server
+  scrape target from `deploy/observability/prometheus.yml`; msm_server
+  from `promtail-config.yaml`'s comment and both Grafana dashboards'
+  job-label regexes; and the dedicated "msm_server WS connected to
+  farcd" panel from `services-overview.json` (widened the neighboring
+  `hls_server connected channels` panel to fill the freed grid space).
+  Rewrote `CLAUDE.md` (three binaries → two, dropped the whole "External
+  controller/msm integration" paragraph and every `msmconfig`/
+  `msmclient`/`msmapi`/`vaablocks`/`msmd`/`farcctl`/`archivesapi` mention
+  in Code layout) and `CONTEXT.md` (deleted the `### msm_server /
+  integration` glossary section entirely, plus four scattered mentions
+  in the system-overview/Consumer/best-effort-delivery/archive-glossary
+  entries); `docs/agents/domain.md` and two `docs/docs/archive/*.md`
+  files each lost one passing msm_server mention. This is a pure
+  deletion with no ripple into farcd/hls_server's actual RTSP/HLS code
+  paths (the dependency edge only ever ran from the msm cluster into
+  core farc packages) — verified with `go build ./...`, `go vet ./...`,
+  `go test ./... -race`, `golangci-lint run` (0 issues), `go test -tags
+  e2e ./tests/...`, `task build` (now exactly two Go binaries), and a
+  repo-wide `/usr/bin/grep -RIl -E "msm|archivesapi|farcctl|
+  vaa[-_]?block"` sweep returning nothing outside
+  `.scratch/remove-msm-integration/`'s own files and other `.scratch/**`
+  issue files with incidental, unrelated mentions left alone on purpose.
 
 ## Context
 
@@ -217,7 +266,7 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 | `web/src/App.tsx` | `react-router-dom` shell: `/storages`, `/channels`, `/player`, `/journal` |
 | `web/nginx.conf` | `/api/farcd/` → farcd, `/api/hls/` → hls_server, `/segments/` → hls_server, `/api/events/` → farcd WS, SPA fallback to `index.html` |
 | `web/Dockerfile` | multi-stage: `node:26` build → `nginx:alpine` serve |
-| `Dockerfile.farc`, `Dockerfile.hls_server`, `Dockerfile.msm_server` | multi-stage: `golang:1.26-bookworm` build (`CGO_ENABLED=0`) → `debian:12-slim` runtime |
+| `Dockerfile.farc`, `Dockerfile.hls_server` | multi-stage: `golang:1.26-bookworm` build (`CGO_ENABLED=0`) → `debian:12-slim` runtime |
 | `docker-compose.yaml` | services `farc`, `hls_server`, `web`, optional `seaweedfs` (`profiles: [s3]`); only `web` publishes a host port |
 | `deploy/docker-compose.release.yaml` | Phase 21: same topology as above, `build:` replaced with `image: <service>:__VERSION__`, rendered by `release.yml` |
 

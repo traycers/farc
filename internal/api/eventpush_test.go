@@ -418,8 +418,8 @@ func TestEventPushServer_ConcurrentPublishAndConnect(t *testing.T) {
 // TestEventPushServer_GlobalIncludeTOC exercises A2's TOC-over-WS push: a
 // global subscriber that sets IncludeTOC gets a "toc" frame right after an
 // EventFblockReady "event" frame, carrying the real TOC bytes for the fblock
-// that was actually written (not synthetic data) -- the mechanism msm_server
-// relies on to compute vaa-blocks without polling GET .../toc.
+// that was actually written (not synthetic data) -- lets a subscriber act
+// on a fblock's TOC without polling GET .../toc.
 func TestEventPushServer_GlobalIncludeTOC(t *testing.T) {
 	reg := NewStorageRegistry()
 	u := newTestUnit(t)

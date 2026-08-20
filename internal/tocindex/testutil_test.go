@@ -95,8 +95,7 @@ func writeVideoFrame(t *testing.T, unit *storage.Unit, channels []uint16, channe
 }
 
 // writeChannelVideo writes one channel's video frames (only) at the given
-// times into a fresh fcontainer/fblock, returning its UUID -- mirrors
-// internal/vaablocks/vaablocks_test.go's helper of the same name/shape.
+// times into a fresh fcontainer/fblock, returning its UUID.
 func writeChannelVideo(t *testing.T, unit *storage.Unit, channel uint16, times []uint64) [16]byte {
 	t.Helper()
 	f := fcontainer.New()

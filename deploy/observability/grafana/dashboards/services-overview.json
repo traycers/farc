@@ -17,7 +17,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
-        { "expr": "go_goroutines{job=~\"farc|hls_server|msm_server\"}", "legendFormat": "{{job}}", "refId": "A" }
+        { "expr": "go_goroutines{job=~\"farc|hls_server\"}", "legendFormat": "{{job}}", "refId": "A" }
       ]
     },
     {
@@ -28,7 +28,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
       "targets": [
-        { "expr": "process_resident_memory_bytes{job=~\"farc|hls_server|msm_server\"}", "legendFormat": "{{job}}", "refId": "A" }
+        { "expr": "process_resident_memory_bytes{job=~\"farc|hls_server\"}", "legendFormat": "{{job}}", "refId": "A" }
       ]
     },
     {
@@ -39,37 +39,18 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
       "targets": [
-        { "expr": "time() - process_start_time_seconds{job=~\"farc|hls_server|msm_server\"}", "legendFormat": "{{job}}", "refId": "A" }
+        { "expr": "time() - process_start_time_seconds{job=~\"farc|hls_server\"}", "legendFormat": "{{job}}", "refId": "A" }
       ]
     },
     {
       "id": 4,
       "title": "hls_server connected channels",
       "type": "stat",
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "expr": "hls_server_connected_channels", "refId": "A" }
-      ]
-    },
-    {
-      "id": 5,
-      "title": "msm_server WS connected to farcd",
-      "type": "stat",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "mappings": [
-            { "type": "value", "options": { "0": { "text": "disconnected", "color": "red" }, "1": { "text": "connected", "color": "green" } } }
-          ]
-        },
-        "overrides": []
-      },
-      "targets": [
-        { "expr": "msm_server_ws_connected", "refId": "A" }
       ]
     }
   ]

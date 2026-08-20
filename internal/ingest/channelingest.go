@@ -211,9 +211,8 @@ func (ci *ChannelIngest) reportConnectFailed(runErr error) {
 
 // reconnectInitialBackoff/reconnectMaxBackoff bound Run's reconnect loop
 // (docs/docs/archive/11-service-composition.md §5.1.1's "переподключается
-// при разрыве RTSP-сессии") -- exponential, capped, matching
-// internal/msmd's own external-reconnect convention: an RTSP camera,
-// unlike farcd's own internal services, cannot be assumed "almost always
+// при разрыве RTSP-сессии") -- exponential, capped: an RTSP camera, unlike
+// farcd's own internal services, cannot be assumed "almost always
 // reachable" (contrast internal/tocindex/internal/hlsd's fixed-delay
 // choice, justified there specifically because farcd is). Vars, not
 // consts, so tests can shrink them instead of waiting out real backoff

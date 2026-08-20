@@ -145,8 +145,8 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 		// StorageOf, not List: this only needs the storage id, and it's
 		// cheaper than List's full build-and-sort over every channel (no
 		// deadlock concern either way -- the hook fires after CapturePolicy's
-		// own mutex is released). msm_server needs Storage (its "archive id")
-		// to call started_add/finished_add.
+		// own mutex is released). JournalEvent.Storage is populated so
+		// subscribers can filter/group by storage without a separate lookup.
 		storageID, _ := f.ing.StorageOf(channel)
 		if recording {
 			f.push.Publish(api.JournalEvent{Name: api.EventRecordingStarted, Channel: channel, Storage: storageID, Begin: t})
@@ -374,14 +374,14 @@ func (f *Farcd) persistUpdatedStorage(id, name string) error {
 	return err
 }
 
-// persistRemovedStorage removes a storage detached via archives.go's
-// archives_detach from farcd's own config file, wired into HttpApiServer via
+// persistRemovedStorage removes a storage removed via DELETE /storages/{id}
+// from farcd's own config file, wired into HttpApiServer via
 // SetOnStorageRemoved -- runs *before* the Storage is actually unregistered
 // and closed (api.HttpApiServer.SetOnStorageRemoved's own doc comment), so a
-// Save failure here leaves the archive fully intact rather than half torn
+// Save failure here leaves the storage fully intact rather than half torn
 // down. On success, stops id's fblock-event bridge goroutine and drops its
 // Unit from f.units, so shutdown's closeUnits doesn't later double-close a
-// Unit archives.go's handler is about to Close itself.
+// Unit handleRemoveStorage is about to Close itself.
 func (f *Farcd) persistRemovedStorage(id string) error {
 	mutated, err := f.withConfigMutation(fmt.Sprintf("persist archive %q detach", id), func() (func(), error) {
 		idx := -1

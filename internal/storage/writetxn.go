@@ -6,8 +6,7 @@ import "github.com/traycers/farc/fblock"
 // segmentImpl's promoteLocked and closeLocked's retry loop: selects the
 // next physical index, transitions it to in_progress, publishes
 // fblock.write.started (and fblock.deleted if the slot was previously
-// Ready -- msm_server's fblocks_del reporting depends on this event, see
-// CONTEXT.md), sets the segment's channels' channel_bitmap bits, patches a
+// Ready), sets the segment's channels' channel_bitmap bits, patches a
 // catalog snapshot with the new fcontainer's identity, bumps
 // write_sequence, and best-effort mirrors the result to the SSD catalog.
 //

@@ -132,19 +132,16 @@ func (s *HttpApiServer) removeStorage(id string) error {
 // Refuses (409) while any channel still targets this storage: storage.Unit.
 // Close's own doc comment requires no WriteFcontainer call be in flight when
 // it's called, and a still-running channel's ChannelIngest goroutine can
-// call it (via Recorder) at any time -- callers must remove every such
-// channel first (DELETE /channels/{id}). archivesapi's own archives_detach
-// translation does exactly that (removing every attached channel, then
-// calling this) rather than relying on the 409 -- this handler's own
-// refusal is the last-resort guard for any other caller, not the intended
-// primary path.
+// call it (via Recorder) at any time -- any caller must remove every such
+// channel first (DELETE /channels/{id}) rather than relying on this 409,
+// which is a last-resort guard, not the intended primary path.
 //
 // This check is a best-effort snapshot, not a lock spanning
 // StorageRegistry and IngestManager: a channel attaching to id concurrently
-// with this call can still race past it. Acceptable for now given the only
-// expected caller (archivesapi) always removes channels first through the
-// same instance of this HttpApiServer; revisit with real cross-manager
-// coordination if concurrent unrelated callers become a real scenario.
+// with this call can still race past it. Acceptable for now given every
+// caller is expected to remove channels first through the same instance of
+// this HttpApiServer; revisit with real cross-manager coordination if
+// concurrent unrelated callers become a real scenario.
 func (s *HttpApiServer) handleRemoveStorage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok := s.reg.Get(id); !ok {

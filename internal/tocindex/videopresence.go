@@ -5,10 +5,8 @@ import (
 	"github.com/traycers/farc/toc"
 )
 
-// gapThresholdNS mirrors internal/vaablocks.GapThresholdNS's 2-second rule.
-// Duplicated intentionally, not imported: internal/vaablocks exists purely
-// for the msm_server integration, and hls_server's video-presence timeline
-// (.scratch/player-redesign/) must not depend on it.
+// gapThresholdNS is the gap (in ns) above which two consecutive video frames
+// are considered separate presence segments rather than one continuous run.
 const gapThresholdNS = uint64(2_000_000_000)
 
 // Segment is one continuous run of a channel's video frames, split wherever
@@ -20,10 +18,9 @@ type Segment struct {
 
 // VideoPresenceSegments returns channel's video-presence segments from c, in
 // increasing-time order -- nil if channel isn't present in c or has no video
-// frames. Unlike internal/vaablocks.Compute, this only needs frame
-// timestamps: it exists purely to answer "did this channel have video at
-// time t", not to identify a specific config/stream for msm, so it skips
-// vaablocks' byte-offset/config/stream resolution entirely.
+// frames. Only needs frame timestamps: it exists purely to answer "did this
+// channel have video at time t", so it skips any byte-offset/config/stream
+// resolution entirely.
 func VideoPresenceSegments(c *toc.Columns, channel uint16) []Segment {
 	start, end, ok := toc.ChannelSubtreeRange(c, channel)
 	if !ok {

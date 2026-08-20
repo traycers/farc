@@ -1,6 +1,6 @@
 # 03 — Update CLAUDE.md, CONTEXT.md, design docs, and PLAN.md
 
-Status: open
+Status: resolved
 Blocked by: 01
 
 ## Task
@@ -73,3 +73,24 @@ vaablocks/msmclient/msmapi/msmconfig/msmd left anywhere (`/usr/bin/grep
 aliased `grep` skips these files, see issue 01's note).
 
 ## Comments
+
+2026-08-20: All 5 planned docs rewritten (mkdocs build skipped — no
+docs-build container exists yet per this repo's own convention;
+verified manually instead: reread every edited file, final `grep -il
+msm` on `CLAUDE.md`/`CONTEXT.md`/`docs/agents/domain.md` returns
+nothing). One extra fix found only by the actual full-repo grep, not
+foreseen during grilling: `CONTEXT.md`'s `Storage`'s own `_Avoid_` note
+about "archive"/"архив" being an msm/controller-API synonym no longer
+means anything once that API is gone from this repo — removed the note
+entirely rather than reword it, since nothing left in the repo uses
+"archive" as a Storage synonym to warn against. Also found (and fixed,
+same spirit) two dangling `internal/api` comments issue 01 didn't
+foresee: `helpers.go`'s `apiError` doc named "archives.go's batch
+operations," and `internal/farcd/farcd.go`'s `persistRemovedStorage`
+doc named "archives.go's archives_detach"/"archives.go's handler" —
+both referred to `internal/archivesapi`'s deleted `server.go` by an
+informal alias that grep for the package name alone wouldn't catch.
+`PLAN.md` gained a new Phase 27 entry (this effort's own changelog
+account) and had its Phase 24-26 historical mentions of msm_server/
+archivesapi/farcctl/vaablocks annotated "since removed, see Phase 27"
+rather than deleted outright, preserving the historical record.

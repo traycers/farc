@@ -234,10 +234,8 @@ type channelInfo struct {
 }
 
 // handleListChannels is GET /channels, optionally filtered to one storage
-// via ?storage= -- used by msm_server's archivesapi to find every channel
-// belonging to one archive/storage without a farcd-side archive concept
-// (mirrors what internal/ingest.IngestManager.List() filtered by StorageID
-// already gives an in-process caller).
+// via ?storage= -- mirrors what internal/ingest.IngestManager.List()
+// filtered by StorageID already gives an in-process caller.
 func (s *HttpApiServer) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	if s.ing == nil {
 		writeJSON(w, http.StatusOK, []channelInfo{})

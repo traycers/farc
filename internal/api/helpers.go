@@ -22,9 +22,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 // apiError pairs an error with the HTTP status it should produce. Handlers
 // that call into a shared non-HTTP helper (createStorage/createChannel/
-// removeChannel and archives.go's batch operations built on top of them)
-// use this so the helper can request a specific status (400/404/409) instead
-// of every caller hard-coding the same default.
+// removeChannel) use this so the helper can request a specific status
+// (400/404/409) instead of every caller hard-coding the same default.
 type apiError struct {
 	status int
 	err    error

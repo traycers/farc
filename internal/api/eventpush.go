@@ -19,9 +19,9 @@ import (
 // one Storage's NotificationBus (see ServeHTTP/serveGlobal). IncludeTOC
 // opts a global subscriber into a second "toc" frame (tocPushMessage) right
 // after every EventFblockReady it receives -- off by default so ordinary
-// Journal/UI clients never pay for a payload they don't use (msm_server is
-// the one subscriber that sets it, to compute vaa-blocks without polling
-// GET .../toc).
+// Journal/UI clients never pay for a payload they don't use; a subscriber
+// that needs a fblock's TOC as soon as it's ready sets this instead of
+// polling GET .../toc.
 type subscribeMessage struct {
 	Storage    string   `json:"storage"`
 	Want       []string `json:"want"`

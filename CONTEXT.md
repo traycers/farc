@@ -7,25 +7,24 @@ farc's domain: one archive system recording RTSP streams to disk and serving the
 ### System
 
 **Archive**:
-The whole system — every service together (`farcd`, `hls_server`, `msm_server`, the web console) plus the data they manage. Not just the `farcd` process.
+The whole system — every service together (`farcd`, `hls_server`, the web console) plus the data they manage. Not just the `farcd` process.
 _Avoid_: using it for a single Storage — see Storage's own `_Avoid_` entry.
 
 **Потребитель (Consumer)**:
-The process embedding the storage library — in this system, that's `farcd` and only `farcd` (`hls_server`/`msm_server`/the web console talk to `farcd` over HTTP/WS, they don't embed the library). One Consumer may work with several independent Storages at once.
+The process embedding the storage library — in this system, that's `farcd` and only `farcd` (`hls_server`/the web console talk to `farcd` over HTTP/WS, they don't embed the library). One Consumer may work with several independent Storages at once.
 _Avoid_: conflating this with Archive — Archive is the whole system; Consumer is specifically the one process that calls into `internal/storage`.
 
 **Video Gateway**:
 An architectural role: prepares and delivers video to web clients, talking to `farcd` only through its external API (events/TOC over WebSocket push, reads) — no direct Storage access. `hls_server` is this system's one concrete implementation of the role (a sibling role, Timeline Service, is documented but not implemented here).
 
 **Доставка без догона (Best-effort, no catch-up delivery)**:
-The delivery policy for every live push feed in this system — farcd's own WS event feed to any subscriber, and `msm_server`'s own reporting to the external msm service alike. Events are sent as they happen; nothing is queued or persisted on the sending side, and a disconnect never triggers replay of what was missed — a reconnecting consumer just picks up wherever the live feed currently is. A deliberate simplicity choice for a first version, not a permanent guarantee.
-_Avoid_: assuming any subscriber (including msm) ends up with a complete history — always assume a reconnect can lose events.
+The delivery policy for every live push feed in this system — farcd's own WS event feed to any subscriber. Events are sent as they happen; nothing is queued or persisted on the sending side, and a disconnect never triggers replay of what was missed — a reconnecting consumer just picks up wherever the live feed currently is. A deliberate simplicity choice for a first version, not a permanent guarantee.
+_Avoid_: assuming any subscriber ends up with a complete history — always assume a reconnect can lose events.
 
 ### Storage & fblock
 
 **Хранилище (Storage)**:
 A file or disk partition — a container for media data, organized as a flat list of fblocks. One logical writer plus many concurrent readers.
-_Avoid_: "archive"/"архив" — that word is used only as an external, integration-facing synonym for Storage in the msm/controller API (`/api/v1/archives/*`); it is not a domain term inside farc itself.
 
 **fblock**:
 A self-contained, fixed-size archive unit covering one time window; readable without any other fblock or a global header. States: `uninitialized → in_progress → ready → bad`, plus an independent `protected` (read-only) modifier. Holds exactly one fcontainer.
@@ -93,25 +92,3 @@ A CMAF resource carrying codec parameters (`init.mp4`), shared by every media se
 
 **Сетка сегментов (Segment grid)**:
 The sequence of time boundaries within one fcontainer that segments are cut along. Never crosses an fcontainer boundary (ADR-019) — a segment always belongs to exactly one fcontainer.
-
-### msm_server / integration
-
-**ВАА-блок (VAA-block)**:
-msm's own domain concept for one channel's continuous run of frames, reported as metadata (time range, frame count, etc.) to the external msm service. In the legacy system msm was originally built against, a VAA-block is also a real physical unit — a binary chunk of frames written to that system's own on-disk container. farc has no such container and never materializes a physical VAA-block; `internal/vaablocks` computes the same metadata directly from a fcontainer's TOC, on demand.
-_Avoid_: comparing farc's own storage structures (fblock/fcontainer/TOC) against the legacy system's VAA-block binary layout — they're unrelated encodings. The only thing shared is the abstract concept (one channel's continuous frame run) and the metadata shape msm expects about it.
-
-**msm_server как имитация (msm_server as stand-in)**:
-In the legacy system, a dedicated service builds VAA-block metadata from the real, physical VAA-blocks and reports it to msm. `msm_server` stands in for that service's role in farc's architecture — it produces the same metadata msm expects, but derives it from a fcontainer's TOC instead of from any physical VAA-block. "Imitation" here means standing in for that service's *role and output*, not reproducing its internal data structures.
-
-**Вычисление вместо хранения (Computed, not stored)**:
-farc keeps no VAA-block and no `vaa_cycle`-equivalent container anywhere. Every VAA-block metadata record `msm_server` reports is derived from a fcontainer's TOC at report time — the TOC is the only source of truth; there's nothing separate to persist or keep in sync.
-
-**fblocks_add / fblocks_del**:
-msm-facing reporting of an fblock's existence, keyed by its UUID (see fblock's number/offset-vs-UUID identity note above) — `fblocks_add` when a new fblock is created at some number/offset, `fblocks_del` when that fblock is overwritten (a new UUID takes its slot, reported as its own `fblocks_add`). Independent of `status_set`/`info_set`, which report an existing fblock's own state/summary, not its existence.
-
-**Порядок vaa_blocks_add → info_set**:
-For a given fblock, msm requires every `vaa_blocks_add` call to complete before that fblock's `info_set`. Purely msm's own API contract — there's no farc-side invariant behind it. `msm_server` satisfies it incidentally, just by processing WS events strictly one at a time.
-
-**Конфигурация потока (Stream config version)**:
-The codec parameters (profile/SPS/PPS/VPS for video, audio config for audio) in effect for one channel's stream at a point in time. Every frame is bound to exactly one version — a version changes when the RTSP source's settings are changed live (e.g. from the web client) mid-channel-lifetime, and each such change is its own new version from then on. `params_add` reports every distinct version it sees, for every stream type on the channel (video, audio, and any future stream type) — not just the ones a downstream feature (like VAA-blocks) happens to use.
-_Avoid_: assuming a channel has one config version for its whole lifetime, or that only video streams get reported — `params_add` is stream-type-agnostic even where a specific consumer (today, VAA-blocks) currently only acts on a subset of stream types.

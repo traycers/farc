@@ -157,8 +157,8 @@ func InlineValue(c *Columns, i uint32) ([]byte, bool) {
 // channel, within c's own row-index space (ADR-014: channel counts per
 // fcontainer are small, so a linear scan over ScanByRole's result is
 // cheap). Was independently reimplemented in internal/api, internal/
-// tocindex, internal/segment, internal/playlist, and internal/vaablocks
-// before being promoted here.
+// tocindex, internal/segment, and internal/playlist before being promoted
+// here.
 func ChannelNode(c *Columns, channel uint16) (uint32, bool) {
 	for _, id := range ScanByRole(c, mediatree.RoleChannel) {
 		v, ok := InlineValue(c, id)

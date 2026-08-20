@@ -1,6 +1,6 @@
 # 05 — Full verification
 
-Status: open
+Status: resolved
 Blocked by: 01, 02, 03, 04
 
 ## Task
@@ -37,3 +37,19 @@ thoroughly that nothing was left dangling:
   02 didn't break the main compose file).
 
 ## Comments
+
+2026-08-20: All checks green — `go build`/`go vet`/`go test ./...
+-race`/`golangci-lint run` (0 issues), `go test -tags e2e
+./tests/...`, `task build` (exactly `farc`+`hls_server`, no
+`msm_server`), both `docker compose config` checks. Final repo-wide
+`/usr/bin/grep -RIl -E "msm|archivesapi|farcctl|vaa[-_]?block" .`
+returns only: this effort's own `.scratch/remove-msm-integration/`
+files; other pre-existing `.scratch/**` issue files with incidental,
+unrelated mentions (left alone per issue 04's scope);
+`web`/`e2e` `node_modules`/`package-lock.json`/Playwright report
+artifacts (unrelated false positives, not source); and `PLAN.md`,
+which is expected — it now carries this effort's own Phase 27
+changelog entry (naming the removed packages, same role as this
+`.scratch/` directory) plus "since removed, see Phase 27" annotations
+on the 3 older phases that originally described msm_server's
+existence.

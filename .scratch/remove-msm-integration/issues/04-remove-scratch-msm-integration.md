@@ -1,6 +1,6 @@
 # 04 — Remove .scratch/msm-integration/
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -24,3 +24,6 @@ msm itself, no action needed on them.
 under `.scratch/` touched by this issue.
 
 ## Comments
+
+2026-08-20: Deleted via `git rm -r .scratch/msm-integration/`. No other
+`.scratch/**` directory touched.

@@ -1,7 +1,7 @@
 # Ships every container's stdout/stderr straight into Loki, read via the
 # Docker Engine API over docker.sock -- no code change needed in
-# farc/hls_server/msm_server/web, and no host-level log-driver plugin
-# install either (.scratch/observability/spec.md).
+# farc/hls_server/web, and no host-level log-driver plugin install either
+# (.scratch/observability/spec.md).
 server:
   http_listen_port: 9080
   grpc_listen_port: 0

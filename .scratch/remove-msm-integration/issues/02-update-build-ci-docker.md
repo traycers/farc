@@ -1,6 +1,6 @@
 # 02 — Clean up build/taskfile/Docker/observability references
 
-Status: open
+Status: resolved
 Blocked by: 01
 
 ## Task
@@ -51,3 +51,15 @@ Blocked by: 01
   JSON after editing (`jq . <file> >/dev/null`).
 
 ## Comments
+
+2026-08-20: All planned removals done — `taskfile.yaml`, the
+`msm_server` service + `msm` compose profile from `docker-compose.yaml`
+(the `msm` profile had no other consumer, so it's gone entirely, not
+just this one service), the comment in
+`deploy/docker-compose.release.yaml`, the scrape target in
+`prometheus.yml`, the comment in `promtail-config.yaml`, and both
+Grafana dashboards (job-label regexes plus the whole "msm_server WS
+connected to farcd" panel — widened the neighboring `hls_server
+connected channels` panel to `w:12` to fill the freed grid space rather
+than leave a hole). `task build`, both `jq .` checks, and `docker
+compose -f docker-compose.yaml config` all pass.

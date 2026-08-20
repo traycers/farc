@@ -100,7 +100,7 @@ type CapturePolicy struct {
 	// time this segment's content is meant to cover, including any
 	// prerecord/queue replay) or its actual stop time on a stop
 	// (closeSegmentLocked's now) -- not derived from the frames actually
-	// written, which msm's started_add/finished_add don't ask for either.
+	// written.
 	onRecordingChange func(channel uint16, recording bool, t uint64)
 }
 

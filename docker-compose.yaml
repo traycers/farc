@@ -95,28 +95,6 @@ services:
   #     - seaweedfs_data:/data
   #   restart: unless-stopped
 
-  # Relays farcd's WS event feed to an external msm ("media services
-  # manager") service (temp/msm/openapi.yaml) -- fblock/recording lifecycle,
-  # stream params, and vaa-blocks. Opt-in (profiles: msm) since msm itself
-  # isn't part of this stack: a plain `docker compose up` stays unchanged;
-  # `docker compose --profile msm up` also starts this, once
-  # MSM_SERVER_MSM_URL below is pointed at a real msm deployment.
-  msm_server:
-    build:
-      context: .
-      dockerfile: Dockerfile.msm_server
-    profiles:
-      - msm
-    environment:
-      MSM_SERVER_METRICS_IP: "0.0.0.0"
-      MSM_SERVER_METRICS_PORT: "9092"
-      MSM_SERVER_FARC_HTTP: "http://farc:8080"
-      MSM_SERVER_FARC_WS: "ws://farc:8081"
-      MSM_SERVER_MSM_URL: "http://msm:9000"
-    depends_on:
-      - farc
-    restart: unless-stopped
-
   web:
     build:
       context: ./web
@@ -128,10 +106,9 @@ services:
     restart: unless-stopped
 
   # Observability stack (.scratch/observability/spec.md) -- always on, not
-  # an opt-in profile like s3/msm above: scrapes farc/hls_server/msm_server's
-  # /metrics, ships every container's stdout/stderr into Loki, and serves
-  # three pre-built Grafana dashboards. msm_server's target simply shows as
-  # down in Prometheus if the msm profile isn't active -- not an error.
+  # an opt-in profile like s3 above: scrapes farc/hls_server's /metrics,
+  # ships every container's stdout/stderr into Loki, and serves three
+  # pre-built Grafana dashboards.
   prometheus:
     image: prom/prometheus:v2.55.1
     volumes:
@@ -147,7 +124,7 @@ services:
 
   # Reads container logs via the Docker Engine API (docker.sock) and ships
   # them to loki -- no code change and no host-level log-driver plugin
-  # needed in farc/hls_server/msm_server/web.
+  # needed in farc/hls_server/web.
   promtail:
     image: grafana/promtail:2.9.9
     command: -config.file=/etc/promtail/config.yaml

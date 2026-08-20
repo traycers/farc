@@ -13,8 +13,6 @@ vars:
   z_file_name: "{{.z_name}}{{exeExt}}"
   z_hls_name: hls_server
   z_hls_file_name: "{{.z_hls_name}}{{exeExt}}"
-  z_msm_name: msm_server
-  z_msm_file_name: "{{.z_msm_name}}{{exeExt}}"
 
 
 
@@ -106,21 +104,6 @@ tasks:
     generates:
       - "./{{.z_hls_file_name}}"
 
-  build/msm_server:
-    desc: "собирает проект {{.z_msm_name}}"
-    cmds:
-      - >
-        go build
-        -o {{.z_msm_file_name}}
-        ./cmd/{{.z_msm_name}}
-    sources:
-      - ./cmd/{{.z_msm_name}}/**/*.go
-      - ./internal/**/*.go
-      - ./pkg/**/*.go
-      - ./cmd/**/*.go
-    generates:
-      - "./{{.z_msm_file_name}}"
-
   build/web:
     desc: "собирает веб-клиент (web/) через Vite"
     dir: "{{.USER_WORKING_DIR}}/web"
@@ -140,7 +123,6 @@ tasks:
     cmds:
       - task: build/app
       - task: build/hls_server
-      - task: build/msm_server
       - task: build/web
 
   run:

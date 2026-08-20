@@ -18,9 +18,9 @@ const (
 )
 
 // Event is a decoded WS push frame — a typed mirror of internal/api's
-// pushMessage/tocPushMessage (both shapes fold into one struct, same as
-// internal/msmclient.Event, since their JSON fields never collide), with
-// UUID decoded from hex into [16]byte. Channel/Storage are only set for a
+// pushMessage/tocPushMessage (both shapes fold into one struct, since their
+// JSON fields never collide), with UUID decoded from hex into [16]byte.
+// Channel/Storage are only set for a
 // global subscription's channel-lifecycle events (Name ==
 // EventChannelCreated/EventChannelRemoved); Index/UUID/Severity/Reason are
 // only set for a per-storage fblock event; TOC is only set when
@@ -49,7 +49,7 @@ type wireSubscribeMessage struct {
 // wirePushMessage mirrors the union of internal/api's pushMessage and
 // tocPushMessage -- decoding both shapes into one struct is safe since their
 // JSON field sets don't overlap except Type/Storage/Index/UUID, which mean
-// the same thing in both (internal/msmclient's wireMessage does the same).
+// the same thing in both.
 type wirePushMessage struct {
 	Type     string `json:"type"`
 	Name     string `json:"name,omitempty"`

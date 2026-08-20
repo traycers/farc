@@ -171,9 +171,8 @@ func TestClient_Subscribe_GlobalChannelEvents(t *testing.T) {
 	}
 }
 
-// TestClient_Subscribe_IncludeTOC mirrors internal/msmclient's
-// TestClient_Subscribe_ReceivesEventThenTOC, but for hlsclient's per-storage
-// Subscribe (the shape internal/tocindex.EventSubscriber actually uses) --
+// TestClient_Subscribe_IncludeTOC covers hlsclient's per-storage Subscribe
+// (the shape internal/tocindex.EventSubscriber actually uses) --
 // requesting includeTOC=true must surface the pushed "toc" frame's bytes on
 // Event.TOC, decodable as the real TOC of the fblock that was written.
 func TestClient_Subscribe_IncludeTOC(t *testing.T) {

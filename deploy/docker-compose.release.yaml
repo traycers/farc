@@ -73,10 +73,10 @@ services:
     restart: unless-stopped
 
   # Observability stack (.scratch/observability/spec.md) -- always on, not
-  # an opt-in profile like s3 above: scrapes farc/hls_server(/msm_server)'s
-  # /metrics, ships every container's stdout/stderr into Loki, and serves
-  # three pre-built Grafana dashboards. References only public upstream
-  # images, so there's nothing to template here.
+  # an opt-in profile like s3 above: scrapes farc/hls_server's /metrics,
+  # ships every container's stdout/stderr into Loki, and serves three
+  # pre-built Grafana dashboards. References only public upstream images,
+  # so there's nothing to template here.
   prometheus:
     image: prom/prometheus:v2.55.1
     volumes:

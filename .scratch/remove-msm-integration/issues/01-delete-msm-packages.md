@@ -1,6 +1,6 @@
 # 01 — Delete the msm_server binary and its packages
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -73,3 +73,16 @@ run`, `go mod tidy` (confirm no unexpected deps drop out of
 `go.mod`/`go.sum`).
 
 ## Comments
+
+2026-08-20: Deleted all 8 packages/binary + `Dockerfile.msm_server`;
+`go mod tidy` dropped no shared dependencies. Reworded the 3 planned
+comments (`storages.go`, `writetxn.go`, `farcd.go`) plus several more
+found only by grepping for real: `internal/api/{channels,eventpush,
+helpers}.go`, `internal/ingest/{channelingest,policy}.go`,
+`internal/hlsclient/{events,hlsclient_test}.go`,
+`internal/tocindex/{videopresence,testutil_test}.go`, `toc/query.go` —
+all named the now-deleted packages as callers/rationale without any
+behavior change. `go build`/`go vet`/`go test ./... -race`/
+`golangci-lint run` all green; `/usr/bin/grep -RIl -E
+"msm|archivesapi|farcctl|vaa[-_]?block" --include='*.go' .` returns
+nothing.

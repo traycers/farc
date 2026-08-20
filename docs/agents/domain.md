@@ -4,7 +4,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root — the domain glossary, kept current via `/domain-modeling`. Covers system-level terms (Archive, Consumer, Video Gateway, best-effort delivery), Storage/fblock terms (fblock's number/offset-vs-UUID identity, Catalog, write_sequence, StorageEngine, Backpressure levels, Protected), hls_server/playback terms, and msm_server integration terms (VAA-block, stream config versions, the fblocks_add/vaa_blocks_add/info_set reporting sequence).
+- **`CONTEXT.md`** at the repo root — the domain glossary, kept current via `/domain-modeling`. Covers system-level terms (Archive, Consumer, Video Gateway, best-effort delivery), Storage/fblock terms (fblock's number/offset-vs-UUID identity, Catalog, write_sequence, StorageEngine, Backpressure levels, Protected), and hls_server/playback terms.
 - **`docs/docs/archive/adr/`** — this repo's actual ADR location, numbered `001`–`021`. This repo does **not** use the skill's default `docs/adr/`; per `CLAUDE.md`, these ADRs "are actively followed, not historical artifacts," so read any that touch the area you're about to work in.
 - The numbered design docs `docs/docs/archive/00-requirements.md` … `12-hls-server.md` are the broader architecture spec (storage/fblock format, capture policy, HLS serving, etc.). `CLAUDE.md` already directs agents to read the relevant ones before storage/fblock/hls_server work, so this file doesn't duplicate that instruction — it only covers where the domain glossary and ADRs live for skills that don't already read `CLAUDE.md`.
 

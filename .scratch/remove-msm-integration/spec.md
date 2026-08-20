@@ -1,8 +1,7 @@
 # Remove msm/controller integration from farc
 
-Status: open — grilled 2026-08-19, not yet implemented (next step:
-implement each issue, likely via a separate `/tdd` pass like the
-dependency-upgrade effort)
+Status: resolved — grilled 2026-08-19, implemented 2026-08-20 (see each
+issue's Comments; PLAN.md's Phase 27 has the full changelog account)
 
 Reached via `/grilling` on 2026-08-19. The msm/controller integration
 (currently the `msm_server` binary and its supporting packages) is moving
