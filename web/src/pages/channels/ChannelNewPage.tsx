@@ -113,13 +113,23 @@ export default function ChannelNewPage() {
             <div>
               <label className="form-label">
                 rtsp_url
-                <input
-                  className="form-control"
-                  value={rtspURL}
-                  onChange={(e) => setRtspURL(e.target.value)}
-                  placeholder="rtsp://camera1/stream"
-                  required
-                />
+                <div className="input-group">
+                  <input
+                    className="form-control"
+                    value={rtspURL}
+                    onChange={(e) => setRtspURL(e.target.value)}
+                    placeholder="rtsp://camera1/stream"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    data-testid="rtsp-url-generate-btn"
+                    onClick={() => setRtspURL('rtsp://mediamtx:8554/test')}
+                  >
+                    Generate
+                  </button>
+                </div>
               </label>
             </div>
             <div>

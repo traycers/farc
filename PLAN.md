@@ -267,7 +267,7 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 | `web/nginx.conf` | `/api/farcd/` → farcd, `/api/hls/` → hls_server, `/segments/` → hls_server, `/api/events/` → farcd WS, SPA fallback to `index.html` |
 | `web/Dockerfile` | multi-stage: `node:26` build → `nginx:alpine` serve |
 | `Dockerfile.farc`, `Dockerfile.hls_server` | multi-stage: `golang:1.26-bookworm` build (`CGO_ENABLED=0`) → `debian:12-slim` runtime |
-| `docker-compose.yaml` | services `farc`, `hls_server`, `web`, optional `seaweedfs` (`profiles: [s3]`); only `web` publishes a host port |
+| `docker-compose.yaml` | services `farc`, `hls_server`, `web`, `mediamtx`+`ffmpeg-test` (local RTSP test source for the channel-add page's "Generate" button, `mediamtx.dev.yml`), optional `seaweedfs` (`profiles: [s3]`); `web`, `mediamtx` publish host ports |
 | `deploy/docker-compose.release.yaml` | Phase 21: same topology as above, `build:` replaced with `image: <service>:__VERSION__`, rendered by `release.yml` |
 
 ## Gap resolutions

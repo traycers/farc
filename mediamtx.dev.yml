@@ -1,0 +1,10 @@
+# Local dev RTSP test source (docker-compose.yaml's mediamtx/ffmpeg-test
+# services) -- lets the "Generate" button on the channel-add page fill in a
+# real, always-available RTSP URL instead of a placeholder. mediamtx itself
+# just accepts the publish + serves it back out; ffmpeg-test (in
+# docker-compose.yaml) does the actual "loop e2e/media/sample.mp4" job, same
+# split as e2e/mediamtx.yml.
+rtspAddress: :8554
+
+paths:
+  test:

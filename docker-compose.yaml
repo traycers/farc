@@ -1,4 +1,29 @@
 services:
+  # Local dev RTSP test source: mediamtx + a looping ffmpeg push of
+  # e2e/media/sample.mp4, so the "Generate" button on the channel-add page
+  # (web/src/pages/channels/ChannelNewPage.tsx) has a real, always-available
+  # stream to point at. Same split as e2e/docker-compose.e2e.yaml's
+  # mediamtx/ffmpeg-ch1 pair, just with a single "test" path.
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    volumes:
+      - ./mediamtx.dev.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+    restart: unless-stopped
+
+  ffmpeg-test:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    entrypoint: []
+    command: >
+      ffmpeg -re -stream_loop -1 -i /media/sample.mp4
+      -c copy -f rtsp rtsp://mediamtx:8554/test
+    volumes:
+      - ./e2e/media:/media:ro
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+
   farc:
     build:
       context: .
