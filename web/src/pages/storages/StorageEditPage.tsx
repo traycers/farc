@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { listStorages, patchStorage, type StorageInfo } from '../../api/farcd'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { deleteStorage, listStorages, patchStorage, type StorageInfo } from '../../api/farcd'
 
 const WRITE_MODES = ['cyclic', 'fill_until_full'] as const
 const GiB = 1024 ** 3
@@ -25,6 +25,7 @@ function formatBytes(bytes: number): string {
 
 export default function StorageEditPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [storage, setStorage] = useState<StorageInfo | null | undefined>(undefined) // undefined = loading
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
@@ -78,6 +79,20 @@ export default function StorageEditPage() {
     try {
       await patchStorage(id!, { write_mode: mode })
       setStatus(`write mode set to ${mode}`)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  async function onDetach() {
+    if (!window.confirm(`Detach storage "${id}"? This permanently destroys its data on disk.`)) {
+      return
+    }
+    setError(null)
+    setStatus(null)
+    try {
+      await deleteStorage(id!)
+      navigate('/storages')
     } catch (e) {
       setError(String(e))
     }
@@ -175,6 +190,19 @@ export default function StorageEditPage() {
                   </label>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div className="card border-danger mt-3">
+            <div className="card-body">
+              <h2 className="card-title h5">Danger zone</h2>
+              <p className="card-text text-body-secondary">
+                Detaching permanently destroys this storage's data on disk. Every attached channel must be removed
+                first.
+              </p>
+              <button type="button" className="btn btn-outline-danger" onClick={onDetach}>
+                Detach
+              </button>
             </div>
           </div>
         </>

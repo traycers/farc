@@ -1,6 +1,6 @@
 # 01 — Add a detach button to the Storages page
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -56,3 +56,22 @@ type checking and unit tests verify correctness of code, not of the
 feature).
 
 ## Comments
+
+2026-08-20: Implemented test-first, following spec.md's recommended
+option (a) and placement. `deleteStorage(id)` added to `farcd.ts`
+(`farcd.test.ts`, new file, matching `hls.test.ts`'s `vi.stubGlobal
+('fetch', ...)` pattern) — DELETE with no JSON body parsed on the 204
+response. "Detach" button added to `StorageEditPage.tsx` in a new
+`card border-danger` "Danger zone" section below the existing mutable-
+settings card: `window.confirm` naming the storage id → on confirm,
+`deleteStorage` then `navigate('/storages')`; on failure (including the
+409 still-attached-channel case) the existing `error`/`alert-danger`
+state, no special-casing, matching this page's own save-handlers.
+`StorageEditPage.test.tsx` (new file, `MemoryRouter`+`Routes`, following
+`FblocksGridPage.test.tsx`'s pattern) covers decline-confirm (no call),
+confirm-then-navigate, and confirm-then-409-shows-error-no-navigate.
+One vitest gotcha hit and fixed: referencing plain top-level `const`
+mocks directly as `vi.mock` factory values (rather than via a deferred
+arrow wrapper) breaks under `vi.mock`'s hoisting once run alongside
+other test files — fixed with `vi.hoisted()`. `npx tsc -b`, `npx vitest
+run` (115 passed), `npx vite build` all clean.

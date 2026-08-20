@@ -205,3 +205,7 @@ export async function updateChannel(
 export async function removeChannel(id: number): Promise<void> {
   await ok(await fetch(`${BASE}/channels/${id}`, { method: 'DELETE' }))
 }
+
+export async function deleteStorage(id: string): Promise<void> {
+  await ok(await fetch(`${BASE}/storages/${encodeURIComponent(id)}`, { method: 'DELETE' }))
+}

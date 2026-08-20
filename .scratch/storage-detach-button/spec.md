@@ -1,8 +1,8 @@
 # Detach button on the Storages page
 
-Status: open — grilled 2026-08-19 (surfaced incidentally during the
-`remove-msm-integration` grilling session, unrelated to it), not yet
-implemented
+Status: resolved — grilled 2026-08-19 (surfaced incidentally during the
+`remove-msm-integration` grilling session, unrelated to it), implemented
+test-first 2026-08-20 (see `issues/01`'s Comments)
 
 The web admin console's Storages page (`web/src/pages/storages/`) has no
 way to remove a storage, even though farcd already exposes `DELETE
