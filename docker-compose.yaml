@@ -124,7 +124,7 @@ services:
     build:
       context: ./web
     ports:
-      - "80:80"
+      - "18881:80"
     depends_on:
       - farc
       - hls_server
