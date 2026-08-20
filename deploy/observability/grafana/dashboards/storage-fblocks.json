@@ -40,21 +40,43 @@
       "type": "xychart",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "pluginVersion": "11.3.1",
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "fblock" }, "properties": [{ "id": "unit", "value": "short" }] }
+        ]
+      },
       "targets": [
         { "expr": "topk(50, farc_fblock_catalog_size_bytes)", "legendFormat": "catalog {{storage}} {{fblock}}", "refId": "A", "instant": true, "format": "table" },
         { "expr": "topk(50, farc_fblock_toc_size_bytes)", "legendFormat": "toc {{storage}} {{fblock}}", "refId": "B", "instant": true, "format": "table" },
         { "expr": "topk(50, farc_fblock_content_size_bytes)", "legendFormat": "content {{storage}} {{fblock}}", "refId": "C", "instant": true, "format": "table" }
       ],
       "transformations": [
-        { "id": "joinByField", "options": { "byField": "fblock", "mode": "outer" } }
+        { "id": "labelsToFields", "options": {} },
+        { "id": "convertFieldType", "options": { "conversions": [{ "targetField": "fblock", "destinationType": "number" }] } }
       ],
       "options": {
-        "seriesMapping": "manual",
+        "mapping": "manual",
         "series": [
-          { "x": { "matcher": { "id": "byName", "options": "fblock" } }, "y": { "matcher": { "id": "byName", "options": "Value #A" } } },
-          { "x": { "matcher": { "id": "byName", "options": "fblock" } }, "y": { "matcher": { "id": "byName", "options": "Value #B" } } },
-          { "x": { "matcher": { "id": "byName", "options": "fblock" } }, "y": { "matcher": { "id": "byName", "options": "Value #C" } } }
+          {
+            "frame": { "matcher": { "id": "byIndex", "options": 0 } },
+            "x": { "matcher": { "id": "byName", "options": "fblock" } },
+            "y": { "matcher": { "id": "byName", "options": "Value #A" } },
+            "name": { "fixed": "catalog" }
+          },
+          {
+            "frame": { "matcher": { "id": "byIndex", "options": 1 } },
+            "x": { "matcher": { "id": "byName", "options": "fblock" } },
+            "y": { "matcher": { "id": "byName", "options": "Value #B" } },
+            "name": { "fixed": "toc" }
+          },
+          {
+            "frame": { "matcher": { "id": "byIndex", "options": 2 } },
+            "x": { "matcher": { "id": "byName", "options": "fblock" } },
+            "y": { "matcher": { "id": "byName", "options": "Value #C" } },
+            "name": { "fixed": "content" }
+          }
         ]
       }
     },

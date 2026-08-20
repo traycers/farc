@@ -91,10 +91,7 @@ new per-fblock emission loop in `collectUnitMetrics` (one gauge triplet per
 completed fblock, not per storage); test asserts exactly one series per
 completion, matching label counts (`prometheus/client_golang` sorts labels
 alphabetically -- `fblock` before `storage` -- which the test asserts
-against). Added the `"xychart"` panel with `topk(50, ...)` targets + a
-`joinByField` transform on `fblock` (authored from scratch, no automated
-test per this repo's convention for dashboard JSON -- verify by manual
-inspection in Grafana).
+against). Added the `"xychart"` panel with `topk(50, ...)` targets.
 
 Post-implementation review caught that the original append-only
 `[]FblockSizeRecord` design breaks on a cyclic storage's normal steady
@@ -111,3 +108,38 @@ Appends`, `_ReturnsRecordsSortedByIndex`, and an end-to-end
 confirms `/metrics` still returns 200).
 
 Tests green, full suite + `golangci-lint run` clean.
+
+2026-08-20 (follow-up): user reported the panel showed "Err" in Grafana.
+Root-caused against the actual running dev stack (Grafana 11.3.1, via
+`docker exec`/Playwright against `farc-grafana-1`, since host curl to
+`localhost:3000` is proxy-blocked in this sandbox but `docker exec`/
+`docker run --network container:...` isn't) rather than guessing further:
+
+- Grafana's `autoMigrateXYChartPanel` feature toggle is **on by default**
+  in 11.3.1 and silently rewrites any XY Chart panel with no/old
+  `pluginVersion` into a structurally different v2 options schema at
+  render time (confirmed by reading the actual panel plugin source
+  shipped in the container, `/usr/share/grafana/public/app/plugins/panel/
+  xychart/v2/`). The original `joinByField` transform was targeting
+  `fblock` before it existed as a real field at all -- Prometheus labels
+  arrive as field *metadata*, not columns, until something promotes them.
+- Fix, verified by iterating live against the running Grafana with
+  Playwright screenshots + the panel's own "Inspect > Data" view after
+  each change (not by inspection alone): swapped `joinByField` for
+  `labelsToFields` (promotes `fblock`/`storage` labels into real columns,
+  one merged frame per query/refId) + `convertFieldType` (Prometheus
+  label values are strings; the v2 XY Chart's manual mode only considers
+  *numeric* fields as x/y candidates, so a string `fblock` field is
+  silently invisible to it). Rewrote `options` directly in the v2 schema
+  (`mapping`/`series[].{frame,x,y}.matcher` + `series[].name.fixed` for
+  proper "catalog"/"toc"/"content" legend labels) with an explicit
+  `"pluginVersion": "11.3.1"` on the panel, bypassing the fragile
+  auto-migration path entirely rather than fighting it. Added a field
+  override so the `fblock` axis shows a plain index (`unit: "short"`)
+  instead of inheriting the panel's `bytes` unit.
+- Confirmed working: no "Err", correct catalog/toc/content legend, fblock
+  index on X. Content size (tens of MB) dwarfs catalog/toc (a few KB) on
+  the shared linear byte axis in this particular test environment, per
+  spec decision 9's own caveat about divergence being the useful signal --
+  a log-scale Y axis is a possible follow-up if that turns out to matter
+  in practice, not applied here since it wasn't asked for.
