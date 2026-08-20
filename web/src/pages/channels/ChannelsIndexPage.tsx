@@ -10,6 +10,7 @@ import {
   type ChannelInfo,
   type StorageInfo,
 } from '../../api/farcd'
+import { subscribeJournal } from '../../api/events'
 
 export default function ChannelsIndexPage() {
   const [storages, setStorages] = useState<StorageInfo[]>([])
@@ -17,6 +18,7 @@ export default function ChannelsIndexPage() {
   const [channels, setChannels] = useState<ChannelInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
+  const [connectFailedBanner, setConnectFailedBanner] = useState<string | null>(null)
 
   const refresh = () => {
     listStorages()
@@ -32,6 +34,31 @@ export default function ChannelsIndexPage() {
 
   useEffect(() => {
     refresh()
+  }, [])
+
+  // Live status updates (.scratch/web-ui-fixes/issues/03, 04): the initial
+  // recording/last_connect_error values above come from GET /channels, this
+  // keeps them current without a refetch for as long as the page stays
+  // open. subscribeJournal's own no-catch-up policy means a gap while
+  // disconnected is simply lost -- refresh() above (on mount) is this
+  // page's only resync point, matching every other page's convention.
+  useEffect(() => {
+    return subscribeJournal((e) => {
+      if (e.channel === undefined) return
+      if (e.name === 'channel.recording.started' || e.name === 'channel.recording.stopped') {
+        const recording = e.name === 'channel.recording.started'
+        setChannels((prev) => prev.map((c) => (c.channel === e.channel ? { ...c, recording } : c)))
+        return
+      }
+      if (e.name === 'channel.rtsp.connect_failed') {
+        setConnectFailedBanner(`Channel ${e.channel}: ${e.reason ?? ''}`)
+        setChannels((prev) => prev.map((c) => (c.channel === e.channel ? { ...c, last_connect_error: e.reason } : c)))
+        return
+      }
+      if (e.name === 'channel.rtsp.connected') {
+        setChannels((prev) => prev.map((c) => (c.channel === e.channel ? { ...c, last_connect_error: undefined } : c)))
+      }
+    })
   }, [])
 
   async function onRemove(channel: number) {
@@ -90,6 +117,7 @@ export default function ChannelsIndexPage() {
         </Link>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
+      {connectFailedBanner && <div className="alert alert-danger">{connectFailedBanner}</div>}
       {status && <div className="alert alert-success">{status}</div>}
 
       <label className="d-block mb-3" style={{ maxWidth: '24rem' }}>
@@ -109,6 +137,7 @@ export default function ChannelsIndexPage() {
             <tr>
               <th>id</th>
               <th>name</th>
+              <th>status</th>
               <th>policy</th>
               <th>prerecord</th>
               <th>postrecord</th>
@@ -120,6 +149,18 @@ export default function ChannelsIndexPage() {
               <tr key={c.channel}>
                 <td>{c.channel}</td>
                 <td>{c.name}</td>
+                <td>
+                  <span
+                    data-testid={`channel-recording-dot-${c.channel}`}
+                    className={`status-dot ${c.recording ? 'status-dot-recording' : 'status-dot-idle'}`}
+                    title={c.recording ? 'recording' : 'not recording'}
+                  />
+                  {c.last_connect_error && (
+                    <div className="text-danger small" data-testid={`channel-connect-error-${c.channel}`}>
+                      {c.last_connect_error}
+                    </div>
+                  )}
+                </td>
                 <td>{c.capture_policy_type}</td>
                 <td>{c.prerecord_ns / 1e9}s</td>
                 <td>{c.postrecord_ns / 1e9}s</td>
@@ -159,7 +200,7 @@ export default function ChannelsIndexPage() {
             ))}
             {shown.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-body-secondary">
+                <td colSpan={7} className="text-body-secondary">
                   no channels on this storage
                 </td>
               </tr>

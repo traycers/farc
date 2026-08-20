@@ -153,6 +153,13 @@ export type ChannelInfo = {
   prerecord_ns: number
   postrecord_ns: number
   name?: string
+  // recording mirrors internal/api/channels.go's channelInfo.Recording --
+  // whether this channel's CapturePolicy is recording right now.
+  recording?: boolean
+  // last_connect_error mirrors channelInfo.LastConnectError -- the most
+  // recent failed RTSP connection attempt's reason, while this channel has
+  // never yet connected. Empty/absent once connected.
+  last_connect_error?: string
 }
 
 // storage, when given, is the farcd ?storage= filter (internal/api/channels.go)

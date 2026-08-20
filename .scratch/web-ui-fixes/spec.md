@@ -1,6 +1,6 @@
 # Web UI fixes — player search, journal connect errors, channel recording status
 
-Status: open — grilled 2026-08-20
+Status: resolved — grilled 2026-08-20, implemented test-first 2026-08-20 (see each issue's Comments)
 
 Three unrelated small UI/backend bugs reported together in one batch and
 filed under one directory for tracking convenience only — there's no shared

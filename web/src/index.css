@@ -140,6 +140,26 @@ video {
   background-color: #adb5bd;
 }
 
+/* Channels page (.scratch/web-ui-fixes/issues/04): a small circular
+   recording-status indicator per channel row -- red while
+   CapturePolicy.Recording() is true, gray otherwise. Deliberately just
+   these two states -- connect-failure status is a separate indicator
+   (issues/03), not a third dot color. */
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.status-dot-recording {
+  background-color: #dc3545;
+}
+
+.status-dot-idle {
+  background-color: #6c757d;
+}
+
 /* Player page (.scratch/player-redesign/): a 3x3+ video grid needs more
    width than main's default 960px cap, so scope the override to this page
    only rather than widening every page. */

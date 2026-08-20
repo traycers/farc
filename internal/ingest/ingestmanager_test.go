@@ -134,6 +134,64 @@ func TestIngestManager_List_ReflectsLiveSetPolicyNotStaleConfig(t *testing.T) {
 	}
 }
 
+func TestIngestManager_List_ReflectsRecordingState(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+
+	list := m.List()
+	if len(list) != 1 || list[0].Recording {
+		t.Fatalf("List before StartRecording = %+v, want Recording=false", list)
+	}
+
+	if err := m.StartRecording(1, 0, nil); err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+	list = m.List()
+	if len(list) != 1 || !list[0].Recording {
+		t.Fatalf("List after StartRecording = %+v, want Recording=true", list)
+	}
+
+	if err := m.StopRecording(1, 1); err != nil {
+		t.Fatalf("StopRecording: %v", err)
+	}
+	list = m.List()
+	if len(list) != 1 || list[0].Recording {
+		t.Fatalf("List after StopRecording = %+v, want Recording=false", list)
+	}
+}
+
+// TestIngestManager_List_ReflectsLastConnectError relies on
+// unreachableRTSPURL's real (fast) connection-refused failure -- same
+// convention as this file's other real-network tests -- to exercise
+// ChannelIngest.LastConnectError end to end through IngestManager.List().
+func TestIngestManager_List_ReflectsLastConnectError(t *testing.T) {
+	m := NewIngestManager()
+	defer m.Stop()
+
+	err := m.AddChannel(testChannelConfig(1, "disk0"))
+	if err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		list := m.List()
+		if len(list) == 1 && list[0].LastConnectError != "" {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("List()[0].LastConnectError never became non-empty for an unreachable rtsp_url")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func TestIngestManager_StartRecording_UnknownErrors(t *testing.T) {
 	m := NewIngestManager()
 	defer m.Stop()

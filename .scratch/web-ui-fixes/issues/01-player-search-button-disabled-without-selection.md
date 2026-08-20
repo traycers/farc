@@ -1,6 +1,6 @@
 # 01 — Player search button stays enabled with no channel selected
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -33,3 +33,7 @@ server: load the Player page with no channel selected (button disabled),
 check one, button enables, uncheck it again, button disables again.
 
 ## Comments
+
+2026-08-20: Implemented test-first — `disabled={checked.size === 0}` on the
+Search button (`PlayerPage.tsx:121-123`), covered by a new test in
+`PlayerPage.test.tsx`.

@@ -132,6 +132,31 @@ describe('PlayerPage', () => {
     expect(tile.dataset.segmentUrl).toBe('/api/hls/channels/1/hls/300000000/400000000/playlist.m3u8')
   })
 
+  it('Search button is disabled until at least one channel is checked', async () => {
+    render(<PlayerPage />)
+
+    await screen.findByLabelText('channel 1')
+    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled()
+
+    fireEvent.click(screen.getByLabelText('channel 1'))
+    expect(screen.getByRole('button', { name: 'Search' })).not.toBeDisabled()
+
+    fireEvent.click(screen.getByLabelText('channel 1'))
+    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled()
+  })
+
+  it('search with zero matching segments shows a message and leaves the playhead unset', async () => {
+    timelineFixture = [{ channel: 1, segments: [] }]
+    render(<PlayerPage />)
+
+    await screen.findByLabelText('channel 1')
+    fireEvent.click(screen.getByLabelText('channel 1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    await screen.findByText('No records found in the selected range')
+    expect(screen.queryByTestId('player-current-time')).not.toBeInTheDocument()
+  })
+
   it('search clips the playhead/range to the actual recordings, not the raw search window', async () => {
     // Search window is [0, 600s], but the only real recording is a narrow
     // slice starting at 5.3s -- rangeStart/playheadNs must land on the

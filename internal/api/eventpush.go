@@ -167,19 +167,27 @@ func buildPoolPushMessage(storageID string, unit *storage.Unit) (poolPushMessage
 // session ends with a real error and Run is about to retry. Deliberately
 // not fired on a deliberate channel stop/removal (ctx cancellation), only
 // on genuine connectivity loss/recovery.
+//
+// EventChannelRTSPConnectFailed fires once (not once per retry) when a
+// channel has never yet connected at all and its first attempt fails --
+// distinct from EventChannelRTSPDisconnected, which specifically means
+// "lost/regained a previously-working connection" (ChannelIngest.
+// reportConnectFailed's own doc). Severity/Reason are always set for this
+// event, unlike most other channel.* events.
 const (
-	EventChannelCreated          = "channel.created"
-	EventChannelRemoved          = "channel.removed"
-	EventFblockCreated           = "fblock.created"
-	EventFblockReady             = "fblock.ready"
-	EventFblockDeleted           = "fblock.deleted"
-	EventRecordingStarted        = "channel.recording.started"
-	EventRecordingStopped        = "channel.recording.stopped"
-	EventRecordingCommandStart   = "channel.recording.command.start"
-	EventRecordingCommandStop    = "channel.recording.command.stop"
-	EventTriggerFired            = "channel.trigger.fired"
-	EventChannelRTSPConnected    = "channel.rtsp.connected"
-	EventChannelRTSPDisconnected = "channel.rtsp.disconnected"
+	EventChannelCreated           = "channel.created"
+	EventChannelRemoved           = "channel.removed"
+	EventFblockCreated            = "fblock.created"
+	EventFblockReady              = "fblock.ready"
+	EventFblockDeleted            = "fblock.deleted"
+	EventRecordingStarted         = "channel.recording.started"
+	EventRecordingStopped         = "channel.recording.stopped"
+	EventRecordingCommandStart    = "channel.recording.command.start"
+	EventRecordingCommandStop     = "channel.recording.command.stop"
+	EventTriggerFired             = "channel.trigger.fired"
+	EventChannelRTSPConnected     = "channel.rtsp.connected"
+	EventChannelRTSPDisconnected  = "channel.rtsp.disconnected"
+	EventChannelRTSPConnectFailed = "channel.rtsp.connect_failed"
 )
 
 // JournalEvent is one journal-worthy event, delivered to every "global"

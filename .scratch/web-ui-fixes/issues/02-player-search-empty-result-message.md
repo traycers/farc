@@ -1,6 +1,6 @@
 # 02 — Player search shows nothing when zero fragments match
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -39,3 +39,10 @@ the message appears and the playback area doesn't silently show an
 empty/broken state.
 
 ## Comments
+
+2026-08-20: Implemented test-first — new `hasAnySegments` pure helper in
+`playerTimeline.ts` (`playerTimeline.test.ts`), wired into `onSearch`
+(`PlayerPage.tsx`) to show "No records found in the selected range" and
+leave the playhead/timelines unset instead of falling back to the raw
+search window. Playhead deliberately does not move in this case (decided
+during implementation, per the issue's own recommendation).

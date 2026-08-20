@@ -165,6 +165,15 @@ func New(cfg *config.Config, configPath string) (*Farcd, error) {
 		f.push.Publish(api.JournalEvent{Name: name, Channel: channel, Storage: storageID})
 	})
 
+	f.ing.SetOnConnectFailed(func(channel uint16, err error) {
+		// StorageOf, not List: same reasoning as SetOnRecordingChange above.
+		storageID, _ := f.ing.StorageOf(channel)
+		f.push.Publish(api.JournalEvent{
+			Name: api.EventChannelRTSPConnectFailed, Channel: channel, Storage: storageID,
+			Severity: "error", Reason: err.Error(),
+		})
+	})
+
 	// push IS passed into NewHttpApiServer (unlike WS's own listener on
 	// cfg.WS below, matching §2.1's "разные серверы" for actually *serving*
 	// /events/ws) so channels.go's command handlers (trigger/start/stop

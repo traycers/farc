@@ -66,6 +66,17 @@ type ChannelInfo struct {
 	// GET /channels caller see current connectivity, not just the
 	// channel.rtsp.connected/disconnected WS events for past transitions.
 	Connected bool
+	// Recording is whether this channel's CapturePolicy is currently
+	// recording (CapturePolicy.Recording()) -- lets a GET /channels caller
+	// show live capture status without listening on the
+	// channel.recording.started/stopped WS events.
+	Recording bool
+	// LastConnectError is ChannelIngest.LastConnectError() -- the most
+	// recent failed attempt's reason while this channel has never yet
+	// connected, empty otherwise. Lets a GET /channels caller see a
+	// persistent connect-failure status without having been listening on
+	// channel.rtsp.connect_failed at the moment it happened.
+	LastConnectError string
 }
 
 // IngestManager creates and owns one ChannelIngest per configured channel
@@ -86,6 +97,7 @@ type IngestManager struct {
 	logf               func(format string, args ...any)
 	onRecordingChange  func(channel uint16, recording bool, t uint64)
 	onConnectionChange func(channel uint16, connected bool)
+	onConnectFailed    func(channel uint16, err error)
 }
 
 // NewIngestManager creates an empty IngestManager.
@@ -96,6 +108,7 @@ func NewIngestManager() *IngestManager {
 		logf:               func(string, ...any) {},
 		onRecordingChange:  func(uint16, bool, uint64) {},
 		onConnectionChange: func(uint16, bool) {},
+		onConnectFailed:    func(uint16, error) {},
 	}
 }
 
@@ -150,6 +163,20 @@ func (m *IngestManager) SetOnConnectionChange(fn func(channel uint16, connected 
 	m.onConnectionChange = fn
 }
 
+// SetOnConnectFailed installs a hook applied to every channel's
+// ChannelIngest from then on (existing channels are unaffected -- call this
+// before Start/AddChannel, as internal/farcd does). See
+// ChannelIngest.SetOnConnectFailed for when it fires. A nil fn resets to a
+// no-op.
+func (m *IngestManager) SetOnConnectFailed(fn func(channel uint16, err error)) {
+	if fn == nil {
+		fn = func(uint16, error) {}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onConnectFailed = fn
+}
+
 // Start creates and runs a ChannelIngest for each cfg in the background.
 // At farcd startup, IngestManager creates each ChannelIngest with the
 // CapturePolicy from its channel's configuration (§7); this is the entry
@@ -170,6 +197,7 @@ func (m *IngestManager) startLocked(cfg ChannelConfig) {
 	ci.SetLogger(m.logf)
 	ci.SetBackpressureSignal(cfg.BackpressureSignal)
 	ci.SetOnConnectionChange(m.onConnectionChange)
+	ci.SetOnConnectFailed(m.onConnectFailed)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -194,13 +222,15 @@ func (m *IngestManager) List() []ChannelInfo {
 	for _, e := range m.channels {
 		policyType, params := e.ingest.policy.Policy()
 		out = append(out, ChannelInfo{
-			Channel:      e.cfg.Channel,
-			RTSPURL:      e.cfg.RTSPURL,
-			StorageID:    e.cfg.StorageID,
-			PolicyType:   policyType,
-			PolicyParams: params,
-			Name:         e.cfg.Name,
-			Connected:    e.ingest.Connected(),
+			Channel:          e.cfg.Channel,
+			RTSPURL:          e.cfg.RTSPURL,
+			StorageID:        e.cfg.StorageID,
+			PolicyType:       policyType,
+			PolicyParams:     params,
+			Name:             e.cfg.Name,
+			Connected:        e.ingest.Connected(),
+			Recording:        e.ingest.policy.Recording(),
+			LastConnectError: e.ingest.LastConnectError(),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Channel < out[j].Channel })

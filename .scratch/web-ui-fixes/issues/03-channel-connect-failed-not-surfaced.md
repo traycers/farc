@@ -1,6 +1,6 @@
 # 03 — Channel connect failures never surface (Журнал + Channels page)
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -74,3 +74,32 @@ previously-working channel whose stream drops still shows the pre-existing
 disconnect behavior unchanged.
 
 ## Comments
+
+2026-08-20: Implemented test-first. Backend: `ChannelIngest` gained
+`everConnected`/`lastConnectError`/`connectFailedReported` plus
+`SetOnConnectFailed`/`LastConnectError()` (`channelingest.go`), firing once
+per never-connected streak from `runReconnecting` — covered by two new
+`reconnect_test.go` cases (fires-once-before-first-success,
+not-fired-once-ever-connected). New event constant
+`EventChannelRTSPConnectFailed = "channel.rtsp.connect_failed"`
+(`eventpush.go`), `LastConnectError` threaded through
+`ingest.ChannelInfo`/`IngestManager.List()` and
+`api.channelInfo`/`handleListChannels` (`last_connect_error` JSON field),
+each covered by a real-unreachable-URL test in `ingestmanager_test.go`/
+`channels_test.go`. `farcd.go` wires `SetOnConnectFailed` to
+`push.Publish(..., Severity: "error", Reason: err.Error())`, same
+(untested-at-that-layer) convention as the pre-existing
+`SetOnConnectionChange` wiring.
+
+Found and fixed a regression this surfaced:
+`TestRun_UpdateChannelOverHTTP_StorageUnchanged_PublishesNoGlobalEvent`
+assumed zero channel events of any kind after a same-storage update: since
+`handleUpdateChannel` always restarts the channel's `ChannelIngest`
+under the hood, a legitimate `channel.rtsp.connect_failed` now fires for the
+freshly-restarted (still-unreachable) ingest. Narrowed that test's assertion
+to its actual concern — no `channel.removed`/`channel.created` churn — since
+that's what the test's own doc comment says it's guarding, not "zero events
+ever."
+
+Frontend: banner + persistent per-row error text — see `issues/04`'s
+comment, implemented together with its WS subscription.

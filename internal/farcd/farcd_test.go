@@ -355,10 +355,23 @@ func TestRun_UpdateChannelOverHTTP_StorageUnchanged_PublishesNoGlobalEvent(t *te
 		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, respBody)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	var msg channelEventMsg
-	if err := conn.ReadJSON(&msg); err == nil {
-		t.Fatalf("unexpectedly received a channel event for a same-storage update: %+v", msg)
+	// ReplaceChannel always restarts the channel's ChannelIngest under the
+	// hood (handleUpdateChannel's own doc comment), so a legitimate
+	// channel.rtsp.connect_failed/connected/disconnected can still arrive
+	// here for the freshly-restarted ingest -- this test's actual concern
+	// (per its own doc comment) is specifically that a same-storage update
+	// must not churn hls_server's index via channel.removed/channel.created,
+	// not that zero events of any kind occur.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for {
+		conn.SetReadDeadline(deadline)
+		var msg channelEventMsg
+		if err := conn.ReadJSON(&msg); err != nil {
+			return // deadline hit, nothing churned -- test passes
+		}
+		if msg.Name == "channel.removed" || msg.Name == "channel.created" {
+			t.Fatalf("unexpectedly received a channel-lifecycle event for a same-storage update: %+v", msg)
+		}
 	}
 }
 

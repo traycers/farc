@@ -61,6 +61,13 @@ export function computeDataRange(timelines: ChannelTimeline[], fallbackStart: bi
   return { start: floorToSecond(minBegin), end: ceilToSecond(maxEnd) }
 }
 
+// hasAnySegments is whether a search actually matched any recorded data --
+// PlayerPage's signal to show a "no records" message instead of silently
+// falling back to the raw search window (computeDataRange's own fallback).
+export function hasAnySegments(timelines: ChannelTimeline[]): boolean {
+  return timelines.some((ct) => ct.segments.length > 0)
+}
+
 export type PlayheadStep = { kind: 'continue' } | { kind: 'skip'; to: bigint } | { kind: 'end' }
 
 // advance is the single function the playback tick calls each interval:

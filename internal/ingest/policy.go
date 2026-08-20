@@ -474,6 +474,16 @@ func (p *CapturePolicy) Policy() (PolicyType, PolicyParams) {
 	return p.policyType, p.params
 }
 
+// Recording reports whether this channel is currently recording -- a cheap
+// read-only accessor for GET /channels' status (mirrors ChannelIngest.
+// Connected()), unlike LiveSnapshot which also builds this channel's
+// Elements subtree, unnecessary work for just a status flag.
+func (p *CapturePolicy) Recording() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.recording
+}
+
 // Close forces the current segment closed, if any, regardless of policy
 // type — used when ChannelIngest itself is shutting down.
 func (p *CapturePolicy) Close(now uint64) error {

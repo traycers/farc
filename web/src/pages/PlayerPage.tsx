@@ -5,7 +5,7 @@ import VideoGrid from '../components/VideoGrid'
 import { listChannels, type ChannelInfo } from '../api/farcd'
 import { getTimeline, playlistUrl, type ChannelTimeline } from '../api/hls'
 import { nsFromLocalInputValue, nsToDisplayString, nsToLocalInputValue } from '../api/ns'
-import { advance, computeDataRange, nextSegmentStart, prevSegmentStart } from './playerTimeline'
+import { advance, computeDataRange, hasAnySegments, nextSegmentStart, prevSegmentStart } from './playerTimeline'
 
 const ONE_HOUR_NS = 3_600_000_000_000n
 const TICK_MS = 200
@@ -80,6 +80,11 @@ export default function PlayerPage() {
       const t1 = nsFromLocalInputValue(from)
       const t2 = nsFromLocalInputValue(to)
       const result = await getTimeline(Array.from(checked), t1, t2)
+      if (!hasAnySegments(result)) {
+        setTimelines(null)
+        setError('No records found in the selected range')
+        return
+      }
       setTimelines(result)
       const range = computeDataRange(result, t1, t2)
       setRangeStart(range.start)
@@ -118,7 +123,7 @@ export default function PlayerPage() {
               to
               <input type="datetime-local" className="form-control" value={to} onChange={(e) => setTo(e.target.value)} />
             </label>
-            <button type="submit" className="btn btn-primary w-100 mt-2">
+            <button type="submit" className="btn btn-primary w-100 mt-2" disabled={checked.size === 0}>
               Search
             </button>
           </form>

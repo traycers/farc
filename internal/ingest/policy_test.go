@@ -530,3 +530,26 @@ func TestReplay_MultipleConfigVersionsAddedInOrder(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestCapturePolicy_Recording_ReflectsStartStop(t *testing.T) {
+	seg, _ := newTestSegment()
+	p := NewCapturePolicy(1, seg, uint64(time.Second), PolicyContinuous, PolicyParams{})
+
+	if p.Recording() {
+		t.Fatal("Recording() = true before StartRecording, want false")
+	}
+
+	if err := p.StartRecording(0, nil); err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+	if !p.Recording() {
+		t.Fatal("Recording() = false after StartRecording, want true")
+	}
+
+	if err := p.StopRecording(1); err != nil {
+		t.Fatalf("StopRecording: %v", err)
+	}
+	if p.Recording() {
+		t.Fatal("Recording() = true after StopRecording, want false")
+	}
+}

@@ -58,6 +58,32 @@ type ChannelIngest struct {
 	// Defaults to a no-op so a ChannelIngest with no wired signal (e.g.
 	// every existing test) behaves exactly as before.
 	onConnectionChange func(channel uint16, connected bool)
+
+	// everConnected is true from the moment this channel's RTSP session
+	// first succeeds (setConnected(true)), for the ChannelIngest's whole
+	// remaining lifetime -- distinguishes "never connected even once" (the
+	// gap onConnectFailed exists for) from an ordinary later disconnect,
+	// which setConnected(false)'s own flip-only firing already handles.
+	everConnected bool
+	// connectFailedReported guards onConnectFailed to fire only once per
+	// never-connected channel, not once per retry -- a channel with a
+	// genuinely broken rtsp_url would otherwise spam onConnectFailed forever
+	// at the reconnect backoff cadence.
+	connectFailedReported bool
+	// lastConnectError is the most recent failed attempt's error text while
+	// !everConnected -- GET /channels' persistent last_connect_error field
+	// (unlike onConnectFailed, updated on every attempt, not just the
+	// first, so it always reflects the current failure). Cleared once the
+	// channel connects.
+	lastConnectError string
+	// onConnectFailed fires once, on the first failed connection attempt,
+	// for a channel that has never yet connected (setConnected(false)'s own
+	// flip-based firing is a no-op in exactly this case, which is the bug
+	// this hook exists to cover -- see .scratch/web-ui-fixes/issues/
+	// 03-channel-connect-failed-not-surfaced.md). Defaults to a no-op so a
+	// ChannelIngest with no wired signal (e.g. every existing test) behaves
+	// exactly as before.
+	onConnectFailed func(channel uint16, err error)
 }
 
 // NewChannelIngest creates a ChannelIngest for channel, writing through
@@ -70,6 +96,7 @@ func NewChannelIngest(channel uint16, policy *CapturePolicy) *ChannelIngest {
 		skipFrames:         func() bool { return false },
 		logf:               func(string, ...any) {},
 		onConnectionChange: func(uint16, bool) {},
+		onConnectFailed:    func(uint16, error) {},
 	}
 }
 
@@ -124,8 +151,32 @@ func (ci *ChannelIngest) Connected() bool {
 	return ci.connected
 }
 
+// LastConnectError is the most recent failed attempt's error text, while
+// this channel has never yet connected -- GET /channels' persistent
+// last_connect_error field. Empty once the channel has connected at least
+// once (or if it never failed to begin with).
+func (ci *ChannelIngest) LastConnectError() string {
+	ci.connMu.Lock()
+	defer ci.connMu.Unlock()
+	return ci.lastConnectError
+}
+
+// SetOnConnectFailed installs a hook fired once, on the first failed
+// connection attempt, for a channel that has never yet connected (see the
+// onConnectFailed field doc). A nil argument restores the default no-op.
+func (ci *ChannelIngest) SetOnConnectFailed(fn func(channel uint16, err error)) {
+	if fn == nil {
+		fn = func(uint16, error) {}
+	}
+	ci.onConnectFailed = fn
+}
+
 func (ci *ChannelIngest) setConnected(connected bool) {
 	ci.connMu.Lock()
+	if connected {
+		ci.everConnected = true
+		ci.lastConnectError = ""
+	}
 	if ci.connected == connected {
 		ci.connMu.Unlock()
 		return
@@ -134,6 +185,28 @@ func (ci *ChannelIngest) setConnected(connected bool) {
 	hook, channel := ci.onConnectionChange, ci.channel
 	ci.connMu.Unlock()
 	hook(channel, connected)
+}
+
+// reportConnectFailed records runErr as the latest failed-attempt reason
+// (always, so LastConnectError stays current for GET /channels) and fires
+// onConnectFailed exactly once per never-connected streak -- called from
+// runReconnecting only while !everConnected; once the channel connects at
+// least once, setConnected's own flip-based onConnectionChange covers every
+// later disconnect/reconnect instead (see the onConnectFailed field doc).
+func (ci *ChannelIngest) reportConnectFailed(runErr error) {
+	ci.connMu.Lock()
+	if ci.everConnected {
+		ci.connMu.Unlock()
+		return
+	}
+	ci.lastConnectError = runErr.Error()
+	alreadyReported := ci.connectFailedReported
+	ci.connectFailedReported = true
+	hook, channel := ci.onConnectFailed, ci.channel
+	ci.connMu.Unlock()
+	if !alreadyReported {
+		hook(channel, runErr)
+	}
 }
 
 // reconnectInitialBackoff/reconnectMaxBackoff bound Run's reconnect loop
@@ -180,6 +253,7 @@ func (ci *ChannelIngest) runReconnecting(ctx context.Context, newSource func() (
 			return nil //nolint:nilerr // deliberate shutdown (RemoveChannel/farcd stop): ctx cancellation is not a session failure, so runErr (likely just ctx.Err() wrapped) is not this call's error to report
 		}
 		ci.setConnected(false)
+		ci.reportConnectFailed(runErr)
 		levellog.New(ci.logf).Warn("ingest: channel %d: rtsp session ended, reconnecting in %s: %v", ci.channel, backoff, runErr)
 
 		select {

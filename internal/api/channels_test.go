@@ -126,6 +126,88 @@ func TestHandleListChannels_NoStorageFilterReturnsAll(t *testing.T) {
 	}
 }
 
+func TestHandleListChannels_ReflectsRecordingState(t *testing.T) {
+	im := ingest.NewIngestManager()
+	im.Start([]ingest.ChannelConfig{
+		{
+			Channel: 1, RTSPURL: "rtsp://127.0.0.1:1/nonexistent", StorageID: "a",
+			SegmentBackend: fakeSegmentBackend{}, QueueDepth: uint64(time.Second),
+			PolicyType: ingest.PolicyContinuous, ReadTimeout: time.Second, WriteTimeout: time.Second,
+		},
+	})
+	t.Cleanup(im.Stop)
+
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	get := func() []channelInfo {
+		resp, err := http.Get(srv.URL + "/channels")
+		if err != nil {
+			t.Fatalf("GET /channels: %v", err)
+		}
+		defer resp.Body.Close()
+		var list []channelInfo
+		if err := decodeBody(resp, &list); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return list
+	}
+
+	if list := get(); len(list) != 1 || list[0].Recording {
+		t.Fatalf("list before StartRecording = %+v, want Recording=false", list)
+	}
+
+	if err := im.StartRecording(1, 0, nil); err != nil {
+		t.Fatalf("StartRecording: %v", err)
+	}
+	if list := get(); len(list) != 1 || !list[0].Recording {
+		t.Fatalf("list after StartRecording = %+v, want Recording=true", list)
+	}
+}
+
+// TestHandleListChannels_ReflectsLastConnectError relies on the real (fast)
+// connection-refused failure of an unreachable rtsp_url, same convention as
+// internal/ingest's own real-network tests, to exercise
+// ChannelIngest.LastConnectError end to end through GET /channels.
+func TestHandleListChannels_ReflectsLastConnectError(t *testing.T) {
+	im := ingest.NewIngestManager()
+	im.Start([]ingest.ChannelConfig{
+		{
+			Channel: 1, RTSPURL: "rtsp://127.0.0.1:1/nonexistent", StorageID: "a",
+			SegmentBackend: fakeSegmentBackend{}, QueueDepth: uint64(time.Second),
+			PolicyType: ingest.PolicyContinuous, ReadTimeout: time.Second, WriteTimeout: time.Second,
+		},
+	})
+	t.Cleanup(im.Stop)
+
+	s := NewHttpApiServer(NewStorageRegistry(), im, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		resp, err := http.Get(srv.URL + "/channels")
+		if err != nil {
+			t.Fatalf("GET /channels: %v", err)
+		}
+		var list []channelInfo
+		err = decodeBody(resp, &list)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(list) == 1 && list[0].LastConnectError != "" {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("GET /channels' last_connect_error never became non-empty for an unreachable rtsp_url")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func TestHandleSetCapturePolicy(t *testing.T) {
 	im := newTestIngestManager(t)
 	s := NewHttpApiServer(NewStorageRegistry(), im, nil)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { advance, computeDataRange, isAliveAt, nextSegmentStart, prevSegmentStart } from './playerTimeline'
+import { advance, computeDataRange, hasAnySegments, isAliveAt, nextSegmentStart, prevSegmentStart } from './playerTimeline'
 import type { ChannelTimeline } from '../api/hls'
 
 const ch1: ChannelTimeline = { channel: 1, segments: [{ begin: 0n, end: 100n }, { begin: 200n, end: 300n }] }
@@ -48,6 +48,19 @@ describe('computeDataRange', () => {
   it('falls back to the given range when no segments exist at all', () => {
     const empty: ChannelTimeline = { channel: 1, segments: [] }
     expect(computeDataRange([empty], 111n, 222n)).toEqual({ start: 111n, end: 222n })
+  })
+})
+
+describe('hasAnySegments', () => {
+  it('true when at least one channel has at least one segment', () => {
+    expect(hasAnySegments([ch1])).toBe(true)
+  })
+  it('false when every channel has no segments', () => {
+    const empty: ChannelTimeline = { channel: 1, segments: [] }
+    expect(hasAnySegments([empty])).toBe(false)
+  })
+  it('false for an empty channel list', () => {
+    expect(hasAnySegments([])).toBe(false)
   })
 })
 

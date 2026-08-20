@@ -221,6 +221,16 @@ type channelInfo struct {
 	// which is simply true right after AddChannel -- the RTSP session
 	// hasn't dialed yet.
 	Connected bool `json:"connected"`
+	// Recording is whether this channel's CapturePolicy is currently
+	// recording (ingest.ChannelInfo.Recording) -- lets a client show live
+	// capture status without listening on channel.recording.started/stopped.
+	// Same "only populated by handleListChannels" caveat as Connected above.
+	Recording bool `json:"recording"`
+	// LastConnectError mirrors ingest.ChannelInfo.LastConnectError -- the
+	// most recent failed attempt's reason while this channel has never yet
+	// connected, empty otherwise. Same "only populated by
+	// handleListChannels" caveat as Connected above.
+	LastConnectError string `json:"last_connect_error,omitempty"`
 }
 
 // handleListChannels is GET /channels, optionally filtered to one storage
@@ -243,7 +253,8 @@ func (s *HttpApiServer) handleListChannels(w http.ResponseWriter, r *http.Reques
 		out = append(out, channelInfo{
 			Channel: c.Channel, RTSPURL: c.RTSPURL, Storage: c.StorageID,
 			PolicyType: c.PolicyType.String(), PrerecordNS: c.PolicyParams.Prerecord, PostrecordNS: c.PolicyParams.Postrecord,
-			Name: c.Name, Connected: c.Connected,
+			Name: c.Name, Connected: c.Connected, Recording: c.Recording,
+			LastConnectError: c.LastConnectError,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -1,6 +1,6 @@
 # 04 — Channel recording-status indicator (red/gray dot)
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -49,3 +49,17 @@ triggered) on a real channel, confirm the dot flips live on the Channels
 page without a reload.
 
 ## Comments
+
+2026-08-20: Implemented test-first. Backend: `CapturePolicy.Recording()`
+(cheap accessor, `policy.go`, `policy_test.go`), threaded through
+`ingest.ChannelInfo.Recording`/`IngestManager.List()`
+(`ingestmanager_test.go`) and `api.channelInfo.Recording`/
+`handleListChannels` (`channels_test.go`, `recording` JSON field).
+
+Frontend (`ChannelsIndexPage.tsx`, new `ChannelsIndexPage.test.tsx`): a
+`status` column with a red/gray `.status-dot` (new CSS in `index.css`),
+plus (landed together with `issues/03`, same WS subscription) a
+`subscribeJournal` subscription that flips the dot live on
+`channel.recording.started`/`.stopped`, shows an `alert-danger` banner and
+the row's persistent error text on `channel.rtsp.connect_failed`, and
+clears it on `channel.rtsp.connected`.
