@@ -25,20 +25,33 @@ type LiveVideoTileProps = {
 // "PlayerPage/VideoTile" precedent.
 export default function LiveVideoTile({ channel, whepUrl, muted, active, onClick }: LiveVideoTileProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // unsupported: this browser has no RTCPeerConnection at all -- a real,
+  // user-facing distinction (per-browser support), shown as its own
+  // message. Any other failure (mediamtx has no source yet, a transient
+  // network error, ...) collapses to the same "no signal" placeholder as
+  // the no-URL case -- a WHEP failure isn't actionable by the viewer and
+  // the raw error (e.g. "400 Bad Request") isn't meaningful to them
+  // either; the real error is still logged to the console for debugging
+  // (.scratch/live-page-fixes-adjacent bug found 2026-08-21).
+  const [unsupported, setUnsupported] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
-    setError(null)
+    setUnsupported(false)
+    setFailed(false)
     const video = videoRef.current
     if (!video || !whepUrl) return
     if (typeof RTCPeerConnection === 'undefined') {
-      setError('Этот браузер не поддерживает WebRTC.')
+      setUnsupported(true)
       return
     }
     const controller = new AbortController()
-    connectWhep(whepUrl, video, controller.signal).catch((e) => setError(String(e)))
+    connectWhep(whepUrl, video, controller.signal).catch((e) => {
+      console.error(`live tile ${channel}: WHEP connection failed`, e)
+      setFailed(true)
+    })
     return () => controller.abort()
-  }, [whepUrl])
+  }, [whepUrl, channel])
 
   return (
     <div
@@ -47,14 +60,14 @@ export default function LiveVideoTile({ channel, whepUrl, muted, active, onClick
       onClick={onClick}
     >
       <video ref={videoRef} muted={muted} playsInline autoPlay />
-      {!whepUrl && !error && (
+      {(!whepUrl || failed) && !unsupported && (
         <div className="live-video-tile-placeholder" data-testid="live-video-tile-placeholder">
           channel {channel}: нет сигнала
         </div>
       )}
-      {error && (
+      {unsupported && (
         <div className="live-video-tile-placeholder alert-danger" data-testid="live-video-tile-placeholder">
-          {error}
+          Этот браузер не поддерживает WebRTC.
         </div>
       )}
     </div>

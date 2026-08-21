@@ -1,6 +1,6 @@
 # Live page fixes — row layout, stale recording status, WHEP CORS/403
 
-Status: implemented (2026-08-21, via `/mattpocock-skills:tdd`) — see `issues/01`–`03`, all fixed
+Status: implemented (2026-08-21, via `/mattpocock-skills:tdd`) — see `issues/01`–`05`, all fixed. `issues/04`–`05` were found while verifying `01`–`03` against the reporting user's live deployment, not part of the original grilled batch.
 
 ## Problem
 
@@ -130,3 +130,8 @@ supporting components.
   nginx (`/api/whep/`) instead of direct browser→mediamtx, with the
   `proxy_redirect` `Location`-rewrite gotcha and the
   `APID_WEBRTC_PUBLIC_BASE` config change.
+- `issues/04-live-tile-raw-error-shown.md` — `LiveVideoTile` shows "нет
+  сигнала" on any WHEP failure instead of the raw thrown error.
+- `issues/05-stale-checked-channel-after-delete.md` — `LivePage` prunes
+  checked ids for channels that no longer exist, fixing a stale grid
+  layout after deleting a channel.

@@ -117,6 +117,19 @@ describe('LivePage', () => {
     expect(screen.queryByTestId('mock-live-tile-1')).not.toBeInTheDocument()
   })
 
+  it('prunes checked ids for channels that no longer exist (deleted elsewhere), sizing the grid to the remaining ones', async () => {
+    localStorage.setItem('farc.live-page.checked-channels', JSON.stringify([1, 2, 3]))
+    channels = [channels[0], channels[1]] // channel 3 was removed
+
+    renderPage()
+
+    await screen.findByTestId('mock-live-tile-1')
+    await screen.findByTestId('mock-live-tile-2')
+    expect(screen.queryByTestId('mock-live-tile-3')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('player-video-grid-empty-cell')).not.toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('farc.live-page.checked-channels')!)).toEqual([1, 2])
+  })
+
   it('updates the recording dot live on channel.recording.started/stopped without a refetch', async () => {
     renderPage()
     const dot = await screen.findByTestId('channel-recording-dot-2')

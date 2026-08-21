@@ -40,7 +40,18 @@ export default function LivePage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    listChannels().then(setChannels, (e) => setError(String(e)))
+    listChannels().then((list) => {
+      setChannels(list)
+      // Drop checked ids for channels that no longer exist (e.g. removed
+      // via ChannelsIndexPage) -- otherwise the grid keeps sizing/laying
+      // out for a channel that's gone, leaving a stale empty cell.
+      const validIds = new Set(list.map((c) => c.channel))
+      setChecked((prev) => {
+        const next = new Set([...prev].filter((id) => validIds.has(id)))
+        if (next.size !== prev.size) saveChecked(next)
+        return next
+      })
+    }, (e) => setError(String(e)))
   }, [])
 
   // Live status updates (.scratch/live-page-fixes/issues/02): mirrors
