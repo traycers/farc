@@ -80,7 +80,26 @@ export default function FblocksGridPage() {
         })
     }
 
-    const unsubscribe = subscribeStorageEvents(id, LIVE_WANT, onEvent, setConnected, {
+    // Re-fetch the whole catalog once the WS subscription reports connected
+    // (.scratch/fblocks-ui, live-page-fixes-adjacent bug found 2026-08-21):
+    // the server only subscribes this connection to storage id's events
+    // *after* receiving the client's subscribe message (internal/api/
+    // eventpush.go), so any transition landing in that handshake window is
+    // silently lost -- there is no reconnect/catch-up in this protocol.
+    // Closes that window in practice without a backend/protocol change.
+    function onStatus(isConnected: boolean) {
+      setConnected(isConnected)
+      if (isConnected) {
+        getCatalog(id)
+          .then((list) => setEntries(new Map(list.map((e) => [e.index, e]))))
+          .catch(() => {
+            // a transient re-fetch failure just leaves entries at their
+            // last known state until the next successful fetch/event
+          })
+      }
+    }
+
+    const unsubscribe = subscribeStorageEvents(id, LIVE_WANT, onEvent, onStatus, {
       includePool: true,
       onPool: (msg) => setPoolSlots(msg.slots),
     })

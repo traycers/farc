@@ -1,29 +1,41 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import FblocksGridPage from './FblocksGridPage'
 import type { PoolPushMessage } from '../api/pool'
+import { getCatalog } from '../api/fblockTree'
 
 let capturedOnPool: ((msg: PoolPushMessage) => void) | undefined
+let capturedOnStatus: ((connected: boolean) => void) | undefined
+let catalogResponses: { index: number; state: string }[][] = []
 
 vi.mock('../api/farcd', () => ({
   listStorages: vi.fn(async () => [{ id: 's1', path: '/x', geometry: { FblockSize: 1000, N: 4, MaxChannels: 8 } }]),
 }))
 vi.mock('../api/events', () => ({
-  subscribeStorageEvents: vi.fn((_id, _want, _onEvent, _onStatus, poolOptions) => {
+  subscribeStorageEvents: vi.fn((_id, _want, _onEvent, onStatus, poolOptions) => {
+    capturedOnStatus = onStatus
     capturedOnPool = poolOptions?.onPool
     return () => {}
   }),
 }))
 vi.mock('../api/fblockTree', () => ({
-  getCatalog: vi.fn(async () => [
-    { index: 0, state: 'ready' },
-    { index: 1, state: 'in_progress' },
-    { index: 2, state: 'bad' },
-    { index: 3, state: 'uninitialized' },
-  ]),
+  getCatalog: vi.fn(async () => catalogResponses.shift() ?? []),
   getFblockInfo: vi.fn(),
 }))
+
+beforeEach(() => {
+  vi.mocked(getCatalog).mockClear()
+  capturedOnStatus = undefined
+  catalogResponses = [
+    [
+      { index: 0, state: 'ready' },
+      { index: 1, state: 'in_progress' },
+      { index: 2, state: 'bad' },
+      { index: 3, state: 'uninitialized' },
+    ],
+  ]
+})
 
 function renderPage() {
   return render(
@@ -52,6 +64,19 @@ describe('FblocksGridPage', () => {
 
     const uninitSquare = await screen.findByTitle('#3 uninitialized')
     expect(uninitSquare.tagName).toBe('DIV')
+  })
+
+  it('re-fetches the catalog once the WS subscription is confirmed connected, closing the subscribe-handshake race', async () => {
+    catalogResponses = [[{ index: 0, state: 'in_progress' }], [{ index: 0, state: 'ready' }]]
+    renderPage()
+
+    await screen.findByTitle('#0 in_progress')
+    expect(getCatalog).toHaveBeenCalledTimes(1)
+
+    act(() => capturedOnStatus?.(true))
+
+    await screen.findByTitle('#0 ready')
+    expect(getCatalog).toHaveBeenCalledTimes(2)
   })
 
   it('renders a PoolStatusList row for each slot in a "pool" push, scaled to the selected storage\'s FblockSize', async () => {
