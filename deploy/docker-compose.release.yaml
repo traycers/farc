@@ -15,13 +15,17 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
       - "8554:8554"
-      # WebRTC/WHEP -- the web app's Live page connects here directly from
-      # the browser (.scratch/live-page/spec.md).
-      - "8889:8889"
     expose:
       # Control API (mediamtx.yml's api/apiAddress) -- apid's target,
       # deliberately not published to the host.
       - "9997"
+      # WebRTC/WHEP -- the web app's Live page reaches this through nginx's
+      # same-origin /api/whep proxy (web/nginx.conf,
+      # .scratch/live-page-fixes/issues/03-whep-proxy-through-nginx.md),
+      # not directly from the browser, so this doesn't need host
+      # publishing either -- only nginx's container needs to reach it, over
+      # this compose network.
+      - "8889"
     restart: unless-stopped
 
   apid:
@@ -34,10 +38,12 @@ services:
       APID_FARC_HTTP: "http://farc:8080"
       APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
       APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
-      # Operators MUST replace this with the actual public host/domain
-      # browsers reach mediamtx's WebRTC port through -- "localhost" only
-      # makes sense for a single-machine deployment.
-      APID_WEBRTC_PUBLIC_BASE: "http://localhost:8889"
+      # Relative path, not mediamtx's own address -- the browser reaches
+      # WHEP through nginx's same-origin proxy (web/nginx.conf's
+      # /api/whep/ block, .scratch/live-page-fixes/issues/03), not
+      # mediamtx's port directly, so this is domain-agnostic by
+      # construction and operators don't need to edit it per deployment.
+      APID_WEBRTC_PUBLIC_BASE: "/api/whep"
     volumes:
       - apid_config:/etc/apid
     depends_on:

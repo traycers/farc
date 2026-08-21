@@ -10,9 +10,13 @@ services:
       - ./mediamtx.dev.yml:/mediamtx.yml:ro
     ports:
       - "8554:8554"
-      # WebRTC/WHEP -- the web app's Live page connects here directly from
-      # the browser (.scratch/live-page/spec.md), so unlike the control
-      # API below, this one is published to the host.
+      # WebRTC/WHEP -- published to the host so a `vite dev` session run
+      # directly on the host (not the containerized web/ service, which
+      # reaches this by service name over the compose network) can proxy
+      # to it, same as farc/hlsd/apid's ports below. The browser itself no
+      # longer talks to this port directly -- it goes through nginx's/
+      # vite's same-origin /api/whep proxy instead
+      # (.scratch/live-page-fixes/issues/03-whep-proxy-through-nginx.md).
       - "8889:8889"
     expose:
       # Control API (mediamtx.dev.yml's api/apiAddress) -- apid's target.
@@ -125,10 +129,13 @@ services:
       APID_FARC_HTTP: "http://farc:8080"
       APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
       APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
-      # This is what a browser on the host actually uses -- adjust for any
-      # deployment where mediamtx's WebRTC port isn't reachable at
-      # localhost (a real domain/IP, a reverse-proxied path, ...).
-      APID_WEBRTC_PUBLIC_BASE: "http://localhost:8889"
+      # Relative path, not mediamtx's own address -- the browser reaches
+      # WHEP through nginx's same-origin proxy (web/nginx.conf's
+      # /api/whep/ block, .scratch/live-page-fixes/issues/03), not
+      # mediamtx's port directly, so this is domain-agnostic by
+      # construction (apidconfig.validate() only checks non-empty; no
+      # scheme/host is required).
+      APID_WEBRTC_PUBLIC_BASE: "/api/whep"
     volumes:
       - apid_config:/etc/apid
     depends_on:

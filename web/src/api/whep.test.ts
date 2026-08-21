@@ -72,6 +72,33 @@ describe('connectWhep', () => {
     )
   })
 
+  it('resolves the Location header against the page origin when the WHEP url itself is relative (same-origin nginx proxy)', async () => {
+    let pc: FakePeerConnection | undefined
+    vi.stubGlobal(
+      'RTCPeerConnection',
+      class extends FakePeerConnection {
+        constructor() {
+          super()
+          pc = this
+        }
+      },
+    )
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('fake-answer-sdp', { status: 200, headers: { Location: '/api/whep/1/whep/session-abc' } }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const video = document.createElement('video')
+    const controller = new AbortController()
+    await connectWhep('/api/whep/1/whep', video, controller.signal)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/whep/1/whep', expect.anything())
+
+    controller.abort()
+    await vi.waitFor(() => expect(pc?.closed).toBe(true))
+    expect(fetchMock).toHaveBeenCalledWith(`${window.location.origin}/api/whep/1/whep/session-abc`, { method: 'DELETE' })
+  })
+
   it('DELETEs the WHEP resource URL (from the Location header) and closes the connection on abort', async () => {
     let pc: FakePeerConnection | undefined
     vi.stubGlobal(

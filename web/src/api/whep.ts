@@ -35,9 +35,11 @@ export async function connectWhep(url: string, video: HTMLVideoElement, signal: 
   }
   // The WHEP resource URL to DELETE on teardown -- relative to url per the
   // spec, hence resolving it against url rather than treating it as
-  // already-absolute.
+  // already-absolute. url itself may be relative too (a same-origin nginx
+  // proxy path, e.g. /api/whep/1/whep) -- new URL()'s base argument must be
+  // an absolute URL, so resolve url against the page origin first.
   const location = res.headers.get('Location')
-  resourceUrl = location ? new URL(location, url).toString() : null
+  resourceUrl = location ? new URL(location, new URL(url, window.location.href)).toString() : null
 
   const answerSdp = await res.text()
   await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp })

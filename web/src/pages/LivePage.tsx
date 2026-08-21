@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { listChannels, type ChannelInfo } from '../api/farcd'
 import { getLiveURLs } from '../api/apid'
+import { subscribeJournal } from '../api/events'
 import ChannelStatusIndicator from '../components/ChannelStatusIndicator'
 import LiveVideoTile from '../components/LiveVideoTile'
 import VideoGrid from '../components/VideoGrid'
@@ -42,6 +43,27 @@ export default function LivePage() {
     listChannels().then(setChannels, (e) => setError(String(e)))
   }, [])
 
+  // Live status updates (.scratch/live-page-fixes/issues/02): mirrors
+  // ChannelsIndexPage.tsx's identical subscription, same scope boundary --
+  // status-field updates only, no live add/remove-channel handling.
+  useEffect(() => {
+    return subscribeJournal((e) => {
+      if (e.channel === undefined) return
+      if (e.name === 'channel.recording.started' || e.name === 'channel.recording.stopped') {
+        const recording = e.name === 'channel.recording.started'
+        setChannels((prev) => prev.map((c) => (c.channel === e.channel ? { ...c, recording } : c)))
+        return
+      }
+      if (e.name === 'channel.rtsp.connect_failed') {
+        setChannels((prev) => prev.map((c) => (c.channel === e.channel ? { ...c, last_connect_error: e.reason } : c)))
+        return
+      }
+      if (e.name === 'channel.rtsp.connected') {
+        setChannels((prev) => prev.map((c) => (c.channel === e.channel ? { ...c, last_connect_error: undefined } : c)))
+      }
+    })
+  }, [])
+
   const channelIds = Array.from(checked).sort((a, b) => a - b)
   // Batch-fetch once per change to the *set* of checked channels, not once
   // per channel and not on every render -- joined to a stable string so
@@ -79,6 +101,14 @@ export default function LivePage() {
           <ul className="list-unstyled">
             {channels.map((c) => (
               <li key={c.channel} className="live-channel-row mb-2">
+                <Link
+                  to={`/player?channel=${c.channel}`}
+                  className="btn btn-sm btn-outline-secondary"
+                  title="Открыть в архиве"
+                  aria-label="Открыть в архиве"
+                >
+                  <i className="bi bi-clock-history" aria-hidden="true" />
+                </Link>
                 <input
                   type="checkbox"
                   className="form-check-input"
@@ -90,9 +120,6 @@ export default function LivePage() {
                 <span>
                   {c.channel}: {c.name ?? `channel ${c.channel}`}
                 </span>
-                <Link to={`/player?channel=${c.channel}`} className="btn btn-sm btn-outline-secondary ms-auto">
-                  в архив
-                </Link>
               </li>
             ))}
           </ul>

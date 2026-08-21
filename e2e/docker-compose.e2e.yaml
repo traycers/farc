@@ -17,9 +17,12 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
       - "8554:8554"
-      - "8889:8889"
     expose:
       - "9997"
+      # WebRTC/WHEP -- reached through the web service's nginx /api/whep
+      # proxy, not published to the host (same as the release compose
+      # file, .scratch/live-page-fixes/issues/03).
+      - "8889"
     restart: unless-stopped
 
   # Publishes e2e/media/sample.mp4 into mediamtx on loop, as two independent
@@ -136,7 +139,10 @@ services:
       APID_FARC_HTTP: "http://farc:8080"
       APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
       APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
-      APID_WEBRTC_PUBLIC_BASE: "http://localhost:8889"
+      # Relative path -- the browser reaches WHEP through nginx's
+      # same-origin proxy (web/nginx.conf's /api/whep/ block,
+      # .scratch/live-page-fixes/issues/03), not mediamtx's port directly.
+      APID_WEBRTC_PUBLIC_BASE: "/api/whep"
     volumes:
       - apid_config:/etc/apid
     depends_on:
