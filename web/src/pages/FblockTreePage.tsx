@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { getFblockInfo, getFblockTree, subscribeFblockLiveTree, type FblockInfo, type TreeNode } from '../api/fblockTree'
+import { getFblockInfo, getFblockTocRows, subscribeFblockLiveTocRows, type FblockInfo, type TreeNode } from '../api/fblockTree'
+import { tocRowsToTree } from '../api/tocRowsToTree'
 import { nsToDisplayString, nsToDisplayStringPrecise } from '../api/ns'
 import { groupFrameNodes } from '../api/frameGrouping'
 import { formatDecodedValue } from './fblockTreeFormat'
@@ -36,7 +37,7 @@ export default function FblockTreePage() {
         setInfo(i)
         if (i.state === 'ready') {
           if (!i.uuid) throw new Error(`fblock ${index} is ready but has no uuid`)
-          return getFblockTree(id, i.uuid).then(setTree)
+          return getFblockTocRows(id, i.uuid).then((rows) => setTree(tocRowsToTree(rows)))
         }
         if (i.state === 'in_progress') {
           return undefined // live subscription effect below handles this
@@ -49,7 +50,7 @@ export default function FblockTreePage() {
   useEffect(() => {
     if (info?.state !== 'in_progress') return
     setTree(null)
-    const unsubscribe = subscribeFblockLiveTree(id, Number(index), (msg) => setTree(msg.tree ?? null), setConnected)
+    const unsubscribe = subscribeFblockLiveTocRows(id, Number(index), (msg) => setTree(msg.rows ? tocRowsToTree(msg.rows) : null), setConnected)
     return unsubscribe
   }, [id, index, info?.state])
 

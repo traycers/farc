@@ -191,13 +191,11 @@ func (s *HttpApiServer) routes() {
 	s.mux.HandleFunc("DELETE /storages/{id}", s.handleRemoveStorage)
 
 	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/toc", s.handleReadTOC)
-	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/tree", s.handleReadFblockTree)
 	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}/toc/rows", s.handleReadTOCRows)
 	s.mux.HandleFunc("GET /storages/{id}/fcontainers/{uuid}", s.handleReadContent)
 	s.mux.HandleFunc("POST /storages/{id}/fcontainers/{uuid}/protected", s.handleSetProtected)
 
 	s.mux.HandleFunc("GET /storages/{id}/fblocks/{index}", s.handleGetFblock)
-	s.mux.HandleFunc("GET /storages/{id}/fblocks/{index}/tree/ws", s.requireIngest(s.handleFblockLiveTreeWS))
 	s.mux.HandleFunc("GET /storages/{id}/fblocks/{index}/toc/rows/ws", s.requireIngest(s.handleFblockLiveTOCRowsWS))
 	s.mux.HandleFunc("GET /storages/{id}/catalog", s.handleGetCatalog)
 

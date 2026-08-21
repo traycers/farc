@@ -128,29 +128,17 @@ func TestHandleReadTOCRows(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// Same fblock as TestHandleReadFblockTree -- cross-check row count
-	// against the nested tree endpoint's node count, and that a
-	// frame_data(video) row reports its size via the SAME raw shape as
-	// every other row (no special-cased JSON field), unlike TreeNode.
-	treeResp, err := http.Get(fmt.Sprintf("%s/storages/s1/fcontainers/%s/tree", srv.URL, hex.EncodeToString(uuid[:])))
+	// Cross-check row count directly against the real *toc.Columns for this
+	// fblock (the actual source of truth this handler reads) -- rather than
+	// a second HTTP round trip to a tree endpoint, which no longer exists
+	// (issue 04 removed /tree in favor of the client building its own tree
+	// from these rows).
+	columns, err := u.ReadTOC(uuid)
 	if err != nil {
-		t.Fatalf("GET tree: %v", err)
+		t.Fatalf("ReadTOC: %v", err)
 	}
-	defer treeResp.Body.Close()
-	var root TreeNode
-	if err := json.NewDecoder(treeResp.Body).Decode(&root); err != nil {
-		t.Fatalf("decode tree: %v", err)
-	}
-	var countNodes func(n *TreeNode) int
-	countNodes = func(n *TreeNode) int {
-		total := 1
-		for _, c := range n.Children {
-			total += countNodes(c)
-		}
-		return total
-	}
-	if len(rows) != countNodes(&root) {
-		t.Fatalf("len(rows) = %d, want %d (tree node count)", len(rows), countNodes(&root))
+	if len(rows) != int(columns.N) {
+		t.Fatalf("len(rows) = %d, want %d (toc.Columns.N)", len(rows), columns.N)
 	}
 
 	var found bool

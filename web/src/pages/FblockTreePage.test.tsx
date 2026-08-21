@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import FblockTreePage, { formatValue } from './FblockTreePage'
-import type { TreeNode } from '../api/fblockTree'
+import type { TocRow, TreeNode } from '../api/fblockTree'
 import { downloadTextFile } from '../lib/download'
 
 function node(role: string, type: string, value: string): TreeNode {
@@ -32,8 +32,18 @@ describe('FblockTreePage formatValue', () => {
 
 vi.mock('../lib/download', () => ({ downloadTextFile: vi.fn() }))
 
-function manyVideoFrames(n: number): TreeNode[] {
-  return Array.from({ length: n }, (_, i) => ({ id: i + 1, parent_id: 0, type: 'uint8', role: 'frame(video)', value: String(i) }))
+function tocRowsWithManyVideoFrames(n: number): TocRow[] {
+  const root: TocRow = { id: 0, parent_id: 0, sibling_id: 0, type: 'void', role: 'root', value_or_offset: '0', size: 0 }
+  const frames: TocRow[] = Array.from({ length: n }, (_, i) => ({
+    id: i + 1,
+    parent_id: 0,
+    sibling_id: i,
+    type: 'uint8',
+    role: 'frame(video)',
+    value_or_offset: String(i),
+    size: 0,
+  }))
+  return [root, ...frames]
 }
 
 vi.mock('../api/fblockTree', async () => {
@@ -41,13 +51,7 @@ vi.mock('../api/fblockTree', async () => {
   return {
     ...actual,
     getFblockInfo: vi.fn(async () => ({ index: 0, state: 'ready', uuid: 'abc' })),
-    getFblockTree: vi.fn(async () => ({
-      id: 0,
-      parent_id: 0,
-      type: 'void',
-      role: 'root',
-      children: manyVideoFrames(150),
-    })),
+    getFblockTocRows: vi.fn(async () => tocRowsWithManyVideoFrames(150)),
   }
 })
 

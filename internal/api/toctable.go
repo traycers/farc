@@ -6,10 +6,26 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/traycers/farc/fblock"
 	"github.com/traycers/farc/mediatree"
 	"github.com/traycers/farc/toc"
 )
+
+// fblockLiveSig is the live-WS poll loop's change-detection signature --
+// cheap to compare every tick without diffing message content. Moved here
+// from fblocktree.go (issue 04) when handleFblockLiveTreeWS, its only
+// other user, was deleted -- this file's handleFblockLiveTOCRowsWS is now
+// the sole live-WS handler left.
+type fblockLiveSig struct {
+	generation uint64
+	elemCount  int
+}
+
+var liveTreeUpgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+
+const liveTreePollInterval = 500 * time.Millisecond
 
 // tocRow is one node's flat, SoA-shaped view of a fblock's TOC (or, for a
 // currently in_progress fblock, its live in-memory equivalent) -- the

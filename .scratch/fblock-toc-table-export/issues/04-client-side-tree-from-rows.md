@@ -1,6 +1,6 @@
 # 04 — Build the fblock tree client-side from /toc/rows, delete /tree and /tree/ws
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -128,3 +128,44 @@ before the migration; confirm `curl .../fcontainers/{uuid}/tree` now
 404s (route removed).
 
 ## Comments
+
+2026-08-21: Implemented via TDD. Added `web/src/api/tocRowsToTree.ts`
+(`tocRowsToTree`), migrated `FblockTreePage.tsx` to
+`getFblockTocRows`/`subscribeFblockLiveTocRows` + `tocRowsToTree` (steps
+1-6); deleted `TreeNode`/`formatNodeValue`/`buildColumnsTree`/
+`columnsNode`/`handleReadFblockTree`/`liveNode`/`buildLiveTree`/
+`fblockLiveTreeMessage`/`buildFblockLiveTreeMessage`/
+`handleFblockLiveTreeWS` from `internal/api/fblocktree.go` (now just
+`fblockInfo`/`handleGetFblock`) and the two `/tree`/`/tree/ws` routes from
+`server.go` (steps 7, 9); trimmed `fblocktree_test.go` to
+`TestHandleGetFblock`/`_OutOfRange`, deleted `fblocklivetree_test.go`
+entirely (step 10); deleted `getFblockTree`/`subscribeFblockLiveTree`/
+`FblockLiveTreeMessage` from `fblockTree.ts`, kept `TreeNode` (step 11).
+Per step 8, moved (rather than left in place) `fblockLiveSig`/
+`liveTreeUpgrader`/`liveTreePollInterval` into `toctable.go`, since
+`fblocktree.go` no longer has any live-WS handler to justify hosting
+them. Updated `CONTEXT.md`'s fcontainer entry, which named the
+now-deleted `handleFblockLiveTreeWS` as the current live-tree mechanism.
+
+**Real bug caught by the first red test**: a naive `tocRowsToTree` would
+show `value: "0"` on every `void`-typed node (channels, streams,
+video/audio, configs — most structural nodes in a real tree), because
+`void` is fixed-width (`FixedSize()==0`) so it fell into the "show value"
+branch with `value_or_offset` packed to `0`. The deleted
+`formatNodeValue`'s `TypeVoid` case always returned `""`, which
+`omitempty` then dropped from the JSON entirely — the old tree never
+showed a value for these nodes at all. Fixed by special-casing
+`type === 'void'` to omit `value` too, matching the original behavior
+exactly; a test with a non-first-position root (`id !== 0` in array order)
+also caught an early temptation to assume root is always `rows[0]`, driving
+the self-reference (`id === parent_id`) lookup instead.
+
+`TestHandleReadTOCRows` (issue 02) cross-checked row count against the
+now-deleted `/tree` endpoint's node count — rewritten to check directly
+against `unit.ReadTOC(uuid)`'s `*toc.Columns.N`, the actual source of
+truth this handler reads (arguably a better assertion than the one it
+replaced).
+
+`go build/vet/test ./...` and `golangci-lint run` (whole repo) — clean.
+`cd web && npx vitest run` — 196 passed. `task build/web` — green (same
+pre-existing >500kB chunk-size warning, unrelated).
