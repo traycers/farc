@@ -130,6 +130,40 @@ pieces share the same underlying TOC/live-tree data model and two of them
     - "Download TOC (.csv)" button lives on the new
       `FblockTocTablePage`.
 
+## Follow-up decisions (grilled 2026-08-21, after 01-03 shipped)
+
+Prompted by a design discussion about whether farcd should ever convert TOC
+data into a representation other than what's already on disk (ready) or
+already in memory (live) — issues 02/03's `tocRow` endpoints already do
+this (no tree built), but the pre-existing `/tree`/`/tree/ws` endpoints
+`FblockTreePage` still depends on do the opposite (build a nested
+`TreeNode` JSON tree server-side). This grilling round scoped removing
+that duplication.
+
+13. Confirmed via search (2026-08-21) that nothing besides
+    `web/src/api/fblockTree.ts` (`getFblockTree`/`subscribeFblockLiveTree`)
+    calls `/tree` or `/tree/ws` — no other Go package, no e2e test
+    (`tests/e2e_test.go`, `e2e/`), no docs. Safe to delete both endpoints
+    and their server-side tree-building code outright, no deprecation
+    period needed.
+14. The client now builds the fblock tree itself from `/toc/rows`/
+    `/toc/rows/ws` (a new `tocRowsToTree` function), reconstructing the
+    exact same `TreeNode` shape the deleted endpoints used to send — so
+    `FblockTree.tsx`, `frameGrouping.ts`, `fblockTreeFormat.ts`, and
+    `fblockTreeText.ts`'s `renderTreeAsText` (issue 01) need zero changes;
+    only `FblockTreePage.tsx`'s data-fetching effects change.
+15. Distinguishing fixed-width vs variable-width `tocRow`s client-side
+    (needed to decide whether a reconstructed node shows `value` or
+    `size`) is done by hardcoding the known variable-width type names
+    (`'string'`, `'bytes'`) in the new module, rather than adding a field
+    to the wire format. `docs/docs/archive/05-data-format.md` §3.1
+    confirms `type` (unlike `role`) is a closed, non-domain-growing set —
+    this hardcoding also matches `fblockTreeFormat.ts`'s existing
+    precedent of duplicating backend enum knowledge for display.
+16. Filed as one issue (`04`), not migrate-then-delete — the migration is
+    mechanical and low-risk enough (traced, no other consumers) that a
+    two-phase rollout would only add temporary dead weight.
+
 ## Issues
 
 - `issues/01` — Download expanded tree as `.txt` (frontend only, no backend
@@ -138,3 +172,6 @@ pieces share the same underlying TOC/live-tree data model and two of them
   and `in_progress` (live) fblocks
 - `issues/03` — Frontend: TOC table page (nav link, filter, virtualization)
   + CSV export (depends on `02`; reuses `01`'s file-download helper)
+- `issues/04` — Migrate the fblock tree page to build its tree client-side
+  from `/toc/rows`/`/toc/rows/ws`, and delete the now-redundant
+  `/tree`/`/tree/ws` server-side tree-building code
