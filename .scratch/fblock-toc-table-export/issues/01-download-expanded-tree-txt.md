@@ -1,6 +1,6 @@
 # 01 — Download expanded tree as .txt
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -91,3 +91,28 @@ contains one line per real frame (no `"N frames"` group line) and is fully
 expanded. Repeat against an `in_progress` fblock mid-live-stream.
 
 ## Comments
+
+2026-08-21: Implemented via TDD (red/green per seam). Added
+`web/src/pages/fblockTreeText.ts` (`renderTreeAsText`, a React-free
+port of `FblockTree.tsx`'s connector/label logic, every node forced open)
+with `fblockTreeText.test.ts`; `web/src/lib/download.ts`
+(`downloadTextFile`, first blob/`<a download>` helper in this app) with
+`download.test.ts` (mocks `URL.createObjectURL`/`revokeObjectURL` + a
+spied anchor `click`); wired a "Download tree (.txt)" button into
+`FblockTreePage.tsx`'s header row, calling
+`downloadTextFile(`fblock-${info?.uuid ?? index}-tree.txt`,
+renderTreeAsText(tree, formatValue))` — deliberately the raw `tree` state,
+never `displayTree`. Extended `FblockTreePage.test.tsx` with a
+150-video-frame fixture (past `frameGrouping.ts`'s 100-frame threshold) to
+assert the downloaded content never contains a synthetic `"150 frames"`
+group line.
+
+`tsc -b` caught that `vi.fn()`-typed mocks don't structurally match
+`URL.createObjectURL`/`revokeObjectURL`/`HTMLAnchorElement.click`'s
+signatures — fixed with explicit `as unknown as typeof ...` casts in the
+test file (`vitest run` alone doesn't type-check; `task build/web` does,
+via `tsc -b && vite build`).
+
+Full suite: `cd web && npx vitest run` — 180 passed. `task build/web` —
+green (pre-existing >500kB chunk-size warning only, unrelated to this
+change).

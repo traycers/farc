@@ -150,7 +150,7 @@ func InlineValue(c *Columns, i uint32) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	return unpackInline(c.ValueOrOffset[i], fixedSize), true
+	return UnpackInline(c.ValueOrOffset[i], fixedSize), true
 }
 
 // ChannelNode finds the RoleChannel node whose inline uint32 value is

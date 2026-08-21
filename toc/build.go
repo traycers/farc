@@ -96,7 +96,7 @@ func Build(elems []mediatree.Element, valueOffsets []uint64) (*Columns, error) {
 		c.Sibling[newID] = pos[e.Sibling]
 
 		if fixedSize, ok := e.Type.FixedSize(); ok {
-			c.ValueOrOffset[newID] = packInline(e.Value, fixedSize)
+			c.ValueOrOffset[newID] = PackInline(e.Value, fixedSize)
 			c.Size[newID] = 0
 		} else {
 			c.ValueOrOffset[newID] = valueOffsets[oldID]
@@ -107,10 +107,13 @@ func Build(elems []mediatree.Element, valueOffsets []uint64) (*Columns, error) {
 	return c, nil
 }
 
-// packInline packs a fixed-width value's bytes into the low-order bytes of
+// PackInline packs a fixed-width value's bytes into the low-order bytes of
 // a little-endian uint64 (docs/docs/archive/06-toc-format.md §4.1). void has
-// fixedSize 0, producing 0.
-func packInline(value []byte, fixedSize int) uint64 {
+// fixedSize 0, producing 0. Exported so callers with their own
+// mediatree.Element values (e.g. internal/api's live in_progress TOC-rows
+// projection) can compute the same ValueOrOffset packing Build uses,
+// without duplicating this switch or going through a full Build call.
+func PackInline(value []byte, fixedSize int) uint64 {
 	var v uint64
 	for i := 0; i < fixedSize && i < len(value) && i < 8; i++ {
 		v |= uint64(value[i]) << (8 * uint(i))
@@ -118,8 +121,8 @@ func packInline(value []byte, fixedSize int) uint64 {
 	return v
 }
 
-// unpackInline is the inverse of packInline, returning the value's raw bytes.
-func unpackInline(v uint64, fixedSize int) []byte {
+// UnpackInline is the inverse of PackInline, returning the value's raw bytes.
+func UnpackInline(v uint64, fixedSize int) []byte {
 	if fixedSize == 0 {
 		return nil
 	}

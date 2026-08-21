@@ -1,6 +1,6 @@
 # 02 — Backend: expose TOC as flat SoA rows (ready + in_progress)
 
-Status: open
+Status: resolved
 
 ## Task
 
@@ -121,3 +121,43 @@ against the existing `.../tree` endpoint's node count; open a WS client
 fblock and confirm rows update roughly every 500ms while ingest is active.
 
 ## Comments
+
+2026-08-21: Implemented via TDD. Exported `toc.PackInline`/`UnpackInline`
+(were `packInline`/`unpackInline`, only used inside `toc/build.go` and
+`query.go`) so `internal/api` can pack a live fixed-width value the same
+way `toc.Build` does, without duplicating the switch.
+
+Added `internal/api/toctable.go`: `tocRow` (JSON: `id`, `type`, `role`,
+`parent_id`, `sibling_id`, `value_or_offset`, `size`). **Wire-format note
+for issue 03's frontend types**: `value_or_offset` is `uint64` in Go but
+JSON-encoded as a decimal **string** (`json:"value_or_offset,string"`), not
+a bare number — a `timestamp`/`duration` node's packed inline value is a
+unix-ns uint64 (~1.7e18), past JS's 2^53 safe-integer limit, exactly why
+`TreeNode.Value` is already a string. Caught by a red-first test
+(`TestTocRowJSONEncodesValueOrOffsetAsString`) asserting the literal
+encoded bytes, since a Go-side marshal/unmarshal round trip alone doesn't
+surface float64 precision loss. `size` stays a bare number (matches
+`TreeNode.Size`; a single node's content byte length can't approach 2^53).
+`tocRowsFromColumns(*toc.Columns) []tocRow` (ready path — direct
+projection, no `buildColumnsTree`/`columnsNode` walk), `liveValueOrOffset`/
+`liveSize` (both gate on `mediatree.NodeType.Variable()`/`FixedSize()` —
+`liveSize` in particular guards the ready/live asymmetry the spec flagged:
+`toc.Columns.Size` is always 0 for fixed-width types, so
+`len(e.Value)` alone would have made a fixed-width node report a nonzero
+size live and 0 once ready), `tocRowsFromElements` (live path, no DFS
+reorder — creation order already satisfies `Parent[i] <= i`),
+`handleReadTOCRows` (`GET .../fcontainers/{uuid}/toc/rows`), and
+`handleFblockLiveTOCRowsWS` (`GET
+.../fblocks/{index}/toc/rows/ws`, structurally identical to
+`handleFblockLiveTreeWS` — same `fblockLiveSig` reused, same 500ms poll).
+Both routes registered in `server.go` next to their tree/tree-ws
+counterparts.
+
+Tests: `internal/api/toctable_test.go` (pure-function tests for all four
+row-projection helpers, worked-example-style fixed expected values, plus
+`TestHandleReadTOCRows`/`_UnknownStorage`), `internal/api/
+toclivewsrows_test.go` (mirrors `fblocklivetree_test.go`'s five cases
+1:1 for the new WS route).
+
+`go test ./...` — all packages green. `golangci-lint run ./internal/api/...
+./toc/...` — 0 issues.

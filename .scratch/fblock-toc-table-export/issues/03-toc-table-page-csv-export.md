@@ -1,6 +1,6 @@
 # 03 — Frontend: TOC table page (nav, filter, virtualization) + CSV export
 
-Status: open
+Status: resolved
 
 Depends on issue 02 (backend rows endpoints). Reuses issue 01's
 `downloadTextFile` helper (`web/src/lib/download.ts`) — land after 01, or
@@ -15,10 +15,17 @@ via a link from `FblockTreePage`, plus a CSV download. See spec decisions
 ### API client (`web/src/api/fblockTree.ts`, extend — or a new sibling
 module if it gets crowded)
 
-1. `TocRow` type mirroring issue 02's `tocRow` JSON: `{id, type, role,
-   parent_id, sibling_id, value_or_offset, size}` — same shape for both
-   ready and live (spec decision 5's whole point). Mirror the existing
-   `TreeNode`/`CatalogEntry` type style (`fblockTree.ts:7-15`, `21-28`).
+1. `TocRow` type mirroring issue 02's `tocRow` JSON: `{id: number, type:
+   string, role: string, parent_id: number, sibling_id: number,
+   value_or_offset: string, size: number}` — `value_or_offset` is a
+   **string** on the wire (`json:"value_or_offset,string"` on the Go side,
+   issue 02's Comments), not a number: a `timestamp`/`duration` node's
+   packed value is a unix-ns uint64 (~1.7e18), past JS's 2^53
+   safe-integer limit. Treat it as an opaque string throughout — the
+   table cell and `tocRowsToCsv` (step 9) just print it verbatim, no
+   `Number()`/arithmetic. Same shape for both ready and live (spec
+   decision 5's whole point). Mirror the existing `TreeNode`/`CatalogEntry`
+   type style (`fblockTree.ts:7-15`, `21-28`).
 2. `getFblockTocRows(storageId, uuid): Promise<TocRow[]>` — `fetch`
    against `${BASE}/storages/${storageId}/fcontainers/${uuid}/toc/rows`,
    mirroring `getFblockTree` (`fblockTree.ts:60-62`).
@@ -100,3 +107,46 @@ confirm it contains all rows regardless of the active filter. Repeat
 against an `in_progress` fblock and confirm rows update via the live WS.
 
 ## Comments
+
+2026-08-21: Implemented via TDD. Added `TocRow`/`TocRowsLiveMessage` +
+`getFblockTocRows`/`subscribeFblockLiveTocRows` to `web/src/api/
+fblockTree.ts` (mirroring `getFblockTree`/`subscribeFblockLiveTree`
+exactly); `web/src/pages/fblockTocTablePaging.ts`
+(`tocRowsToCsv`/`distinctValues`/`filterRows`, all pure, all
+unit-tested); `web/src/pages/FblockTocTablePage.tsx` (new route
+`/storages/:id/fblocks/:index/tree/toc` in `App.tsx`, next to
+`FblockTreePage`'s), using `@tanstack/react-virtual`'s `useVirtualizer`
+over the filtered row array — `filtered` is display-only, the CSV button
+always serializes `rows` (the full fetch), never `filtered`.
+
+Added the "TOC table" `<Link>` to `FblockTreePage.tsx`'s header row as its
+own red-first cycle (`FblockTreePage.test.tsx`'s new "TOC table link"
+describe block asserts the exact `href`) — this is the feature's headline
+ask ("на странице фблока добавь переход на страницу отображения toc"), so
+it got its own test rather than being folded into the new page's tests.
+
+Testing `FblockTocTablePage` against a real `@tanstack/react-virtual`
+hit jsdom's usual zero-size-container problem (the library measures the
+scroll container's real layout, which jsdom always reports as 0, so it
+would render 0 rows) — `FblockTocTablePage.test.tsx` mocks
+`useVirtualizer` to return every row as a virtual item, testing this
+page's own filter/CSV wiring rather than the library's viewport math. The
+role/role-filter-option text collision (`"channel"` appears both as a
+`<select>` option and a row cell) surfaced a genuine test-scoping bug on
+the first run, fixed by scoping row assertions to a `data-testid="toc-rows"`
+container via `within(...)`.
+
+**Precision fix caught before writing any TS**: `internal/api`'s
+`tocRow.ValueOrOffset` was originally a bare JSON number — a
+`timestamp`/`duration` node's packed value (unix-ns, ~1.7e18) exceeds JS's
+2^53 safe-integer limit and would have silently rounded in the browser.
+Caught with a red-first Go test asserting the literal encoded JSON bytes
+(a Go-side marshal/unmarshal round trip alone doesn't surface float64
+precision loss); fixed with `json:"value_or_offset,string"`. `TocRow.
+value_or_offset` is therefore `string` on the TS side from the start —
+`tocRowsToCsv` never coerces it through `Number()`.
+
+`cd web && npx vitest run` — 192 passed. `task build/web` — green
+(`tsc -b` + `vite build`, same pre-existing >500kB chunk-size warning,
+unrelated). `go build ./... && go vet ./... && go test ./...` and
+`golangci-lint run` (whole repo) — all clean.

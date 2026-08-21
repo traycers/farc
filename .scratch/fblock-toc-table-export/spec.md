@@ -1,6 +1,6 @@
 # TOC table view + txt/CSV export for the fblock tree page
 
-Status: open — grilled 2026-08-21
+Status: resolved — grilled 2026-08-21, implemented 2026-08-21 (all 3 issues)
 
 From the fblock tree page (`FblockTreePage`, `/storages/:id/fblocks/:index/tree`)
 add a link to a new page that shows the same TOC data as a flat table instead

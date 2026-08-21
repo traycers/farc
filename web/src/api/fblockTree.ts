@@ -120,6 +120,79 @@ export function subscribeFblockLiveTree(
   }
 }
 
+// Mirrors internal/api/toctable.go's tocRow -- the flat, SoA-shaped view of
+// a fblock's TOC (fblock-toc-table page), deliberately not the nested
+// TreeNode tree. value_or_offset is a decimal STRING, not a number: a
+// timestamp/duration node's packed inline value is a unix-ns uint64
+// (~1.7e18), past JS's 2^53 safe-integer limit -- treat it as opaque text,
+// never through Number()/arithmetic, same convention as TreeNode.Value.
+export type TocRow = {
+  id: number
+  type: string
+  role: string
+  parent_id: number
+  sibling_id: number
+  value_or_offset: string
+  size: number
+}
+
+export async function getFblockTocRows(storageId: string, uuid: string): Promise<TocRow[]> {
+  return (await ok(await fetch(`${BASE}/storages/${storageId}/fcontainers/${uuid}/toc/rows`))).json()
+}
+
+// Mirrors internal/api/toctable.go's tocRowsLiveMessage.
+export type TocRowsLiveMessage = {
+  rows?: TocRow[]
+}
+
+// subscribeFblockLiveTocRows is subscribeFblockLiveTree's row-shaped
+// counterpart -- same reconnect/backoff behavior, same full-snapshot
+// framing, for the fblock-toc-table page's live data source.
+export function subscribeFblockLiveTocRows(
+  storageId: string,
+  index: number,
+  onMessage: (msg: TocRowsLiveMessage) => void,
+  onStatusChange?: (connected: boolean) => void,
+): () => void {
+  let ws: WebSocket | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = RECONNECT_MIN_MS
+  let stopped = false
+
+  function connect() {
+    if (stopped) return
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    ws = new WebSocket(`${scheme}//${location.host}${BASE}/storages/${storageId}/fblocks/${index}/toc/rows/ws`)
+
+    ws.onopen = () => {
+      reconnectDelay = RECONNECT_MIN_MS
+      onStatusChange?.(true)
+    }
+    ws.onmessage = (ev) => {
+      try {
+        onMessage(JSON.parse(ev.data as string) as TocRowsLiveMessage)
+      } catch {
+        // ignore a malformed frame
+      }
+    }
+    ws.onclose = () => {
+      onStatusChange?.(false)
+      if (stopped) return
+      reconnectTimer = setTimeout(connect, reconnectDelay)
+      reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS)
+    }
+    ws.onerror = () => ws?.close()
+  }
+
+  connect()
+
+  return () => {
+    stopped = true
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    ws?.close()
+  }
+}
+
 // formatDurationNs renders a nanosecond duration for display (TypeDuration
 // nodes) -- api/ns.ts's Timestamp helpers (nsToDate et al.) handle
 // TypeTimestamp instead, since those are absolute unix-ns instants, not

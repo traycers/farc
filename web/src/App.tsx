@@ -9,6 +9,7 @@ import PlayerPage from './pages/PlayerPage'
 import LivePage from './pages/LivePage'
 import JournalPage from './pages/JournalPage'
 import FblockTreePage from './pages/FblockTreePage'
+import FblockTocTablePage from './pages/FblockTocTablePage'
 import FblocksGridPage from './pages/FblocksGridPage'
 import FblocksListPage from './pages/FblocksListPage'
 
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="/storages/:id/fblocks" element={<FblocksGridPage />} />
           <Route path="/storages/:id/fblocks-list" element={<FblocksListPage />} />
           <Route path="/storages/:id/fblocks/:index/tree" element={<FblockTreePage />} />
+          <Route path="/storages/:id/fblocks/:index/tree/toc" element={<FblockTocTablePage />} />
         </Routes>
       </main>
     </>

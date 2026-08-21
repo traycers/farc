@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getFblockInfo, getFblockTree, subscribeFblockLiveTree, type FblockInfo, type TreeNode } from '../api/fblockTree'
 import { nsToDisplayString, nsToDisplayStringPrecise } from '../api/ns'
 import { groupFrameNodes } from '../api/frameGrouping'
 import { formatDecodedValue } from './fblockTreeFormat'
+import { renderTreeAsText } from './fblockTreeText'
+import { downloadTextFile } from '../lib/download'
 import FblockTree from '../components/FblockTree'
 
 export function formatValue(node: TreeNode): string | undefined {
@@ -59,9 +61,23 @@ export default function FblockTreePage() {
         <h1 className="mb-0">
           Fblock #{index} <small className="text-body-secondary">({id})</small>
         </h1>
-        <button type="button" className="btn btn-outline-secondary" onClick={() => navigate(-1)}>
-          Back
-        </button>
+        <div className="d-flex gap-2">
+          <Link to={`/storages/${id}/fblocks/${index}/tree/toc`} className="btn btn-outline-secondary">
+            TOC table
+          </Link>
+          {tree && (
+            <button
+              type="button"
+              className="btn btn-outline-secondary"
+              onClick={() => downloadTextFile(`fblock-${info?.uuid ?? index}-tree.txt`, renderTreeAsText(tree, formatValue))}
+            >
+              Download tree (.txt)
+            </button>
+          )}
+          <button type="button" className="btn btn-outline-secondary" onClick={() => navigate(-1)}>
+            Back
+          </button>
+        </div>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
       {info && (
