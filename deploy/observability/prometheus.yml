@@ -1,5 +1,5 @@
-# Scrape config for the farc/hls_server /metrics endpoints
-# (.scratch/observability/spec.md).
+# Scrape config for the farc/hlsd/apid /metrics endpoints
+# (.scratch/observability/spec.md, .scratch/live-page/ for apid).
 global:
   scrape_interval: 15s
 
@@ -8,6 +8,10 @@ scrape_configs:
     static_configs:
       - targets: ["farc:9090"]
 
-  - job_name: hls_server
+  - job_name: hlsd
     static_configs:
-      - targets: ["hls_server:9091"]
+      - targets: ["hlsd:9091"]
+
+  - job_name: apid
+    static_configs:
+      - targets: ["apid:9101"]

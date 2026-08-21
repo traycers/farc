@@ -276,6 +276,34 @@ All phases below are complete (`[x]`). This file is the running summary of *what
   the second call and leave `Pool: {0,0,0}` in a response, which is a real
   (wrong) value, not "unset".
 
+- [x] Phase 30 — Live page: real per-channel live video over WebRTC, plus
+  a new `apid` binary and mediamtx promoted from a dev/e2e-only RTSP test
+  source to a real production component (`.scratch/live-page/`, ADR-022).
+  `apid` (`cmd/apid`, `internal/apid`/`internal/apidconfig`) is the web
+  app's sole write path for channels (`POST/PATCH/DELETE /channels`,
+  `GET /channels/{id}` for the camera's real RTSP URL,
+  `GET /channels/live-urls?ids=` batch WHEP-URL lookup) — it fans each
+  write out to farcd and to mediamtx's control API, idempotently (no
+  rollback on partial failure, see ADR-022). mediamtx becomes the only
+  thing that ever opens an RTSP session against a camera; farcd's ingest
+  now pulls each channel's stream from mediamtx's re-serve
+  (`rtsp://mediamtx:8554/{channel_id}`), not the camera directly. Web:
+  `LivePage.tsx` (new `/live` route) — a channel list (two-circle
+  `ChannelStatusIndicator`, shared with `ChannelsIndexPage`, replacing its
+  old single inline dot) with a persisted-to-`localStorage` checkbox per
+  channel controlling a `VideoGrid` of `LiveVideoTile`s, each a real WHEP
+  client (`api/whep.ts`, no npm dependency — bare `RTCPeerConnection` +
+  `fetch`) against mediamtx; a separate "в архив" link per row jumps to
+  `/player?channel={id}`, which `PlayerPage` now auto-searches on mount
+  instead of requiring a manual click. `VideoGrid` was generalized (a
+  `Tile` component prop) to be shared between `PlayerPage`'s `VideoTile`
+  and the Live page's `LiveVideoTile`, rather than hardcoding `VideoTile`.
+  `ChannelNewPage`/`ChannelEditPage`/`ChannelsIndexPage`'s remove action
+  switched from calling farcd directly to calling the new `api/apid.ts`;
+  `ChannelEditPage` now prefills `rtsp_url` from `apid`'s `getCameraURL`
+  instead of farcd's stored value, which is mediamtx's re-serve address
+  after this change, not the camera's.
+
 ## Context
 
 `farc` (farcd) and `hls_server` are two complete, working Go binaries. This plan added a React SPA (`web/`) doubling as admin console (storage/channel management) and VOD player, Dockerfiles, a docker-compose stack, and — once the app itself stabilized — a GitHub Actions CI/release pipeline (Phase 21).
@@ -302,9 +330,21 @@ GET    /events/ws                                  (Journal WS feed, Phase 18 �
 GET    /metrics                                    (Prometheus text; linked out, not parsed)
 ```
 
-`resolve`, raw TOC/content routes (`GET .../toc`, `GET .../fcontainers/{uuid}`) are not used by the SPA — playback goes through `hls_server`, not through farcd's fallback-resolve path.
+`resolve`, raw TOC/content routes (`GET .../toc`, `GET .../fcontainers/{uuid}`) are not used by the SPA — playback goes through `hlsd`, not through farcd's fallback-resolve path.
 
-**hls_server (`internal/hlsapi`)** — 3 player-facing routes, all that exist:
+**apid (`internal/apid`)** — Phase 30, the SPA's sole write path for channels (reads still go straight to farcd above):
+
+```
+POST   /channels                                    {id,rtsp_url,storage,capture_policy:{...},name} -> 201/207 {farcd,mediamtx}
+PATCH  /channels/{id}                                {rtsp_url,storage,capture_policy:{...},name} -> 200/207 {farcd,mediamtx}
+DELETE /channels/{id}                                -> 200/207 {farcd,mediamtx}
+GET    /channels/{id}                                -> 200 {camera_rtsp_url} | 404
+GET    /channels/live-urls?ids=1,2,3                 -> 200 {urls:{"1":whep_url,...}}
+```
+
+`rtsp_url` in the write endpoints is the camera's real address; `apid` rewrites it to mediamtx's re-serve address before it reaches farcd (ADR-022).
+
+**hlsd (`internal/hlsapi`)** — 3 player-facing routes, all that exist:
 
 ```
 GET /channels/{channel}/hls/{t1}/{t2}/playlist.m3u8
@@ -321,13 +361,16 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 | `web/src/api/events.ts` | Phase 18: `subscribeJournal`, an auto-reconnecting WS client for the Journal feed |
 | `web/src/pages/storages/{StoragesIndexPage,StorageNewPage,StorageEditPage}.tsx` | Rails-style split: list-only index + per-row "Edit" link; create form (incl. pool tuning); edit page (retention/write_mode/name/pool-tuning patches) |
 | `web/src/pages/channels/{ChannelsIndexPage,ChannelNewPage,ChannelEditPage}.tsx` | Storage-filtered list + remove/trigger/start-stop-recording actions; create/edit forms with a storage `<select>` |
-| `web/src/pages/PlayerPage.tsx` | Storage+channel+time-range form → candidates list → protected toggle + hls.js playback |
+| `web/src/pages/PlayerPage.tsx` | Storage+channel+time-range form → candidates list → protected toggle + hls.js playback; `?channel=` query param pre-checks + auto-searches (Phase 30, jump-from-Live) |
+| `web/src/pages/LivePage.tsx` | Phase 30: channel list (status + persisted checkbox + "в архив" link) driving a `VideoGrid` of live `LiveVideoTile`s |
+| `web/src/components/LiveVideoTile.tsx`, `web/src/api/whep.ts` | Phase 30: one channel's WHEP/WebRTC tile + the underlying connect/teardown client (mediamtx, not hlsd) |
+| `web/src/api/apid.ts` | Phase 30: typed client for the new `apid` — `createChannel`/`updateChannel`/`removeChannel`/`getCameraURL`/`getLiveURLs` |
 | `web/src/pages/JournalPage.tsx` | Phase 18: live event table, connect/reconnect status, client-side "Clear" |
-| `web/src/App.tsx` | `react-router-dom` shell: `/storages`, `/channels`, `/player`, `/journal` |
-| `web/nginx.conf` | `/api/farcd/` → farcd, `/api/hls/` → hls_server, `/segments/` → hls_server, `/api/events/` → farcd WS, SPA fallback to `index.html` |
+| `web/src/App.tsx` | `react-router-dom` shell: `/storages`, `/channels`, `/player`, `/live`, `/journal` |
+| `web/nginx.conf` | `/api/farcd/` → farcd, `/api/hls/` → hlsd, `/api/apid/` → apid (Phase 30), `/segments/` → hlsd, `/api/events/` → farcd WS, SPA fallback to `index.html` |
 | `web/Dockerfile` | multi-stage: `node:26` build → `nginx:alpine` serve |
-| `Dockerfile.farc`, `Dockerfile.hls_server` | multi-stage: `golang:1.26-bookworm` build (`CGO_ENABLED=0`) → `debian:12-slim` runtime |
-| `docker-compose.yaml` | services `farc`, `hls_server`, `web`, `mediamtx`+`ffmpeg-test` (local RTSP test source for the channel-add page's "Generate" button, `mediamtx.dev.yml`), optional `seaweedfs` (`profiles: [s3]`); `web`, `mediamtx` publish host ports |
+| `Dockerfile.farc`, `Dockerfile.hlsd`, `Dockerfile.apid` | multi-stage: `golang:1.26-bookworm` build (`CGO_ENABLED=0`) → `debian:12-slim` runtime |
+| `docker-compose.yaml` | services `farc`, `hlsd`, `apid` (Phase 30), `web`, `mediamtx`+`ffmpeg-test` (RTSP test source *and*, since Phase 30, the real production live-view/single-camera-connection component, `mediamtx.dev.yml`), optional `seaweedfs` (`profiles: [s3]`); `web`, `mediamtx` publish host ports |
 | `deploy/docker-compose.release.yaml` | Phase 21: same topology as above, `build:` replaced with `image: <service>:__VERSION__`, rendered by `release.yml` |
 
 ## Gap resolutions
@@ -342,12 +385,12 @@ GET /segments/{channel}/{storage}/{uuid}/{n}/seg.m4s
 
 - `internal/api/{server,storages,channels,query,fcontainers,eventpush}.go` — exact farcd route/body/response shapes; `JournalEvent`/`EventPushServer.Publish`/the `serveGlobal` branch (Phase 18/12's wire protocol).
 - `internal/ingest/ingestmanager.go`, `internal/ingest/policy.go` — `List`/`AddChannel`/`RemoveChannel`/`Policy()`/`SetOnRecordingChange`, the runtime primitives the HTTP handlers and Journal events are built on.
-- `internal/hlsapi/server.go` — exact hls_server route shapes.
+- `internal/hlsapi/server.go` — exact hlsd route shapes.
 - `internal/config/config.go`, `internal/hlsconfig/config.go` — exact JSON shapes for `deploy/*.config.json`; both have `Save`/`Duration.MarshalJSON`.
 - `internal/farcd/farcd.go` (`persistNewStorage`, `persistNewChannel`/`persistUpdatedChannel`/`persistRemovedChannel`, `bridgeFblockEvents`) — Gaps 1/2/3/5's fixes plus the Journal's `f.push.Publish` calls.
 - `internal/hlsd/hlsd.go` (`reconcile`/`reconcileOnce`/`applyRemoteList`/`startChannel`/`stopChannel`, `newCache`/`newS3Client`) — Gap 5's client-side reconciliation loop (single-goroutine ownership of `tracked`, no mutex, by design — ADR-021); cache-backend selection (Phase 19) lives in `newCache`.
 - `internal/segmentcache/{cache,disk,s3}.go` — Phase 19's `backend` interface plus disk/S3 implementations; `Cache`'s public `Get`/`Put` is unchanged, so `internal/hlsapi/handlers.go` needed zero changes.
 - `web/src/api/events.ts`, `web/src/pages/JournalPage.tsx` — Phase 18's client side.
-- `cmd/farc/commands/index.go`, `cmd/hls_server/commands/index.go` — `-c/--config` flag both Dockerfiles' `CMD` must match.
-- `taskfile.yaml` — `build/app`/`build/hls_server`/`build/web` tasks; per `CLAUDE.md`, leave the unrelated stale tasks (`run`, `help`, `db/*`, `env/*`) untouched.
+- `cmd/farc/commands/index.go`, `cmd/hlsd/commands/index.go` — `-c/--config` flag both Dockerfiles' `CMD` must match.
+- `taskfile.yaml` — `build/app`/`build/hlsd`/`build/web` tasks; per `CLAUDE.md`, leave the unrelated stale tasks (`run`, `help`, `db/*`, `env/*`) untouched.
 - `.golangci.yaml`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `deploy/docker-compose.release.yaml` — Phase 21's lint gate and CI/release pipeline, unchanged by Phase 22's move to GitHub hosting since they were GitHub-native from the start. `release.yml` derives the current version from `git rev-list --count` since the 1st of the month (CalVer `YYYY.MM.N`), not a `VERSION` file.

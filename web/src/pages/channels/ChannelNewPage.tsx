@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { createChannel, listChannels, listStorages, type ChannelInfo, type StorageInfo } from '../../api/farcd'
+import { listChannels, listStorages, type ChannelInfo, type StorageInfo } from '../../api/farcd'
+import { createChannel } from '../../api/apid'
 
 const POLICY_TYPES = ['continuous', 'event'] as const
 

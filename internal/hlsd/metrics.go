@@ -8,10 +8,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// connectedChannelsDesc is hls_server's one domain gauge (.scratch/
+// connectedChannelsDesc is hlsd's one domain gauge (.scratch/
 // observability/spec.md): the count of channels currently tracked/served,
 // reported alongside client_golang's free go_*/process_* runtime metrics.
-var connectedChannelsDesc = prometheus.NewDesc("hls_server_connected_channels", "Number of channels currently tracked/served.", nil, nil)
+var connectedChannelsDesc = prometheus.NewDesc("hlsd_connected_channels", "Number of channels currently tracked/served.", nil, nil)
 
 // hlsdCollector reports h.ConnectedChannels() at scrape time.
 type hlsdCollector struct {

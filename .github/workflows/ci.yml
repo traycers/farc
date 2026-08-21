@@ -40,7 +40,7 @@ jobs:
         with:
           version: v2.12.2
 
-  # go test -tags e2e ./tests/... runs `farc`/`hls_server` as two real OS
+  # go test -tags e2e ./tests/... runs `farc`/`hlsd` as two real OS
   # processes but seeds fcontainer data directly (see that file's own doc
   # comment), so -- unlike e2e/'s Playwright+Docker-compose suite, which
   # needs a user-supplied e2e/media/sample.mp4 that .gitignore deliberately
@@ -53,7 +53,7 @@ jobs:
         with:
           go-version: "1.26.6"
       - run: go build -o farc ./cmd/farc
-      - run: go build -o hls_server ./cmd/hls_server
+      - run: go build -o hlsd ./cmd/hlsd
       - run: go test -tags e2e ./tests/... -v
 
   web-build:
@@ -71,7 +71,7 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-  # Sanity-checks the three Dockerfiles still build -- no push, no tags
+  # Sanity-checks the four Dockerfiles still build -- no push, no tags
   # beyond Docker's own default, purely to catch a broken Dockerfile before
   # a release tag does (release.yml rebuilds these for real, with a version
   # tag, once a tag is pushed).
@@ -80,5 +80,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: docker build -f Dockerfile.farc .
-      - run: docker build -f Dockerfile.hls_server .
+      - run: docker build -f Dockerfile.hlsd .
+      - run: docker build -f Dockerfile.apid .
       - run: docker build ./web

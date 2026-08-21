@@ -5,4 +5,5 @@ web/node_modules
 web/dist
 *.exe
 farc
-hls_server
+hlsd
+apid

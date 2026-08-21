@@ -6,6 +6,28 @@
 # mediamtx image isn't guaranteed to bundle ffmpeg).
 rtspAddress: :8554
 
+# Control API (apid's target, .scratch/live-page/spec.md) + WebRTC/WHEP --
+# kept in sync with mediamtx.dev.yml's own additions even though no
+# Playwright spec drives real WebRTC playback yet (jsdom/Chromium-under-
+# Playwright still needs a real ICE path this harness doesn't set up) --
+# this keeps e2e's apid service (docker-compose.e2e.yaml) able to
+# provision paths against a real mediamtx.
+api: yes
+apiAddress: :9997
+
+webrtc: yes
+webrtcAddress: :8889
+
+authInternalUsers:
+  - user: any
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+
 paths:
   ch1:
   ch2:

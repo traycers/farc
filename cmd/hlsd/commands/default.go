@@ -22,38 +22,38 @@ func doByDefault(cmd *cobra.Command, args []string) {
 
 	err := hlsconfig.EnsureExists(configPath)
 	if err != nil {
-		levellog.New(log.Fatalf).Error("hls_server: %v", err)
+		levellog.New(log.Fatalf).Error("hlsd: %v", err)
 	}
 	cfg, err := hlsconfig.Load(configPath)
 	if err != nil {
-		levellog.New(log.Fatalf).Error("hls_server: %v", err)
+		levellog.New(log.Fatalf).Error("hlsd: %v", err)
 	}
 
-	logger := log.New(logOutput("hls_server", cfg.LogDir), "", log.LstdFlags)
+	logger := log.New(logOutput("hlsd", cfg.LogDir), "", log.LstdFlags)
 	llog := levellog.New(logger.Printf)
 
 	h, err := hlsd.New(cfg, configPath)
 	if err != nil {
-		levellog.New(logger.Fatalf).Error("hls_server: %v", err)
+		levellog.New(logger.Fatalf).Error("hlsd: %v", err)
 	}
 	h.SetLogger(logger.Printf)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	llog.Info("hls_server: starting (http=%s metrics=%s, farcd=%s, %d seed channels -- reconciled live against farcd afterward, ADR-021)",
+	llog.Info("hlsd: starting (http=%s metrics=%s, farcd=%s, %d seed channels -- reconciled live against farcd afterward, ADR-021)",
 		cfg.HTTP, cfg.Metrics, cfg.Farcd.HTTP, len(cfg.Channels))
 	err = h.Run(ctx)
 	if err != nil {
-		llog.Error("hls_server: exited with error: %v", err)
+		llog.Error("hlsd: exited with error: %v", err)
 		stop()     // explicit call since the deferred one is skipped by os.Exit below
 		os.Exit(1) //nolint:gocritic // stop() was already called on the line above
 	}
-	llog.Info("hls_server: stopped")
+	llog.Info("hlsd: stopped")
 }
 
 // logOutput is stderr alone, or stderr plus dir/service.log when dir is set
-// (HLS_SERVER_LOG_DIR) -- a failure to open the log file is a warning, not
+// (HLSD_LOG_DIR) -- a failure to open the log file is a warning, not
 // fatal, since a running player backend shouldn't refuse to start over a
 // logging problem.
 func logOutput(service, dir string) io.Writer {

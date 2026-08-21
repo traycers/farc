@@ -1,6 +1,6 @@
 # Web: PlayerPage gains a ?channel= query param with auto-submit
 
-Status: open
+Status: fixed (2026-08-21, via `/mattpocock-skills:tdd`)
 
 See `.scratch/live-page/spec.md` for the full design conversation this
 was split from.

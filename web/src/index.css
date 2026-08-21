@@ -144,7 +144,8 @@ video {
    recording-status indicator per channel row -- red while
    CapturePolicy.Recording() is true, gray otherwise. Deliberately just
    these two states -- connect-failure status is a separate indicator
-   (issues/03), not a third dot color. */
+   (issues/03: originally just text; now ChannelStatusIndicator's outer
+   ring below, .scratch/live-page/issues/05), not a third dot color. */
 .status-dot {
   display: inline-block;
   width: 10px;
@@ -158,6 +159,30 @@ video {
 
 .status-dot-idle {
   background-color: #6c757d;
+}
+
+/* ChannelStatusIndicator (.scratch/live-page/issues/05): the outer ring
+   wraps .status-dot above -- farcd's own RTSP connection state (blue =
+   connected, red = last_connect_error is set), independent of the inner
+   dot's recording/idle state. Shared by ChannelsIndexPage and the Live
+   page. */
+.channel-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid;
+  box-sizing: border-box;
+}
+
+.channel-status-connected {
+  border-color: #0d6efd;
+}
+
+.channel-status-disconnected {
+  border-color: #dc3545;
 }
 
 /* Player page (.scratch/player-redesign/): a 3x3+ video grid needs more
@@ -257,4 +282,43 @@ video {
   justify-content: center;
   color: #6c757d;
   font-size: 0.85rem;
+}
+
+/* Live page (.scratch/live-page/issues/04): LiveVideoTile reuses
+   VideoGrid's layout, but is its own tile/placeholder class pair since it
+   has no VOD-specific meaning ("нет записи") -- WebRTC live video only,
+   see LiveVideoTile.tsx. */
+.live-video-tile {
+  position: relative;
+  background: #000;
+  aspect-ratio: 16 / 9;
+}
+
+.live-video-tile video {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+
+.live-video-tile.live-video-tile-active {
+  outline: 2px solid #0d6efd;
+}
+
+.live-video-tile-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6c757d;
+  font-size: 0.85rem;
+}
+
+/* Live page left-hand channel list row: status indicator + checkbox +
+   name + a distinct "в архив" link, per spec.md's "checkbox and player
+   link are separate controls" decision. */
+.live-channel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

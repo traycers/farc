@@ -481,7 +481,7 @@ func TestEventPushServer_GlobalIncludeTOC(t *testing.T) {
 
 // TestEventPushServer_PerStorageIncludeTOC mirrors
 // TestEventPushServer_GlobalIncludeTOC for a per-storage subscription
-// (Storage: "s1") -- hls_server's EventSubscriber uses exactly this
+// (Storage: "s1") -- hlsd's EventSubscriber uses exactly this
 // subscription shape (channel-filtered, not global), and today it gets no
 // "toc" frame at all regardless of IncludeTOC (issue
 // .scratch/hls-toc-bootstrap/issues/01-toc-via-ws-push.md's scope

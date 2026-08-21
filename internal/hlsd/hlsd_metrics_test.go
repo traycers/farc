@@ -12,7 +12,7 @@ import (
 )
 
 // TestRun_MetricsEndpoint_ReportsConnectedChannels is the regression test for
-// .scratch/observability/spec.md: hls_server gets a /metrics endpoint with
+// .scratch/observability/spec.md: hlsd gets a /metrics endpoint with
 // free client_golang runtime metrics plus one domain gauge, the count of
 // currently connected/tracked channels.
 func TestRun_MetricsEndpoint_ReportsConnectedChannels(t *testing.T) {
@@ -46,13 +46,13 @@ func TestRun_MetricsEndpoint_ReportsConnectedChannels(t *testing.T) {
 	for time.Now().Before(deadline) {
 		_, buf := mustGet(t, "http://"+cfg.Metrics.String()+"/metrics")
 		body = string(buf)
-		if strings.Contains(body, "hls_server_connected_channels 1") {
+		if strings.Contains(body, "hlsd_connected_channels 1") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(body, "hls_server_connected_channels 1") {
-		t.Fatalf("body missing \"hls_server_connected_channels 1\" after seeded channel connects; got:\n%s", body)
+	if !strings.Contains(body, "hlsd_connected_channels 1") {
+		t.Fatalf("body missing \"hlsd_connected_channels 1\" after seeded channel connects; got:\n%s", body)
 	}
 	if !strings.Contains(body, "go_goroutines") {
 		t.Fatalf("body missing go_goroutines (runtime collector); got:\n%s", body)
@@ -88,8 +88,8 @@ func TestRun_MetricsEndpoint_NoChannels(t *testing.T) {
 	if resp != http.StatusOK {
 		t.Fatalf("GET /metrics status = %d", resp)
 	}
-	if !strings.Contains(string(buf), "hls_server_connected_channels 0") {
-		t.Fatalf("body missing \"hls_server_connected_channels 0\"; got:\n%s", buf)
+	if !strings.Contains(string(buf), "hlsd_connected_channels 0") {
+		t.Fatalf("body missing \"hlsd_connected_channels 0\"; got:\n%s", buf)
 	}
 }
 

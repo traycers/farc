@@ -1,0 +1,17 @@
+FROM golang:1.26-bookworm AS builder
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /out/hlsd ./cmd/hlsd
+
+FROM debian:12-slim AS runtime
+WORKDIR /app
+COPY --from=builder /out/hlsd ./hlsd
+ENTRYPOINT ["./hlsd"]
+CMD ["-c", "/etc/hlsd/hlsd.config.json"]

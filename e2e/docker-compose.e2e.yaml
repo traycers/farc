@@ -1,6 +1,6 @@
 # e2e stack (PLAN.md Phase 17): a real RTSP source (mediamtx + ffmpeg loop of
 # a user-supplied e2e/media/sample.mp4) feeding two channels concurrently
-# into farcd/hls_server, so a real Playwright/Chromium session can drive
+# into farcd/hlsd, so a real Playwright/Chromium session can drive
 # hls.js against genuine, decodable media instead of the synthetic byte
 # fixtures every other test in this repo uses. Reuses the root Dockerfiles
 # unchanged -- only the compose wiring and RTSP source are new.
@@ -17,6 +17,9 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
       - "8554:8554"
+      - "8889:8889"
+    expose:
+      - "9997"
     restart: unless-stopped
 
   # Publishes e2e/media/sample.mp4 into mediamtx on loop, as two independent
@@ -70,43 +73,43 @@ services:
       - mediamtx
     restart: unless-stopped
 
-  hls_server:
+  hlsd:
     build:
       context: ..
-      dockerfile: Dockerfile.hls_server
+      dockerfile: Dockerfile.hlsd
     environment:
-      HLS_SERVER_HTTP_IP: "0.0.0.0"
-      HLS_SERVER_HTTP_PORT: "8090"
-      HLS_SERVER_METRICS_IP: "0.0.0.0"
-      HLS_SERVER_METRICS_PORT: "9091"
-      HLS_SERVER_FARC_HTTP: "http://farc:8080"
-      HLS_SERVER_FARC_WS: "ws://farc:8081"
-      HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
+      HLSD_HTTP_IP: "0.0.0.0"
+      HLSD_HTTP_PORT: "8090"
+      HLSD_METRICS_IP: "0.0.0.0"
+      HLSD_METRICS_PORT: "9091"
+      HLSD_FARC_HTTP: "http://farc:8080"
+      HLSD_FARC_WS: "ws://farc:8081"
+      HLSD_TARGET_SEGMENT_DURATION: "2s"
       # Required regardless of cache_backend (internal/hlsconfig also roots
       # staging dirs under it) -- s3 mode below doesn't exempt it.
-      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
+      HLSD_CACHE_DIR: "/var/cache/hlsd"
       # s3 (not the disk default) so this stack actually exercises
       # internal/segmentcache's S3 backend end to end -- the existing
       # two-channel-playback.spec.ts already drives real cache-miss-then-hit
       # playback, so it covers the new backend with no test changes needed.
-      HLS_SERVER_CACHE_BACKEND: "s3"
-      HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
-      HLS_SERVER_S3_BUCKET: "hls-segments"
-      HLS_SERVER_S3_ACCESS_KEY: "hls_server"
-      HLS_SERVER_S3_SECRET_KEY: "changeme"
-      HLS_SERVER_S3_USE_SSL: "false"
+      HLSD_CACHE_BACKEND: "s3"
+      HLSD_S3_ENDPOINT: "seaweedfs:8333"
+      HLSD_S3_BUCKET: "hls-segments"
+      HLSD_S3_ACCESS_KEY: "hlsd"
+      HLSD_S3_SECRET_KEY: "changeme"
+      HLSD_S3_USE_SSL: "false"
     volumes:
-      - hls_config:/etc/hls_server
+      - hlsd_config:/etc/hlsd
     depends_on:
       - farc
       - seaweedfs
     restart: unless-stopped
 
   # All-in-one SeaweedFS (master+volume+filer+S3 gateway) backing
-  # hls_server's segment cache in s3 mode above -- see docker-compose.yaml's
+  # hlsd's segment cache in s3 mode above -- see docker-compose.yaml's
   # own seaweedfs service comment for why this one process is enough here.
   # SeaweedFS doesn't auto-create buckets, so bucket-create runs once before
-  # hls_server starts serving (hls_server itself never creates its bucket).
+  # hlsd starts serving (hlsd itself never creates its bucket).
   seaweedfs:
     image: chrislusf/seaweedfs:latest
     command: server -s3 -s3.port=8333 -dir=/data
@@ -121,6 +124,26 @@ services:
       - seaweedfs
     restart: "no"
 
+  apid:
+    build:
+      context: ..
+      dockerfile: Dockerfile.apid
+    environment:
+      APID_HTTP_IP: "0.0.0.0"
+      APID_HTTP_PORT: "8100"
+      APID_METRICS_IP: "0.0.0.0"
+      APID_METRICS_PORT: "9101"
+      APID_FARC_HTTP: "http://farc:8080"
+      APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
+      APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
+      APID_WEBRTC_PUBLIC_BASE: "http://localhost:8889"
+    volumes:
+      - apid_config:/etc/apid
+    depends_on:
+      - farc
+      - mediamtx
+    restart: unless-stopped
+
   web:
     build:
       context: ../web
@@ -128,10 +151,12 @@ services:
       - "18080:80"
     depends_on:
       - farc
-      - hls_server
+      - hlsd
+      - apid
     restart: unless-stopped
 
 volumes:
   farc_config:
   farc_data:
-  hls_config:
+  hlsd_config:
+  apid_config:

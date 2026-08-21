@@ -1,10 +1,41 @@
-# Local dev RTSP test source (docker-compose.yaml's mediamtx/ffmpeg-test
-# services) -- lets the "Generate" button on the channel-add page fill in a
-# real, always-available RTSP URL instead of a placeholder. mediamtx itself
-# just accepts the publish + serves it back out; ffmpeg-test (in
-# docker-compose.yaml) does the actual "loop e2e/media/sample.mp4" job, same
-# split as e2e/mediamtx.yml.
+# RTSP test source (docker-compose.yaml's mediamtx/ffmpeg-test services --
+# lets the "Generate" button on the channel-add page fill in a real,
+# always-available RTSP URL instead of a placeholder) AND, since
+# .scratch/live-page/spec.md, the one thing that ever connects to a real
+# camera in production: apid (internal/apid) adds/patches/deletes paths
+# here via the control API below as channels are created/edited/removed,
+# and farcd's own ingest pulls each channel's stream from here (never the
+# camera directly -- see that spec's "single RTSP connection to the
+# camera" decision) over rtspAddress. webrtc below is what the web app's
+# Live page actually plays.
 rtspAddress: :8554
+
+# Control API (apid's target -- POST/PATCH/DELETE /v3/config/paths/...,
+# https://mediamtx.org/docs/features/control-api) -- off by default.
+api: yes
+apiAddress: :9997
+
+# WebRTC/WHEP (the web app's Live page's video source).
+webrtc: yes
+webrtcAddress: :8889
+
+# mediamtx's default authInternalUsers scopes the "api"/"metrics"/"pprof"
+# actions to ips: ["127.0.0.1", "::1"] -- apid calls the control API from a
+# different container on this compose network, not localhost, so that
+# default would reject it. Widening to ips: [] (any) is safe here only
+# because apiAddress is never published to the host (docker-compose.yaml)
+# -- reachable from inside this compose network alone, the same trust
+# boundary farcd's/hlsd's own unauthenticated internal REST APIs
+# already rely on.
+authInternalUsers:
+  - user: any
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
 
 paths:
   test:

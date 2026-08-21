@@ -1,5 +1,5 @@
 // Package playlist builds a static VOD HLS playlist (.m3u8) for a
-// (channel, t1, t2) playback window, reading only hls_server's local
+// (channel, t1, t2) playback window, reading only hlsd's local
 // tocindex.Index (ADR-018) — no farcd round trip on this hot path. Per
 // ADR-019, the segment grid restarts at each fcontainer boundary and never
 // crosses it; adjacent fcontainers with a different active codec config get

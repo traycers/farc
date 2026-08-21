@@ -1,6 +1,6 @@
 # Live page: per-channel live video + status, backed by a new `apid` + mediamtx
 
-Status: design agreed (2026-08-21, via `/mattpocock-skills:grilling`) — not yet implemented
+Status: implemented (2026-08-21, via `/mattpocock-skills:tdd`) — see `issues/01`–`07`, all fixed
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # Rename hls_server binary to hlsd
 
-Status: design agreed (2026-08-21, via `/mattpocock-skills:grilling`) — not yet implemented
+Status: implemented (2026-08-21, via `/mattpocock-skills:tdd`) — see `issues/01`, fixed
 
 ## Problem
 

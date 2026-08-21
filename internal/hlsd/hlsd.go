@@ -1,4 +1,4 @@
-// Package hlsd is hls_server's process wiring, mirroring internal/farcd's
+// Package hlsd is hlsd's process wiring, mirroring internal/farcd's
 // own New/SetLogger/Run/shutdown orchestrator shape: load hlsconfig ->
 // build the one hlsclient.Client for cfg.Farcd (ADR-020) -> open the disk
 // segment cache -> run a reconciliation loop that starts one
@@ -71,7 +71,7 @@ type trackedSub struct {
 	storage string
 }
 
-// Hlsd is one running hls_server process.
+// Hlsd is one running hlsd process.
 type Hlsd struct {
 	index     *tocindex.Index
 	client    hlsclient.API
@@ -137,13 +137,13 @@ func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 	h.apiServer = hlsapi.New(h.index, h.client, initial, h.cache, cfg.TargetSegmentDuration.Duration())
 	// trace forwards to h.logf by field access, not by value, so it keeps
 	// working after SetLogger replaces h.logf -- SetLogger is only called by
-	// cmd/hls_server after New returns, but httpSrv is built here, inside
+	// cmd/hlsd after New returns, but httpSrv is built here, inside
 	// New, so capturing h.logf itself would forever bind to its no-op
 	// default set above.
 	trace := func(format string, args ...any) { h.logf(format, args...) }
 	// httpMetrics registers onto the same registry newMetricsHandler serves
 	// below, so it shows up on the same scrape as the existing
-	// go_*/process_*/hls_server_connected_channels metrics.
+	// go_*/process_*/hlsd_connected_channels metrics.
 	metricsReg := newMetricsRegistry(h)
 	httpMetrics := tracing.NewHTTPMetrics(metricsReg)
 	h.httpSrv = &http.Server{Addr: cfg.HTTP.String(), Handler: tracing.Middleware(trace, httpMetrics)(h.apiServer.Handler()), ReadHeaderTimeout: readHeaderTimeout}
@@ -156,7 +156,7 @@ func New(cfg *hlsconfig.Config, configPath string) (*Hlsd, error) {
 
 // newCache builds cfg.CacheBackend's segmentcache.Cache -- "disk" (the
 // quota-bounded local LRU) or "s3" (object storage shared across every
-// hls_server replica, see internal/segmentcache's package doc). cfg is
+// hlsd replica, see internal/segmentcache's package doc). cfg is
 // assumed already validated by hlsconfig.Load, so CacheBackend is one of
 // these two values and the fields each one needs are non-empty.
 func newCache(cfg *hlsconfig.Config) (*segmentcache.Cache, error) {
@@ -198,7 +198,7 @@ func newS3Client(cfg *hlsconfig.Config) (*s3.Client, error) {
 // package's own shutdown/reconciliation logging and passed to every
 // tocindex.EventSubscriber started after this call — Run's seed loop and
 // reconcile's startChannel both construct subscribers only after SetLogger
-// has already been called (cmd/hls_server always calls SetLogger before
+// has already been called (cmd/hlsd always calls SetLogger before
 // Run).
 func (h *Hlsd) SetLogger(logf func(format string, args ...any)) {
 	if logf == nil {

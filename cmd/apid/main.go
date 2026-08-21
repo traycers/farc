@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/traycers/farc/cmd/hls_server/commands"
+	"github.com/traycers/farc/cmd/apid/commands"
 )
 
 func main() {

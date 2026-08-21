@@ -16,6 +16,7 @@ export default defineConfig({
         rewrite: (p) => p.replace(/^\/api\/farcd/, ''),
       },
       '/api/hls': { target: 'http://localhost:8090', rewrite: (p) => p.replace(/^\/api\/hls/, '') },
+      '/api/apid': { target: 'http://localhost:8100', rewrite: (p) => p.replace(/^\/api\/apid/, '') },
       '/api/events': {
         target: 'http://localhost:8081',
         ws: true,

@@ -1,7 +1,7 @@
-// Package segmentcache is hls_server's cache of already-built segments. A
+// Package segmentcache is hlsd's cache of already-built segments. A
 // disk-backed Cache (New) is quota-bounded with LRU eviction, one process
 // per directory. An object-storage-backed Cache (NewS3) has no local disk to
-// bound and no per-process state at all — every hls_server replica reads and
+// bound and no per-process state at all — every hlsd replica reads and
 // writes the same bucket, so there's nothing to evict or warm-start; space
 // bounding for that backend is a store-side lifecycle policy, not this
 // package's job. Either way, this package never talks to farcd or rebuilds a

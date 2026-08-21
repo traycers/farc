@@ -1,4 +1,4 @@
-// Package toccache is hls_server's persistent on-disk cache of TOC bytes,
+// Package toccache is hlsd's persistent on-disk cache of TOC bytes,
 // keyed by (storage id, fcontainer UUID) -- see
 // .scratch/hls-toc-bootstrap/issues/02-persistent-toc-cache-and-catalog-diff.md.
 // It has no eviction policy of its own: the catalog-diff bootstrap in

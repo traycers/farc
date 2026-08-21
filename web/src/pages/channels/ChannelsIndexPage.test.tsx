@@ -1,9 +1,10 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ChannelsIndexPage from './ChannelsIndexPage'
 import type { ChannelInfo, StorageInfo } from '../../api/farcd'
 import type { JournalEvent } from '../../api/events'
+import { removeChannel } from '../../api/apid'
 
 let storages: StorageInfo[] = [{ id: 's1', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } }]
 let channels: ChannelInfo[] = []
@@ -11,10 +12,13 @@ let channels: ChannelInfo[] = []
 vi.mock('../../api/farcd', () => ({
   listStorages: vi.fn(async () => storages),
   listChannels: vi.fn(async () => channels),
-  removeChannel: vi.fn(),
   startRecording: vi.fn(),
   stopRecording: vi.fn(),
   triggerEvent: vi.fn(),
+}))
+
+vi.mock('../../api/apid', () => ({
+  removeChannel: vi.fn(async () => ({ farcd: 'ok', mediamtx: 'ok' })),
 }))
 
 let onJournalEvent: (e: JournalEvent) => void = () => {}
@@ -101,6 +105,19 @@ describe('ChannelsIndexPage', () => {
 
     act(() => onJournalEvent({ type: 'event', name: 'channel.rtsp.connected', channel: 1 }))
     expect(screen.queryByTestId('channel-connect-error-1')).not.toBeInTheDocument()
+  })
+})
+
+describe('ChannelsIndexPage remove action (.scratch/live-page/issues/03)', () => {
+  it('removes the channel via apid, not farcd directly', async () => {
+    channels = [
+      { channel: 1, name: 'cam1', rtsp_url: 'rtsp://a', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0 },
+    ]
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /remove/i }))
+
+    await vi.waitFor(() => expect(removeChannel).toHaveBeenCalledWith(1))
   })
 })
 

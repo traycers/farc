@@ -9,6 +9,42 @@
 # get the already-rendered file inside the tar and should not need to edit
 # it by hand -- extract, `docker load -i images.tar`, `docker compose up -d`.
 services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+      # WebRTC/WHEP -- the web app's Live page connects here directly from
+      # the browser (.scratch/live-page/spec.md).
+      - "8889:8889"
+    expose:
+      # Control API (mediamtx.yml's api/apiAddress) -- apid's target,
+      # deliberately not published to the host.
+      - "9997"
+    restart: unless-stopped
+
+  apid:
+    image: apid:__VERSION__
+    environment:
+      APID_HTTP_IP: "0.0.0.0"
+      APID_HTTP_PORT: "8100"
+      APID_METRICS_IP: "0.0.0.0"
+      APID_METRICS_PORT: "9101"
+      APID_FARC_HTTP: "http://farc:8080"
+      APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
+      APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
+      # Operators MUST replace this with the actual public host/domain
+      # browsers reach mediamtx's WebRTC port through -- "localhost" only
+      # makes sense for a single-machine deployment.
+      APID_WEBRTC_PUBLIC_BASE: "http://localhost:8889"
+    volumes:
+      - apid_config:/etc/apid
+    depends_on:
+      - farc
+      - mediamtx
+    restart: unless-stopped
+
   farc:
     image: farc:__VERSION__
     environment:
@@ -24,34 +60,34 @@ services:
       - farc_data:/data
     restart: unless-stopped
 
-  hls_server:
-    image: hls_server:__VERSION__
+  hlsd:
+    image: hlsd:__VERSION__
     environment:
-      HLS_SERVER_HTTP_IP: "0.0.0.0"
-      HLS_SERVER_HTTP_PORT: "8090"
-      HLS_SERVER_METRICS_IP: "0.0.0.0"
-      HLS_SERVER_METRICS_PORT: "9091"
-      HLS_SERVER_FARC_HTTP: "http://farc:8080"
-      HLS_SERVER_FARC_WS: "ws://farc:8081"
-      HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
-      HLS_SERVER_CACHE_BACKEND: "disk"
-      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
-      HLS_SERVER_CACHE_QUOTA_BYTES: "10737418240"
-      HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
-      HLS_SERVER_S3_BUCKET: "hls-segments"
-      HLS_SERVER_S3_ACCESS_KEY: "hls_server"
-      HLS_SERVER_S3_SECRET_KEY: "changeme"
-      HLS_SERVER_S3_USE_SSL: "false"
+      HLSD_HTTP_IP: "0.0.0.0"
+      HLSD_HTTP_PORT: "8090"
+      HLSD_METRICS_IP: "0.0.0.0"
+      HLSD_METRICS_PORT: "9091"
+      HLSD_FARC_HTTP: "http://farc:8080"
+      HLSD_FARC_WS: "ws://farc:8081"
+      HLSD_TARGET_SEGMENT_DURATION: "2s"
+      HLSD_CACHE_BACKEND: "disk"
+      HLSD_CACHE_DIR: "/var/cache/hlsd"
+      HLSD_CACHE_QUOTA_BYTES: "10737418240"
+      HLSD_S3_ENDPOINT: "seaweedfs:8333"
+      HLSD_S3_BUCKET: "hls-segments"
+      HLSD_S3_ACCESS_KEY: "hlsd"
+      HLSD_S3_SECRET_KEY: "changeme"
+      HLSD_S3_USE_SSL: "false"
     volumes:
-      - hls_config:/etc/hls_server
-      - hls_cache:/var/cache/hls_server
+      - hlsd_config:/etc/hlsd
+      - hlsd_cache:/var/cache/hlsd
     depends_on:
       - farc
     restart: unless-stopped
 
   # Same opt-in profile as the root compose file: `docker compose up -d`
   # leaves this out; `docker compose --profile s3 up -d` brings it in,
-  # alongside switching hls_server's HLS_SERVER_CACHE_BACKEND above to "s3".
+  # alongside switching hlsd's HLSD_CACHE_BACKEND above to "s3".
   # References only a public upstream image, so there's nothing to
   # template here.
   seaweedfs:
@@ -69,11 +105,12 @@ services:
       - "18881:80"
     depends_on:
       - farc
-      - hls_server
+      - hlsd
+      - apid
     restart: unless-stopped
 
   # Observability stack (.scratch/observability/spec.md) -- always on, not
-  # an opt-in profile like s3 above: scrapes farc/hls_server's /metrics,
+  # an opt-in profile like s3 above: scrapes farc/hlsd's /metrics,
   # ships every container's stdout/stderr into Loki, and serves three
   # pre-built Grafana dashboards. References only public upstream images,
   # so there's nothing to template here.
@@ -119,8 +156,9 @@ services:
 volumes:
   farc_config:
   farc_data:
-  hls_config:
-  hls_cache:
+  hlsd_config:
+  hlsd_cache:
+  apid_config:
   seaweedfs_data:
   prometheus_data:
   loki_data:

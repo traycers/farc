@@ -94,6 +94,13 @@ linters:
         # the per-file exclusions below for tests) with the project's actual
         # exceptions; enforcing both just double-reports the same lines.
         - G104
+        # G704 (SSRF via taint analysis): every flagged call is
+        # internal/apid's own farcd-client/mediamtx-client issuing a
+        # request whose base URL comes from apidconfig (operator-supplied
+        # deployment config -- APID_FARC_HTTP/APID_MEDIAMTX_API_BASE), the
+        # same "operator input, not attacker input" story as the G304
+        # exclude above, not a genuine server-side-request-forgery path.
+        - G704
   exclusions:
     rules:
       # Cleanup-only Close()/goroutine-launch error returns in tests aren't

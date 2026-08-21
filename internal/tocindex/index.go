@@ -1,9 +1,9 @@
-// Package tocindex maintains hls_server's in-memory ChannelIndex: per
+// Package tocindex maintains hlsd's in-memory ChannelIndex: per
 // channel, a time-ordered set of fcontainer records with their already
 // decoded TOC (ADR-018). EventSubscriber keeps it current from farcd's push
 // events, falling back to a bootstrap resolve only on (re)connect — the
 // index is what lets playlist/segment building read a fully local structure
-// on hls_server's hot path instead of round-tripping to farcd per request.
+// on hlsd's hot path instead of round-tripping to farcd per request.
 package tocindex
 
 import (
@@ -114,7 +114,7 @@ func (c *ChannelIndex) All() []Record {
 	return c.Records(0, ^uint64(0))
 }
 
-// Index holds one ChannelIndex per channel hls_server is configured to
+// Index holds one ChannelIndex per channel hlsd is configured to
 // serve, created lazily on first access.
 type Index struct {
 	mu       sync.Mutex

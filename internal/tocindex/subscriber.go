@@ -55,7 +55,7 @@ type EventSubscriber struct {
 }
 
 // NewEventSubscriber creates a subscriber that keeps index current for
-// channels on storageID, via client. cache is hls_server's persistent
+// channels on storageID, via client. cache is hlsd's persistent
 // on-disk TOC store (issue
 // .scratch/hls-toc-bootstrap/issues/02-persistent-toc-cache-and-catalog-diff.md):
 // bootstrap diffs against it instead of refetching every retained

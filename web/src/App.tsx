@@ -6,6 +6,7 @@ import ChannelsIndexPage from './pages/channels/ChannelsIndexPage'
 import ChannelNewPage from './pages/channels/ChannelNewPage'
 import ChannelEditPage from './pages/channels/ChannelEditPage'
 import PlayerPage from './pages/PlayerPage'
+import LivePage from './pages/LivePage'
 import JournalPage from './pages/JournalPage'
 import FblockTreePage from './pages/FblockTreePage'
 import FblocksGridPage from './pages/FblocksGridPage'
@@ -31,6 +32,9 @@ export default function App() {
             <NavLink to="/player" className={navLinkClass}>
               Player
             </NavLink>
+            <NavLink to="/live" className={navLinkClass}>
+              Live
+            </NavLink>
             <NavLink to="/journal" className={navLinkClass}>
               Журнал
             </NavLink>
@@ -51,6 +55,7 @@ export default function App() {
             <Route path=":id/edit" element={<ChannelEditPage />} />
           </Route>
           <Route path="/player" element={<PlayerPage />} />
+          <Route path="/live" element={<LivePage />} />
           <Route path="/journal" element={<JournalPage />} />
           <Route path="/storages/:id/fblocks" element={<FblocksGridPage />} />
           <Route path="/storages/:id/fblocks-list" element={<FblocksListPage />} />

@@ -11,8 +11,10 @@ env:
 vars:
   z_name: farc
   z_file_name: "{{.z_name}}{{exeExt}}"
-  z_hls_name: hls_server
-  z_hls_file_name: "{{.z_hls_name}}{{exeExt}}"
+  z_hlsd_name: hlsd
+  z_hlsd_file_name: "{{.z_hlsd_name}}{{exeExt}}"
+  z_apid_name: apid
+  z_apid_file_name: "{{.z_apid_name}}{{exeExt}}"
 
 
 
@@ -43,7 +45,7 @@ tasks:
       - go test ./...
 
   test/e2e:
-    desc: "полный e2e (mediamtx -> farcd -> hls_server -> Playwright); требует Docker и e2e/media/sample.mp4"
+    desc: "полный e2e (mediamtx -> farcd -> hlsd -> Playwright); требует Docker и e2e/media/sample.mp4"
     dir: "{{.USER_WORKING_DIR}}/e2e"
     cmds:
       - docker compose -f docker-compose.e2e.yaml up -d --build
@@ -89,20 +91,35 @@ tasks:
     generates:
       - "./{{.z_file_name}}"
 
-  build/hls_server:
-    desc: "собирает проект {{.z_hls_name}}"
+  build/hlsd:
+    desc: "собирает проект {{.z_hlsd_name}}"
     cmds:
       - >
         go build
-        -o {{.z_hls_file_name}}
-        ./cmd/{{.z_hls_name}}
+        -o {{.z_hlsd_file_name}}
+        ./cmd/{{.z_hlsd_name}}
     sources:
-      - ./cmd/{{.z_hls_name}}/**/*.go
+      - ./cmd/{{.z_hlsd_name}}/**/*.go
       - ./internal/**/*.go
       - ./pkg/**/*.go
       - ./cmd/**/*.go
     generates:
-      - "./{{.z_hls_file_name}}"
+      - "./{{.z_hlsd_file_name}}"
+
+  build/apid:
+    desc: "собирает проект {{.z_apid_name}}"
+    cmds:
+      - >
+        go build
+        -o {{.z_apid_file_name}}
+        ./cmd/{{.z_apid_name}}
+    sources:
+      - ./cmd/{{.z_apid_name}}/**/*.go
+      - ./internal/**/*.go
+      - ./pkg/**/*.go
+      - ./cmd/**/*.go
+    generates:
+      - "./{{.z_apid_file_name}}"
 
   build/web:
     desc: "собирает веб-клиент (web/) через Vite"
@@ -122,7 +139,8 @@ tasks:
     desc: "собирает все проекты"
     cmds:
       - task: build/app
-      - task: build/hls_server
+      - task: build/hlsd
+      - task: build/apid
       - task: build/web
 
   run:

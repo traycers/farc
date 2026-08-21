@@ -17,7 +17,7 @@ import { test, expect } from '@playwright/test'
 // So FBLOCK_SIZE here is deliberately small enough that BOTH triggered
 // bursts' *combined* real content crosses fullness sometime during/after
 // the second burst -- landing both bursts (and the gap between them) in
-// one fblock's TOC, which is what hls_server's video-presence computation
+// one fblock's TOC, which is what hlsd's video-presence computation
 // needs to see the gap at all.
 //
 // Own local storage/channel/trigger helpers, not shared with setup.ts or
@@ -25,7 +25,7 @@ import { test, expect } from '@playwright/test'
 // (continuous-rotation.spec.ts, journal.spec.ts each own theirs too).
 
 const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:18081'
-// hls_server has no published host port in production (internal/hlsapi's
+// hlsd has no published host port in production (internal/hlsapi's
 // server is only reachable from other containers on the compose network);
 // this test runs inside that network (see e2e/README-less docker-run
 // invocation), so the compose service name resolves directly.
@@ -48,7 +48,7 @@ const FBLOCK_SIZE = 12 * 1024 * 1024
 // fullness during burst 2 -- landing both bursts, and the gap between
 // them, in one fblock's TOC).
 const POSTRECORD_NS = 15_000_000_000
-// Comfortably over hls_server's 2s video-presence gap threshold
+// Comfortably over hlsd's 2s video-presence gap threshold
 // (.scratch/player-redesign/issues/01-hls-server-timeline-endpoint.md).
 const GAP_IDLE_MS = 3_500
 const FBLOCK_READY_POLL_TIMEOUT_MS = 90_000
@@ -152,7 +152,7 @@ type Segment = { begin: bigint; end: bigint }
 type RawSegment = { begin: string; end: string }
 type RawChannelTimeline = { channel: number; segments: RawSegment[] }
 
-// Queries hls_server's own new timeline endpoint directly (not farcd's
+// Queries hlsd's own new timeline endpoint directly (not farcd's
 // coarser per-fcontainer `candidates`, which wouldn't show the internal
 // gap at all -- candidates spans a whole fcontainer's first-to-last frame
 // range, while the video-presence gap-split this test cares about is TOC-
@@ -191,9 +191,9 @@ test('a >=2s idle gap between two triggered bursts shows as 2+ timeline segments
   await triggerEvent()
   await waitForFblockReady(0)
 
-  // hls_server indexes a fblock asynchronously off farcd's WS push
+  // hlsd indexes a fblock asynchronously off farcd's WS push
   // (internal/tocindex.EventSubscriber) -- farcd's own catalog can already
-  // report the fblock Ready a moment before hls_server's /timeline
+  // report the fblock Ready a moment before hlsd's /timeline
   // reflects it, so poll rather than fetching once.
   const t2 = BigInt(Date.now()) * 1_000_000n
   let segments: Segment[] = []

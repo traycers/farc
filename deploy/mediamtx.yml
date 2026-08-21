@@ -1,0 +1,30 @@
+# Production mediamtx config (.scratch/live-page/spec.md): the only thing
+# that ever connects to a real camera -- apid (internal/apid) adds/patches/
+# deletes paths here via the control API below as channels are created/
+# edited/removed, and farcd's own ingest pulls each channel's stream from
+# here (never the camera directly). No static "paths:" here, unlike
+# mediamtx.dev.yml's dev-only "test" path -- every path in production comes
+# from apid, dynamically. See that file's own comments for the full
+# rationale behind each setting below.
+rtspAddress: :8554
+
+api: yes
+apiAddress: :9997
+
+webrtc: yes
+webrtcAddress: :8889
+
+# Widened from mediamtx's own default (api/metrics/pprof restricted to
+# ips: ["127.0.0.1", "::1"]) so apid, running in its own container, can
+# reach the control API -- safe only because apiAddress is never published
+# to the host (deploy/docker-compose.release.yaml), i.e. reachable from
+# inside this compose network alone.
+authInternalUsers:
+  - user: any
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics

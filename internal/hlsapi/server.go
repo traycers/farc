@@ -1,4 +1,4 @@
-// Package hlsapi is hls_server's player-facing HTTP surface: the .m3u8
+// Package hlsapi is hlsd's player-facing HTTP surface: the .m3u8
 // playlist route and the init/media segment routes it references, backed by
 // internal/playlist, internal/segment and internal/segmentcache. It never
 // talks to farcd's write path or Storage directly — only through
@@ -58,16 +58,16 @@ func (s *channelSet) Remove(id uint16) {
 // onto one net/http.ServeMux, matching internal/api/server.go's own style.
 type Server struct {
 	index     *tocindex.Index
-	client    hlsclient.API // the one farcd this hls_server talks to (ADR-020)
-	channels  *channelSet   // which channels this hls_server is configured to serve
+	client    hlsclient.API // the one farcd this hlsd talks to (ADR-020)
+	channels  *channelSet   // which channels this hlsd is configured to serve
 	cache     *segmentcache.Cache
 	targetDur time.Duration
 	mux       *http.ServeMux
 }
 
 // New builds a Server. client is the hlsclient.Client for the one farcd
-// hls_server talks to (ADR-020 — v1 supports exactly one, not a per-channel
-// choice); channels is the initial set of channel numbers this hls_server is
+// hlsd talks to (ADR-020 — v1 supports exactly one, not a per-channel
+// choice); channels is the initial set of channel numbers this hlsd is
 // configured to serve — the segment route only carries (channel, storage,
 // uuid), not anything to distinguish configured from unconfigured channels
 // on its own, so handlers consult this set directly. It's grown/shrunk at

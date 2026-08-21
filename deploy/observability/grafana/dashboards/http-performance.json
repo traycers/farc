@@ -32,12 +32,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(http_request_duration_seconds_bucket{job=~\"farc|hls_server\"}[5m])) by (le, job))",
+          "expr": "histogram_quantile(0.5, sum(rate(http_request_duration_seconds_bucket{job=~\"farc|hlsd|apid\"}[5m])) by (le, job))",
           "legendFormat": "{{job}} p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"farc|hls_server\"}[5m])) by (le, job))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"farc|hlsd|apid\"}[5m])) by (le, job))",
           "legendFormat": "{{job}} p95",
           "refId": "B"
         }
@@ -51,7 +51,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
       "targets": [
-        { "expr": "process_resident_memory_bytes{job=~\"farc|hls_server\"}", "legendFormat": "{{job}}", "refId": "A" }
+        { "expr": "process_resident_memory_bytes{job=~\"farc|hlsd|apid\"}", "legendFormat": "{{job}}", "refId": "A" }
       ]
     },
     {
@@ -64,12 +64,12 @@
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{job=~\"farc|hls_server\", code=~\"5..\"}[5m])) by (job)",
+          "expr": "sum(rate(http_requests_total{job=~\"farc|hlsd|apid\", code=~\"5..\"}[5m])) by (job)",
           "legendFormat": "{{job}} 5xx",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(http_requests_total{job=~\"farc|hls_server\", code=~\"4..\"}[5m])) by (job)",
+          "expr": "sum(rate(http_requests_total{job=~\"farc|hlsd|apid\", code=~\"4..\"}[5m])) by (job)",
           "legendFormat": "{{job}} 4xx",
           "refId": "B"
         }
@@ -84,7 +84,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
       "targets": [
-        { "expr": "rate(process_cpu_seconds_total{job=~\"farc|hls_server\"}[5m])", "legendFormat": "{{job}}", "refId": "A" }
+        { "expr": "rate(process_cpu_seconds_total{job=~\"farc|hlsd|apid\"}[5m])", "legendFormat": "{{job}}", "refId": "A" }
       ]
     }
   ]

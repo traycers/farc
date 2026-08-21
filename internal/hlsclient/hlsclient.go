@@ -1,6 +1,6 @@
 // Package hlsclient is a typed HTTP+WS client for farcd's external read API
 // (internal/api's HttpApiServer and EventPushServer) — GetTOC, ReadRanges,
-// Candidates, Resolve, Subscribe. hls_server talks to farcd only through
+// Candidates, Resolve, Subscribe. hlsd talks to farcd only through
 // this client, never touching internal/storage directly
 // (docs/docs/archive/12-hls-server.md, PLAN.md's package layout).
 //
@@ -101,7 +101,7 @@ func (c *Client) do(ctx context.Context, path string) ([]byte, error) {
 	// Forward the browser request's own trace headers (if any) onto this
 	// internal call to farcd, so one playback request's playlist/segment
 	// fetches all show up under the same request_id/session_id in both
-	// hls_server's and farcd's access logs.
+	// hlsd's and farcd's access logs.
 	if reqID, ok := tracing.RequestID(ctx); ok {
 		req.Header.Set(tracing.HeaderRequestID, reqID)
 	}
@@ -187,7 +187,7 @@ type wireResolvedFrame struct {
 }
 
 // ResolvedFrame is one GET .../resolve result entry — the ADR-016 fallback
-// path, used by hls_server only for index bootstrap/reconnect (ADR-018), not
+// path, used by hlsd only for index bootstrap/reconnect (ADR-018), not
 // as the per-request playback path.
 type ResolvedFrame struct {
 	UUID [16]byte
@@ -291,7 +291,7 @@ func (c *Client) GetTOC(ctx context.Context, storageID string, uuid [16]byte) (*
 }
 
 // wireChannelInfo mirrors internal/api's channelInfo -- only the fields
-// this package's own ChannelInfo actually needs (hls_server's
+// this package's own ChannelInfo actually needs (hlsd's
 // reconciliation cares which channel is on which storage, nothing else
 // GET /channels reports).
 type wireChannelInfo struct {

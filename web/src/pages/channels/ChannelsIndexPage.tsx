@@ -3,14 +3,15 @@ import { Link } from 'react-router-dom'
 import {
   listChannels,
   listStorages,
-  removeChannel,
   startRecording,
   stopRecording,
   triggerEvent,
   type ChannelInfo,
   type StorageInfo,
 } from '../../api/farcd'
+import { removeChannel } from '../../api/apid'
 import { subscribeJournal } from '../../api/events'
+import ChannelStatusIndicator from '../../components/ChannelStatusIndicator'
 
 export default function ChannelsIndexPage() {
   const [storages, setStorages] = useState<StorageInfo[]>([])
@@ -164,10 +165,10 @@ export default function ChannelsIndexPage() {
                 <td>{c.channel}</td>
                 <td>{c.name}</td>
                 <td>
-                  <span
-                    data-testid={`channel-recording-dot-${c.channel}`}
-                    className={`status-dot ${c.recording ? 'status-dot-recording' : 'status-dot-idle'}`}
-                    title={c.recording ? 'recording' : 'not recording'}
+                  <ChannelStatusIndicator
+                    channel={c.channel}
+                    connected={!c.last_connect_error}
+                    recording={!!c.recording}
                   />
                   {c.last_connect_error && (
                     <div className="text-danger small" data-testid={`channel-connect-error-${c.channel}`}>

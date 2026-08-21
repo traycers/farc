@@ -64,7 +64,7 @@ nav:
       - Деревья на базе массивов: archive/08-array-trees.md
       - Политика захвата: archive/10-capture-policy.md
       - Композиция сервиса: archive/11-service-composition.md
-      - hls_server (HLS-воспроизведение): archive/12-hls-server.md
+      - hlsd (HLS-воспроизведение): archive/12-hls-server.md
   - ADR:
       - header-location: archive/adr/001-header-location.md
       - index-storage: archive/adr/002-index-storage.md

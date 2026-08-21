@@ -7,15 +7,15 @@ farc's domain: one archive system recording RTSP streams to disk and serving the
 ### System
 
 **Archive**:
-The whole system — every service together (`farcd`, `hls_server`, the web console) plus the data they manage. Not just the `farcd` process.
+The whole system — every service together (`farcd`, `hlsd`, the web console) plus the data they manage. Not just the `farcd` process.
 _Avoid_: using it for a single Storage — see Storage's own `_Avoid_` entry.
 
 **Потребитель (Consumer)**:
-The process embedding the storage library — in this system, that's `farcd` and only `farcd` (`hls_server`/the web console talk to `farcd` over HTTP/WS, they don't embed the library). One Consumer may work with several independent Storages at once.
+The process embedding the storage library — in this system, that's `farcd` and only `farcd` (`hlsd`/the web console talk to `farcd` over HTTP/WS, they don't embed the library). One Consumer may work with several independent Storages at once.
 _Avoid_: conflating this with Archive — Archive is the whole system; Consumer is specifically the one process that calls into `internal/storage`.
 
 **Video Gateway**:
-An architectural role: prepares and delivers video to web clients, talking to `farcd` only through its external API (events/TOC over WebSocket push, reads) — no direct Storage access. `hls_server` is this system's one concrete implementation of the role (a sibling role, Timeline Service, is documented but not implemented here).
+An architectural role: prepares and delivers video to web clients, talking to `farcd` only through its external API (events/TOC over WebSocket push, reads) — no direct Storage access. `hlsd` is this system's one concrete implementation of the role (a sibling role, Timeline Service, is documented but not implemented here).
 
 **Доставка без догона (Best-effort, no catch-up delivery)**:
 The delivery policy for every live push feed in this system — farcd's own WS event feed to any subscriber. Events are sent as they happen; nothing is queued or persisted on the sending side, and a disconnect never triggers replay of what was missed — a reconnecting consumer just picks up wherever the live feed currently is. A deliberate simplicity choice for a first version, not a permanent guarantee.
@@ -82,7 +82,7 @@ An integer `1..65535` that the Consumer uses to tag one data source within an fc
 An index (`0..C-1`) internal to one Storage that a channel number resolves to for `channel_bitmap`. Storage-local — never copy a position between Storages, only the channel number itself. Only freed for reuse once its reference count (the number of fblocks in this Storage whose `channel_bitmap` still has that position's bit set) reaches zero — that happens purely through the normal physical overwrite cycle, never just because the channel was removed from config.
 _Avoid_: confusing this with the channel number itself — the same position index can mean a different channel at different points in time; always read it through the `channel_registry` snapshot embedded in the specific fblock you're looking at, never the Storage's current live one.
 
-### hls_server / playback
+### hlsd / playback
 
 **Сегмент (Segment)**:
 One HLS playlist unit — a CMAF media segment (`.m4s`), served in a single HTTP response.

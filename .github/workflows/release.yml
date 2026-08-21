@@ -103,16 +103,18 @@ jobs:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           docker build -f Dockerfile.farc -t farc:"$VERSION" .
-          docker build -f Dockerfile.hls_server -t hls_server:"$VERSION" .
+          docker build -f Dockerfile.hlsd -t hlsd:"$VERSION" .
+          docker build -f Dockerfile.apid -t apid:"$VERSION" .
           docker build -t web:"$VERSION" ./web
 
       - name: Package release bundle
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
-          docker save -o images.tar farc:"$VERSION" hls_server:"$VERSION" web:"$VERSION"
+          docker save -o images.tar farc:"$VERSION" hlsd:"$VERSION" apid:"$VERSION" web:"$VERSION"
           sed "s/__VERSION__/$VERSION/g" deploy/docker-compose.release.yaml > docker-compose.yaml
-          tar -cf farc-"$VERSION".tar images.tar docker-compose.yaml
+          cp deploy/mediamtx.yml mediamtx.yml
+          tar -cf farc-"$VERSION".tar images.tar docker-compose.yaml mediamtx.yml
 
       - name: Publish GitHub Release
         env:

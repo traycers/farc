@@ -25,7 +25,7 @@ type catalogEntry struct {
 }
 
 // handleGetCatalog implements GET /storages/{id}/catalog: every fblock's
-// state in one response, so a caller like hls_server's diff-based bootstrap
+// state in one response, so a caller like hlsd's diff-based bootstrap
 // doesn't need N per-index requests (GET .../fblocks/{index}) just to learn
 // which uuids are still live. Deliberately unfiltered by channel (decided
 // 2026-08-13) -- the catalog's channel bitmap could narrow this per-caller,

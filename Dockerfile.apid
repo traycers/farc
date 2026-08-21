@@ -8,10 +8,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -o /out/hls_server ./cmd/hls_server
+    CGO_ENABLED=0 go build -o /out/apid ./cmd/apid
 
 FROM debian:12-slim AS runtime
 WORKDIR /app
-COPY --from=builder /out/hls_server ./hls_server
-ENTRYPOINT ["./hls_server"]
-CMD ["-c", "/etc/hls_server/hls_server.config.json"]
+COPY --from=builder /out/apid ./apid
+ENTRYPOINT ["./apid"]
+CMD ["-c", "/etc/apid/apid.config.json"]

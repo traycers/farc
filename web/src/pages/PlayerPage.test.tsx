@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PlayerPage from './PlayerPage'
 import type { ChannelInfo } from '../api/farcd'
@@ -42,6 +43,14 @@ vi.mock('../components/VideoTile', () => ({
   ),
 }))
 
+function renderPage(initialEntries: string[] = ['/player']) {
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <PlayerPage />
+    </MemoryRouter>,
+  )
+}
+
 describe('PlayerPage', () => {
   beforeEach(() => {
     timelineFixture = []
@@ -55,7 +64,7 @@ describe('PlayerPage', () => {
       { channel: 1, segments: [{ begin: 0n, end: 1_000_000_000n }] },
       { channel: 2, segments: [{ begin: 0n, end: 1_000_000_000n }] },
     ]
-    render(<PlayerPage />)
+    renderPage()
 
     await screen.findByLabelText('channel 1')
     fireEvent.click(screen.getByLabelText('channel 1'))
@@ -70,7 +79,7 @@ describe('PlayerPage', () => {
 
   it('clicking a tile makes it the active/audible one', async () => {
     timelineFixture = [{ channel: 1, segments: [{ begin: 0n, end: 1_000_000_000n }] }]
-    render(<PlayerPage />)
+    renderPage()
 
     await screen.findByLabelText('channel 1')
     fireEvent.click(screen.getByLabelText('channel 1'))
@@ -95,7 +104,7 @@ describe('PlayerPage', () => {
         ],
       },
     ]
-    render(<PlayerPage />)
+    renderPage()
 
     await screen.findByLabelText('channel 1')
     fireEvent.click(screen.getByLabelText('channel 1'))
@@ -133,7 +142,7 @@ describe('PlayerPage', () => {
   })
 
   it('Search button is disabled until at least one channel is checked', async () => {
-    render(<PlayerPage />)
+    renderPage()
 
     await screen.findByLabelText('channel 1')
     expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled()
@@ -147,7 +156,7 @@ describe('PlayerPage', () => {
 
   it('search with zero matching segments shows a message and leaves the playhead unset', async () => {
     timelineFixture = [{ channel: 1, segments: [] }]
-    render(<PlayerPage />)
+    renderPage()
 
     await screen.findByLabelText('channel 1')
     fireEvent.click(screen.getByLabelText('channel 1'))
@@ -162,7 +171,7 @@ describe('PlayerPage', () => {
     // slice starting at 5.3s -- rangeStart/playheadNs must land on the
     // data (floored to the whole second: 5s), not on the search window's t1.
     timelineFixture = [{ channel: 1, segments: [{ begin: 5_300_000_000n, end: 5_800_000_000n }] }]
-    render(<PlayerPage />)
+    renderPage()
 
     await screen.findByLabelText('channel 1')
     fireEvent.click(screen.getByLabelText('channel 1'))
@@ -172,5 +181,30 @@ describe('PlayerPage', () => {
     await screen.findByTestId('mock-tile-1')
 
     expect(screen.getByTestId('player-current-time').getAttribute('data-playhead-ns')).toBe('5000000000')
+  })
+})
+
+describe('PlayerPage ?channel= query param (.scratch/live-page/issues/06)', () => {
+  beforeEach(() => {
+    timelineFixture = []
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('pre-checks the named channel and auto-submits the search, no manual click needed', async () => {
+    timelineFixture = [{ channel: 2, segments: [{ begin: 0n, end: 1_000_000_000n }] }]
+    renderPage(['/player?channel=2'])
+
+    await screen.findByTestId('mock-tile-2')
+    expect(screen.getByLabelText('channel 2')).toBeChecked()
+  })
+
+  it('leaves the page in its normal manual-search state when the param is absent', async () => {
+    renderPage()
+
+    const checkbox = await screen.findByLabelText('channel 1')
+    expect(checkbox).not.toBeChecked()
+    expect(screen.queryByTestId('mock-tile-1')).not.toBeInTheDocument()
   })
 })

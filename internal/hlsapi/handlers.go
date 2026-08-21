@@ -157,7 +157,7 @@ type channelTimeline struct {
 // handleTimeline implements GET /timeline?channels=1,2&t1=..&t2=.. -- a
 // batch, already-precomputed video-presence timeline (tocindex.ChannelIndex.
 // Timeline) for a list of channels at once (.scratch/player-redesign/
-// issues/01-hls-server-timeline-endpoint.md). A channel this hls_server
+// issues/01-hls-server-timeline-endpoint.md). A channel this hlsd
 // isn't configured to serve is silently omitted from the response rather
 // than failing the whole batch.
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {

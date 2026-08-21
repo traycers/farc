@@ -135,7 +135,7 @@ func writeVideoFcontainer(t *testing.T, unit *storage.Unit, channel uint32, fram
 // the fixture has already started (addChannel/removeChannel below) --
 // internal/hlsd now reconciles its served-channel set against this
 // fixture's real GET /channels and /events/ws (ADR-021), so a channel needs
-// to actually exist here to be servable, not just in hls_server's own seed
+// to actually exist here to be servable, not just in hlsd's own seed
 // config.
 type farcdTestServer struct {
 	*httptest.Server
@@ -196,7 +196,7 @@ func addChannel(t *testing.T, farcd *farcdTestServer, id uint16, storageID strin
 
 // removeChannel removes a channel from farcd's IngestManager and publishes
 // api.EventChannelRemoved, mirroring internal/farcd.go's
-// persistRemovedChannel -- for tests exercising hls_server's reaction to a
+// persistRemovedChannel -- for tests exercising hlsd's reaction to a
 // channel disappearing.
 func removeChannel(t *testing.T, farcd *farcdTestServer, id uint16, storageID string) {
 	t.Helper()

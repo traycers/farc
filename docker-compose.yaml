@@ -10,6 +10,15 @@ services:
       - ./mediamtx.dev.yml:/mediamtx.yml:ro
     ports:
       - "8554:8554"
+      # WebRTC/WHEP -- the web app's Live page connects here directly from
+      # the browser (.scratch/live-page/spec.md), so unlike the control
+      # API below, this one is published to the host.
+      - "8889:8889"
+    expose:
+      # Control API (mediamtx.dev.yml's api/apiAddress) -- apid's target.
+      # Deliberately NOT published to the host, only reachable from other
+      # containers on this compose network (apid).
+      - "9997"
     restart: unless-stopped
 
   ffmpeg-test:
@@ -53,59 +62,87 @@ services:
       - farc_data:/data
     restart: unless-stopped
 
-  hls_server:
+  hlsd:
     build:
       context: .
-      dockerfile: Dockerfile.hls_server
+      dockerfile: Dockerfile.hlsd
     environment:
       # HTTP address, the one farcd it talks to (ADR-020), and segment/cache
-      # tuning -- deliberately not in hls_server.config.json
+      # tuning -- deliberately not in hlsd.config.json
       # (internal/hlsconfig's package doc): env vars are safe to commit
       # alongside compose, unlike the JSON file's channels list, which stays
       # the site-specific topology data.
-      HLS_SERVER_HTTP_IP: "0.0.0.0"
-      HLS_SERVER_HTTP_PORT: "8090"
-      HLS_SERVER_METRICS_IP: "0.0.0.0"
-      HLS_SERVER_METRICS_PORT: "9091"
-      HLS_SERVER_FARC_HTTP: "http://farc:8080"
-      HLS_SERVER_FARC_WS: "ws://farc:8081"
-      HLS_SERVER_TARGET_SEGMENT_DURATION: "2s"
+      HLSD_HTTP_IP: "0.0.0.0"
+      HLSD_HTTP_PORT: "8090"
+      HLSD_METRICS_IP: "0.0.0.0"
+      HLSD_METRICS_PORT: "9091"
+      HLSD_FARC_HTTP: "http://farc:8080"
+      HLSD_FARC_WS: "ws://farc:8081"
+      HLSD_TARGET_SEGMENT_DURATION: "2s"
       # CACHE_BACKEND defaults to "disk" (internal/hlsconfig.loadEnv) --
       # single-instance deployments can leave this as-is. Running more than
-      # one hls_server replica behind a load balancer needs a shared cache
-      # instead: switch this to "s3" and point HLS_SERVER_S3_* below at the
+      # one hlsd replica behind a load balancer needs a shared cache
+      # instead: switch this to "s3" and point HLSD_S3_* below at the
       # seaweedfs service (already wired up here so that's a same-file
       # change, not a new one) -- see internal/segmentcache's package doc.
-      HLS_SERVER_CACHE_BACKEND: "disk"
-      HLS_SERVER_CACHE_DIR: "/var/cache/hls_server"
-      HLS_SERVER_CACHE_QUOTA_BYTES: "10737418240"
-      # HLS_SERVER_S3_ENDPOINT: "seaweedfs:8333"
-      # HLS_SERVER_S3_BUCKET: "hls-segments"
-      # HLS_SERVER_S3_ACCESS_KEY: "hls_server"
-      # HLS_SERVER_S3_SECRET_KEY: "changeme"
-      # HLS_SERVER_S3_USE_SSL: "false"
+      HLSD_CACHE_BACKEND: "disk"
+      HLSD_CACHE_DIR: "/var/cache/hlsd"
+      HLSD_CACHE_QUOTA_BYTES: "10737418240"
+      # HLSD_S3_ENDPOINT: "seaweedfs:8333"
+      # HLSD_S3_BUCKET: "hls-segments"
+      # HLSD_S3_ACCESS_KEY: "hlsd"
+      # HLSD_S3_SECRET_KEY: "changeme"
+      # HLSD_S3_USE_SSL: "false"
     volumes:
-      # hls_config holds hls_server.config.json itself -- no repo file
+      # hlsd_config holds hlsd.config.json itself -- no repo file
       # bind-mount (nothing site-specific belongs in git). The volume starts
       # out empty; hlsconfig.EnsureExists seeds it with an empty-but-valid
-      # config on first start. Unlike farc_config, hls_server never rewrites
+      # config on first start. Unlike farc_config, hlsd never rewrites
       # this file at runtime -- it's still the operator's job to add
       # channels to it (no CRUD API here, ADR-020's open question in
-      # 12-hls-server.md §8 about a farcd/hls_server sync mechanism still
+      # 12-hls-server.md §8 about a farcd/hlsd sync mechanism still
       # isn't resolved).
-      - hls_config:/etc/hls_server
-      - hls_cache:/var/cache/hls_server
+      - hlsd_config:/etc/hlsd
+      - hlsd_cache:/var/cache/hlsd
     depends_on:
       - farc
     restart: unless-stopped
 
-  # S3-compatible object store for hls_server's segment cache
-  # (internal/segmentcache) when HLS_SERVER_CACHE_BACKEND=s3 -- lets more
-  # than one hls_server replica share the same already-built segments
+  apid:
+    build:
+      context: .
+      dockerfile: Dockerfile.apid
+    environment:
+      # apid's own listen address, the farcd it talks to, the mediamtx it
+      # orchestrates, and the base URL browsers use for WHEP playback
+      # (.scratch/live-page/spec.md) -- deliberately not in
+      # apid.config.json (internal/apidconfig's package doc), same
+      # env-vs-JSON split as farc/hlsd.
+      APID_HTTP_IP: "0.0.0.0"
+      APID_HTTP_PORT: "8100"
+      APID_METRICS_IP: "0.0.0.0"
+      APID_METRICS_PORT: "9101"
+      APID_FARC_HTTP: "http://farc:8080"
+      APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
+      APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
+      # This is what a browser on the host actually uses -- adjust for any
+      # deployment where mediamtx's WebRTC port isn't reachable at
+      # localhost (a real domain/IP, a reverse-proxied path, ...).
+      APID_WEBRTC_PUBLIC_BASE: "http://localhost:8889"
+    volumes:
+      - apid_config:/etc/apid
+    depends_on:
+      - farc
+      - mediamtx
+    restart: unless-stopped
+
+  # S3-compatible object store for hlsd's segment cache
+  # (internal/segmentcache) when HLSD_CACHE_BACKEND=s3 -- lets more
+  # than one hlsd replica share the same already-built segments
   # instead of each keeping its own local-disk cache. "weed server -s3" runs
   # master+volume+filer+the S3 gateway in one process, which is enough for a
   # single-node deployment; a real multi-node SeaweedFS cluster would split
-  # these apart, but that's an ops decision, not a code one (hls_server only
+  # these apart, but that's an ops decision, not a code one (hlsd only
   # ever talks to the S3 gateway).
   #
   # profiles: only starts with `docker compose --profile s3 up` -- a plain
@@ -127,11 +164,12 @@ services:
       - "18881:80"
     depends_on:
       - farc
-      - hls_server
+      - hlsd
+      - apid
     restart: unless-stopped
 
   # Observability stack (.scratch/observability/spec.md) -- always on, not
-  # an opt-in profile like s3 above: scrapes farc/hls_server's /metrics,
+  # an opt-in profile like s3 above: scrapes farc/hlsd's /metrics,
   # ships every container's stdout/stderr into Loki, and serves three
   # pre-built Grafana dashboards.
   prometheus:
@@ -149,7 +187,7 @@ services:
 
   # Reads container logs via the Docker Engine API (docker.sock) and ships
   # them to loki -- no code change and no host-level log-driver plugin
-  # needed in farc/hls_server/web.
+  # needed in farc/hlsd/web.
   promtail:
     image: grafana/promtail:2.9.9
     command: -config.file=/etc/promtail/config.yaml
@@ -179,8 +217,9 @@ services:
 volumes:
   farc_config:
   farc_data:
-  hls_config:
-  hls_cache:
+  hlsd_config:
+  hlsd_cache:
+  apid_config:
   prometheus_data:
   loki_data:
   grafana_data:

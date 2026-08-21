@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package tests runs `farc` and `hls_server` as two real, separately built OS
+// Package tests runs `farc` and `hlsd` as two real, separately built OS
 // processes talking over real TCP sockets -- something no other test in the
 // repo does (internal/hlsd's TestRun_FullStack wires both sides in-process).
 //
@@ -12,7 +12,7 @@
 // (via internal/storage, the same way internal/hlsd's fixtures already do)
 // before starting the farcd process, then exercises the real boundary
 // between the two services: farcd serving TOC/candidates/frame reads over
-// HTTP+WS, and hls_server turning that into a playlist and CMAF segments,
+// HTTP+WS, and hlsd turning that into a playlist and CMAF segments,
 // via ADR-016's bootstrap path. It does not exercise ADR-018's live-push
 // path, which would require a genuinely new write from a running farcd --
 // unreachable today for the same StartRecording-gap reason.
@@ -203,9 +203,9 @@ func buildBinary(t *testing.T, pkgDir, out string) {
 // (storages/channels) -- HTTP/WS/Metrics are env-sourced now
 // (internal/config's package doc), so the caller passes those via
 // farcEnv/startProcess instead. channelsJSON is the raw "channels" array
-// literal: since hls_server now reconciles its served-channel set against
+// literal: since hlsd now reconciles its served-channel set against
 // farcd's live GET /channels (ADR-021), a channel only "exists" for
-// hls_server's purposes if it's actually registered here (or created later
+// hlsd's purposes if it's actually registered here (or created later
 // via a real POST /channels) -- writing a fcontainer directly into the
 // storage image (prepareStorageImage) is not enough by itself anymore.
 func writeFarcConfig(t *testing.T, imgPath string, channelsJSON string) string {
@@ -247,7 +247,7 @@ func farcEnv(httpPort, wsPort, metricsPort int) []string {
 	)
 }
 
-// writeHlsConfig writes only the JSON-backed part of hls_server's config
+// writeHlsConfig writes only the JSON-backed part of hlsd's config
 // (channels) -- HTTP/Farcd/TargetSegmentDuration/CacheDir/CacheQuotaBytes
 // are env-sourced now (internal/hlsconfig's package doc), so the caller
 // passes those via hlsEnv/startProcess instead. channelsJSON is the raw
@@ -257,28 +257,28 @@ func farcEnv(httpPort, wsPort, metricsPort int) []string {
 func writeHlsConfig(t *testing.T, channelsJSON string) string {
 	t.Helper()
 	doc := fmt.Sprintf(`{"channels": %s}`, channelsJSON)
-	path := filepath.Join(t.TempDir(), "hls_server.config.json")
+	path := filepath.Join(t.TempDir(), "hlsd.config.json")
 	err := os.WriteFile(path, []byte(doc), 0o644)
 	if err != nil {
-		t.Fatalf("write hls_server config: %v", err)
+		t.Fatalf("write hlsd config: %v", err)
 	}
 	return path
 }
 
-// hlsEnv builds the HLS_SERVER_* environment variables the hls_server
+// hlsEnv builds the HLSD_* environment variables the hlsd
 // process reads its HTTP/Metrics addresses, the one farcd it talks to
 // (ADR-020), and segment/cache tuning from (internal/hlsconfig's loadEnv).
 func hlsEnv(httpPort, metricsPort, farcdHTTPPort, farcdWSPort int, cacheDir string) []string {
 	return append(os.Environ(),
-		"HLS_SERVER_HTTP_IP=127.0.0.1",
-		fmt.Sprintf("HLS_SERVER_HTTP_PORT=%d", httpPort),
-		"HLS_SERVER_METRICS_IP=127.0.0.1",
-		fmt.Sprintf("HLS_SERVER_METRICS_PORT=%d", metricsPort),
-		fmt.Sprintf("HLS_SERVER_FARC_HTTP=http://127.0.0.1:%d", farcdHTTPPort),
-		fmt.Sprintf("HLS_SERVER_FARC_WS=ws://127.0.0.1:%d", farcdWSPort),
-		"HLS_SERVER_TARGET_SEGMENT_DURATION=2s",
-		"HLS_SERVER_CACHE_DIR="+cacheDir,
-		"HLS_SERVER_CACHE_QUOTA_BYTES=104857600",
+		"HLSD_HTTP_IP=127.0.0.1",
+		fmt.Sprintf("HLSD_HTTP_PORT=%d", httpPort),
+		"HLSD_METRICS_IP=127.0.0.1",
+		fmt.Sprintf("HLSD_METRICS_PORT=%d", metricsPort),
+		fmt.Sprintf("HLSD_FARC_HTTP=http://127.0.0.1:%d", farcdHTTPPort),
+		fmt.Sprintf("HLSD_FARC_WS=ws://127.0.0.1:%d", farcdWSPort),
+		"HLSD_TARGET_SEGMENT_DURATION=2s",
+		"HLSD_CACHE_DIR="+cacheDir,
+		"HLSD_CACHE_QUOTA_BYTES=104857600",
 	)
 }
 
@@ -407,7 +407,7 @@ func extractSegmentURIs(m3u8 string) []string {
 	return out
 }
 
-// TestE2E_FarcAndHlsServerRealProcesses builds the real farc and hls_server
+// TestE2E_FarcAndHlsdRealProcesses builds the real farc and hlsd
 // binaries, seeds a storage image with one fcontainer, starts both as
 // separate OS processes wired together purely through real config files and
 // real TCP addresses, fetches a playlist and its segments over real HTTP,
@@ -415,11 +415,11 @@ func extractSegmentURIs(m3u8 string) []string {
 // the source fcontainer, confirms the served segments remain correct from
 // cache after farcd is gone, and confirms both processes shut down cleanly
 // on SIGTERM.
-func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
+func TestE2E_FarcAndHlsdRealProcesses(t *testing.T) {
 	farcBin := filepath.Join(t.TempDir(), "farc")
 	buildBinary(t, "../cmd/farc", farcBin)
-	hlsBin := filepath.Join(t.TempDir(), "hls_server")
-	buildBinary(t, "../cmd/hls_server", hlsBin)
+	hlsBin := filepath.Join(t.TempDir(), "hlsd")
+	buildBinary(t, "../cmd/hlsd", hlsBin)
 
 	imgPath, begin, end, videoFrame := prepareStorageImage(t)
 
@@ -429,7 +429,7 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	// The RTSP URL is deliberately unreachable garbage -- ChannelIngest
 	// starts asynchronously and returns immediately regardless of whether it
 	// ever connects (PLAN.md); this test only needs GET /channels to report
-	// channel 1 so hls_server's reconciliation (ADR-021) confirms it, not
+	// channel 1 so hlsd's reconciliation (ADR-021) confirms it, not
 	// real capture (the fcontainer is seeded directly, prepareStorageImage).
 	farcConfigPath := writeFarcConfig(t, imgPath, `[{"id":1,"rtsp_url":"rtsp://127.0.0.1:1/none","storage":"disk0","capture_policy":{"type":"continuous"}}]`)
 
@@ -441,7 +441,7 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
 	waitForServer(t, farcAddr)
 
-	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, hlsMetricsPort, farcHTTPPort, farcWSPort, t.TempDir()))
+	hlsCmd := startProcess(t, "hlsd", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, hlsMetricsPort, farcHTTPPort, farcWSPort, t.TempDir()))
 	hlsAddr := fmt.Sprintf("127.0.0.1:%d", hlsHTTPPort)
 	waitForServer(t, hlsAddr)
 
@@ -499,26 +499,26 @@ func TestE2E_FarcAndHlsServerRealProcesses(t *testing.T) {
 	stopProcessGracefully(t, "farc", farcCmd)
 	fetchAndVerify()
 
-	stopProcessGracefully(t, "hls_server", hlsCmd)
+	stopProcessGracefully(t, "hlsd", hlsCmd)
 }
 
-// TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart is
+// TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsdRestart is
 // ADR-021's real-process end-to-end proof: both binaries start with zero
 // channels configured, a channel is created on the running farc process via
 // its real HTTP API (POST /channels -- IngestManager.AddChannel starts the
 // ingest loop asynchronously and returns immediately regardless of RTSP
 // reachability, so the deliberately unreachable rtsp_url below is fine),
-// and the already-running hls_server process picks it up live -- no
+// and the already-running hlsd process picks it up live -- no
 // restart -- because the storage image was already seeded with a
 // fcontainer for channel 1 (prepareStorageImage), so reconciliation's
 // bootstrap has real data to find the moment it starts tracking the
-// channel. DELETE /channels/1 then confirms hls_server stops serving it,
+// channel. DELETE /channels/1 then confirms hlsd stops serving it,
 // again without a restart.
-func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *testing.T) {
+func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsdRestart(t *testing.T) {
 	farcBin := filepath.Join(t.TempDir(), "farc")
 	buildBinary(t, "../cmd/farc", farcBin)
-	hlsBin := filepath.Join(t.TempDir(), "hls_server")
-	buildBinary(t, "../cmd/hls_server", hlsBin)
+	hlsBin := filepath.Join(t.TempDir(), "hlsd")
+	buildBinary(t, "../cmd/hlsd", hlsBin)
 
 	imgPath, begin, end, _ := prepareStorageImage(t)
 
@@ -535,7 +535,7 @@ func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *te
 	farcAddr := fmt.Sprintf("127.0.0.1:%d", farcHTTPPort)
 	waitForServer(t, farcAddr)
 
-	hlsCmd := startProcess(t, "hls_server", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, hlsMetricsPort, farcHTTPPort, farcWSPort, t.TempDir()))
+	hlsCmd := startProcess(t, "hlsd", hlsBin, hlsConfigPath, hlsEnv(hlsHTTPPort, hlsMetricsPort, farcHTTPPort, farcWSPort, t.TempDir()))
 	hlsAddr := fmt.Sprintf("127.0.0.1:%d", hlsHTTPPort)
 	waitForServer(t, hlsAddr)
 
@@ -563,9 +563,9 @@ func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *te
 		t.Fatalf("POST /channels status = %d, want 201 (body=%s)", resp.StatusCode, respBody)
 	}
 
-	waitForPlaylist(t, playlistURL) // hls_server picked the channel up live, no restart
+	waitForPlaylist(t, playlistURL) // hlsd picked the channel up live, no restart
 
-	// hls_server writes its own config file back after every tracked-state
+	// hlsd writes its own config file back after every tracked-state
 	// change (internal/hlsd's persist) -- assert the real process actually
 	// did that, not just its in-memory/HTTP-visible state.
 	waitForHlsConfigChannels(t, hlsConfigPath, []hlsconfig.Channel{{ID: 1, Storage: "disk0"}})
@@ -597,12 +597,12 @@ func TestE2E_ChannelCreatedAndRemovedOnFarcd_ServedWithoutHlsServerRestart(t *te
 	waitForHlsConfigChannels(t, hlsConfigPath, nil)
 
 	stopProcessGracefully(t, "farc", farcCmd)
-	stopProcessGracefully(t, "hls_server", hlsCmd)
+	stopProcessGracefully(t, "hlsd", hlsCmd)
 }
 
 // readHlsConfigChannels reads path's raw JSON "channels" list directly,
 // bypassing hlsconfig.Load's env-sourced field validation (the test process
-// itself doesn't set HLS_SERVER_* env -- only the hls_server subprocess
+// itself doesn't set HLSD_* env -- only the hlsd subprocess
 // does, via hlsEnv).
 func readHlsConfigChannels(t *testing.T, path string) []hlsconfig.Channel {
 	t.Helper()
@@ -635,7 +635,7 @@ func waitForHlsConfigChannels(t *testing.T, path string, want []hlsconfig.Channe
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("hls_server config file channels never converged to %+v, last = %+v", want, last)
+	t.Fatalf("hlsd config file channels never converged to %+v, last = %+v", want, last)
 }
 
 func channelListsEqual(a, b []hlsconfig.Channel) bool {

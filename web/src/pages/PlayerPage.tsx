@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import ChannelChecklist from '../components/ChannelChecklist'
 import TimelineBar from '../components/TimelineBar'
 import VideoGrid from '../components/VideoGrid'
+import VideoTile from '../components/VideoTile'
 import { listChannels, type ChannelInfo } from '../api/farcd'
 import { getTimeline, playlistUrl, type ChannelTimeline } from '../api/hls'
 import { nsFromLocalInputValue, nsToDisplayString, nsToLocalInputValue } from '../api/ns'
@@ -21,6 +23,9 @@ function segmentAt(ct: ChannelTimeline | undefined, t: bigint) {
 // together belongs in one of pages/playerLayout.ts, pages/playerTimeline.ts
 // or pages/timelineGeometry.ts instead.
 export default function PlayerPage() {
+  const [searchParams] = useSearchParams()
+  const autoSubmittedRef = useRef(false)
+
   const [channels, setChannels] = useState<ChannelInfo[]>([])
   const [checked, setChecked] = useState<Set<number>>(new Set())
 
@@ -41,6 +46,24 @@ export default function PlayerPage() {
   useEffect(() => {
     listChannels().then(setChannels, (e) => setError(String(e)))
   }, [])
+
+  // Jump-from-Live (.scratch/live-page/issues/06): a `?channel=` param
+  // pre-checks that channel and runs the search immediately, so following
+  // a Live-page link lands straight on video instead of an empty form --
+  // `from`/`to` need no special-casing, they already default to the last
+  // hour. Waits for channels to load so the param can be validated against
+  // the real list; autoSubmittedRef ensures this fires at most once, not
+  // on every channels/searchParams re-render.
+  useEffect(() => {
+    if (autoSubmittedRef.current || channels.length === 0) return
+    const param = searchParams.get('channel')
+    if (!param) return
+    const channel = Number(param)
+    if (!channels.some((c) => c.channel === channel)) return
+    autoSubmittedRef.current = true
+    setChecked(new Set([channel]))
+    runSearch([channel])
+  }, [channels, searchParams])
 
   useEffect(() => {
     if (!playing || !timelines) return
@@ -72,14 +95,13 @@ export default function PlayerPage() {
     })
   }
 
-  async function onSearch(e: React.FormEvent) {
-    e.preventDefault()
+  async function runSearch(channelIds: number[]) {
     setError(null)
     setPlaying(false)
     try {
       const t1 = nsFromLocalInputValue(from)
       const t2 = nsFromLocalInputValue(to)
-      const result = await getTimeline(Array.from(checked), t1, t2)
+      const result = await getTimeline(channelIds, t1, t2)
       if (!hasAnySegments(result)) {
         setTimelines(null)
         setError('No records found in the selected range')
@@ -93,6 +115,11 @@ export default function PlayerPage() {
     } catch (e) {
       setError(String(e))
     }
+  }
+
+  async function onSearch(e: React.FormEvent) {
+    e.preventDefault()
+    await runSearch(Array.from(checked))
   }
 
   function jumpTo(ns: bigint | null) {
@@ -134,6 +161,7 @@ export default function PlayerPage() {
 
           <VideoGrid
             channelIds={channelIds}
+            Tile={VideoTile}
             getTileProps={(channel) => {
               const ct = timelines?.find((t) => t.channel === channel)
               const segment = segmentAt(ct, playheadNs)

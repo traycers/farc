@@ -36,7 +36,7 @@
         "sortOrder": "Descending"
       },
       "targets": [
-        { "expr": "{container=~\"farc|hls_server\"}", "refId": "A" }
+        { "expr": "{container=~\"farc|hlsd|apid\"}", "refId": "A" }
       ]
     }
   ]

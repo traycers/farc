@@ -1,6 +1,6 @@
 # Web: channel create/update/remove go through apid, not farcd directly
 
-Status: open
+Status: fixed (2026-08-21, via `/mattpocock-skills:tdd`)
 
 See `.scratch/live-page/spec.md` for the full design conversation this
 was split from.

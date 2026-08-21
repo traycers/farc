@@ -1,6 +1,6 @@
 # Rename hls_server binary/service to hlsd
 
-Status: open
+Status: fixed (2026-08-21, via `/mattpocock-skills:tdd`)
 
 See `.scratch/hlsd-rename/spec.md` for the full design conversation this
 was split from.

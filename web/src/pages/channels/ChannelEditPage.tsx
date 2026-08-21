@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { listChannels, listStorages, updateChannel, type ChannelInfo, type StorageInfo } from '../../api/farcd'
+import { listChannels, listStorages, type ChannelInfo, type StorageInfo } from '../../api/farcd'
+import { getCameraURL, updateChannel } from '../../api/apid'
 
 const POLICY_TYPES = ['continuous', 'event'] as const
 
@@ -35,12 +36,17 @@ export default function ChannelEditPage() {
           setStorage(c.storage)
           setOriginalStorage(c.storage)
           setName(c.name ?? '')
-          setRtspURL(c.rtsp_url)
           setPolicyType(c.capture_policy_type)
           setPrerecordSec(c.prerecord_ns / 1e9)
           setPostrecordSec(c.postrecord_ns / 1e9)
         }
       })
+      .catch((e) => setError(String(e)))
+    // farcd's own stored rtsp_url for this channel is mediamtx's re-serve
+    // address, not the camera's -- the only place the camera's real URL is
+    // readable back from is mediamtx, via apid (.scratch/live-page/spec.md).
+    getCameraURL(channel)
+      .then(setRtspURL)
       .catch((e) => setError(String(e)))
   }, [channel])
 

@@ -1,17 +1,24 @@
+import type { ComponentType } from 'react'
 import { layoutCells } from '../pages/playerLayout'
-import VideoTile from './VideoTile'
 
-type TileProps = React.ComponentProps<typeof VideoTile>
-
-type VideoGridProps = {
+type VideoGridProps<TileProps extends { channel: number }> = {
   channelIds: number[]
-  getTileProps: (channel: number) => Omit<TileProps, 'channel'> & { channel: number }
+  getTileProps: (channel: number) => TileProps
+  // The tile component to render per cell -- VideoTile (PlayerPage's
+  // bounded archive playback) or LiveVideoTile (the Live page's WebRTC
+  // playback, .scratch/live-page/issues/04) are both just callers of this
+  // same generic grid, not special-cased here.
+  Tile: ComponentType<TileProps>
 }
 
 // VideoGrid is a pure layout wrapper: it renders layoutCells' grid shape,
-// one VideoTile per checked channel, empty cells left blank
+// one Tile per checked channel, empty cells left blank
 // (.scratch/player-redesign/spec.md's automatic 1/1x2/NxN layout).
-export default function VideoGrid({ channelIds, getTileProps }: VideoGridProps) {
+export default function VideoGrid<TileProps extends { channel: number }>({
+  channelIds,
+  getTileProps,
+  Tile,
+}: VideoGridProps<TileProps>) {
   const { shape, cells } = layoutCells(channelIds)
   return (
     <div
@@ -23,7 +30,7 @@ export default function VideoGrid({ channelIds, getTileProps }: VideoGridProps) 
         channel === null ? (
           <div key={`empty-${i}`} className="player-video-grid-empty-cell" data-testid="player-video-grid-empty-cell" />
         ) : (
-          <VideoTile key={channel} {...getTileProps(channel)} />
+          <Tile key={channel} {...getTileProps(channel)} />
         ),
       )}
     </div>

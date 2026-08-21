@@ -1,6 +1,6 @@
 # Web: new Live page
 
-Status: open
+Status: fixed (2026-08-21, via `/mattpocock-skills:tdd`)
 
 See `.scratch/live-page/spec.md` for the full design conversation this
 was split from.

@@ -25,13 +25,13 @@ import (
 
 // hlsConfigPath returns a writable path for a fresh test's config file,
 // bootstrapped via hlsconfig.EnsureExists exactly like
-// cmd/hls_server/commands/default.go does before calling hlsd.New --
+// cmd/hlsd/commands/default.go does before calling hlsd.New --
 // hlsd.New never reads this path back, only writes to it later (persist), so
 // its initial content doesn't need to match cfg, but the file must already
 // exist as it would in production.
 func hlsConfigPath(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "hls_server.config.json")
+	path := filepath.Join(t.TempDir(), "hlsd.config.json")
 	err := hlsconfig.EnsureExists(path)
 	if err != nil {
 		t.Fatalf("hlsconfig.EnsureExists(%s): %v", path, err)
@@ -39,7 +39,7 @@ func hlsConfigPath(t *testing.T) string {
 	return path
 }
 
-// TestRun_FullStack exercises the entire hls_server binary's wiring end to
+// TestRun_FullStack exercises the entire hlsd binary's wiring end to
 // end (PLAN.md phase 7's verify clause): a real farcd fixture, a real hlsd
 // against it (its own EventSubscriber bootstrapping the index, not a
 // manually-constructed one), and actual HTTP requests for a playlist and
@@ -133,8 +133,8 @@ func TestRun_FullStack(t *testing.T) {
 }
 
 // TestRun_ChannelCreatedOnFarcd_ServedWithoutRestart is ADR-021's core
-// scenario: hls_server starts with an empty seed (no channels in its own
-// config), a channel is created live on farcd, and hls_server starts
+// scenario: hlsd starts with an empty seed (no channels in its own
+// config), a channel is created live on farcd, and hlsd starts
 // serving it without a restart.
 func TestRun_ChannelCreatedOnFarcd_ServedWithoutRestart(t *testing.T) {
 	unit := newTestUnit(t)
@@ -169,7 +169,7 @@ func TestRun_ChannelCreatedOnFarcd_ServedWithoutRestart(t *testing.T) {
 }
 
 // TestRun_ChannelRemovedOnFarcd_StopsBeingServed is the inverse: a channel
-// hls_server is already serving stops being servable once it's removed on
+// hlsd is already serving stops being servable once it's removed on
 // farcd, without a restart.
 func TestRun_ChannelRemovedOnFarcd_StopsBeingServed(t *testing.T) {
 	unit := newTestUnit(t)
@@ -280,7 +280,7 @@ func TestRun_ChannelMovedToDifferentStorage_ReindexesFromNewStorage(t *testing.T
 }
 
 // TestRun_ChannelLifecycle_PersistsToConfigFile is the config-file
-// write-back scenario: hls_server rewrites configPath after every
+// write-back scenario: hlsd rewrites configPath after every
 // tracked-state change (add, remove), so the file mirrors what's actually
 // being served rather than staying frozen at whatever it held at startup.
 func TestRun_ChannelLifecycle_PersistsToConfigFile(t *testing.T) {
@@ -425,7 +425,7 @@ func waitForNotConfigured(t *testing.T, url string) {
 
 // readPersistedChannels reads path's raw JSON "channels" list directly,
 // bypassing hlsconfig.Load's env-sourced field validation (which would fail
-// in a test process with no HLS_SERVER_* env set). hlsconfig.Save writes in
+// in a test process with no HLSD_* env set). hlsconfig.Save writes in
 // place (os.WriteFile, not temp-plus-rename -- see its doc comment), so a
 // read landing between Save's truncate and the full write completing can
 // observe a partial/empty file; that's reported via ok=false rather than

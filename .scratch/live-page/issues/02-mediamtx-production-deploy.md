@@ -1,6 +1,6 @@
 # mediamtx as a real production component (not just dev/e2e)
 
-Status: open
+Status: fixed (2026-08-21, via `/mattpocock-skills:tdd`)
 
 See `.scratch/live-page/spec.md` for the full design conversation this
 was split from.

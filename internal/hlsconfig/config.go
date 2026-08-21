@@ -1,16 +1,16 @@
-// Package hlsconfig implements hls_server's process configuration, split the
+// Package hlsconfig implements hlsd's process configuration, split the
 // same way internal/config splits farcd's (see that package's doc comment):
-// server/tuning parameters come from environment variables (HLS_SERVER_
-// HTTP_IP/PORT, HLS_SERVER_METRICS_IP/PORT, HLS_SERVER_FARC_HTTP/WS,
-// HLS_SERVER_TARGET_SEGMENT_DURATION,
-// HLS_SERVER_CACHE_BACKEND ("disk" or "s3"), HLS_SERVER_CACHE_DIR/
-// HLS_SERVER_CACHE_QUOTA_BYTES (disk backend), HLS_SERVER_S3_ENDPOINT/
-// HLS_SERVER_S3_BUCKET/HLS_SERVER_S3_ACCESS_KEY/HLS_SERVER_S3_SECRET_KEY/
-// HLS_SERVER_S3_USE_SSL (s3 backend)) so a working
+// server/tuning parameters come from environment variables (HLSD_
+// HTTP_IP/PORT, HLSD_METRICS_IP/PORT, HLSD_FARC_HTTP/WS,
+// HLSD_TARGET_SEGMENT_DURATION,
+// HLSD_CACHE_BACKEND ("disk" or "s3"), HLSD_CACHE_DIR/
+// HLSD_CACHE_QUOTA_BYTES (disk backend), HLSD_S3_ENDPOINT/
+// HLSD_S3_BUCKET/HLSD_S3_ACCESS_KEY/HLSD_S3_SECRET_KEY/
+// HLSD_S3_USE_SSL (s3 backend)) so a working
 // deployment's env can be committed to git, while the JSON file
 // (docs/docs/archive/12-hls-server.md §7) keeps only the site-specific
 // data: the channel -> farcd-side storage id mapping. The one farcd
-// hls_server talks to (ADR-020 — v1 supports exactly one, not a list) is
+// hlsd talks to (ADR-020 — v1 supports exactly one, not a list) is
 // itself an env-sourced address, not JSON, like HTTP/WS/Metrics are for
 // farcd's own config. The JSON file itself lives on a Docker volume rather
 // than a repo file bind mount (docker-compose.yaml's hls_config volume) —
@@ -59,11 +59,11 @@ type Addr struct {
 
 func (a Addr) String() string { return fmt.Sprintf("%s:%d", a.IP, a.Port) }
 
-// Farcd is the one farcd endpoint hls_server talks to (ADR-020): its HTTP
+// Farcd is the one farcd endpoint hlsd talks to (ADR-020): its HTTP
 // API base URL (internal/api/server.go's routes) and its EventPushServer
 // base URL (internal/api/eventpush.go) — the same two addresses farcd's own
 // config exposes as separate "http"/"ws" servers (04-storage-operations.md
-// §2.1). Sourced from env (HLS_SERVER_FARC_HTTP/WS), not the JSON file —
+// §2.1). Sourced from env (HLSD_FARC_HTTP/WS), not the JSON file —
 // see this package's doc comment — hence no json tags.
 type Farcd struct {
 	HTTP string // e.g. "http://10.0.0.1:8080"
@@ -77,11 +77,11 @@ type Channel struct {
 	Storage string `json:"storage"` // farcd's own storage id (its config's storages[].id)
 }
 
-// Config is hls_server's whole process configuration: HTTP/Farcd/
+// Config is hlsd's whole process configuration: HTTP/Farcd/
 // TargetSegmentDuration/CacheDir/CacheQuotaBytes come from env (loadEnv),
 // Channels from the JSON file at path.
 type Config struct {
-	HTTP    Addr `json:"-"` // hls_server's own player-facing listen address
+	HTTP    Addr `json:"-"` // hlsd's own player-facing listen address
 	Metrics Addr `json:"-"` // Prometheus /metrics listen address
 
 	Farcd    Farcd     `json:"-"`
@@ -92,7 +92,7 @@ type Config struct {
 	// CacheBackend selects internal/segmentcache's storage: "disk" (default)
 	// for a local quota-bounded LRU cache, or "s3" for an S3-compatible
 	// object store (SeaweedFS, MinIO, AWS S3, Ceph RGW, ...) shared across
-	// every hls_server replica -- see internal/segmentcache's package doc.
+	// every hlsd replica -- see internal/segmentcache's package doc.
 	CacheBackend string `json:"-"`
 
 	// CacheDir/CacheQuotaBytes are only used/required when CacheBackend is
@@ -108,8 +108,8 @@ type Config struct {
 	S3SecretKey string `json:"-"`
 	S3UseSSL    bool   `json:"-"`
 
-	// LogDir is HLS_SERVER_LOG_DIR: a directory hls_server additionally
-	// writes its own log lines to (hls_server.log), alongside stderr.
+	// LogDir is HLSD_LOG_DIR: a directory hlsd additionally
+	// writes its own log lines to (hlsd.log), alongside stderr.
 	// Optional -- empty means stderr only, matching the process's behavior
 	// before this field existed.
 	LogDir string `json:"-"`
@@ -161,7 +161,7 @@ func Save(path string, cfg *Config) error {
 
 // EnsureExists writes an empty config (no channels) to path if no file
 // exists there yet; it is a no-op otherwise. Lets a fresh Docker volume —
-// which starts out empty, since deploy/hls_server.config.json no longer
+// which starts out empty, since deploy/hlsd.config.json no longer
 // ships in the repo or gets bind-mounted (docker-compose.yaml's
 // hls_config volume) — bootstrap itself into a valid, loadable config on
 // first container start, mirroring internal/config.EnsureExists.
@@ -183,52 +183,52 @@ func EnsureExists(path string) error {
 	return nil
 }
 
-// loadEnv populates cfg's env-sourced fields. An unset HLS_SERVER_HTTP_PORT
+// loadEnv populates cfg's env-sourced fields. An unset HLSD_HTTP_PORT
 // is left as 0 rather than rejected here, so validate's own "port is
 // required" error stays the single place port-missing is reported;
-// HLS_SERVER_FARC_HTTP/WS/HLS_SERVER_TARGET_SEGMENT_DURATION/CACHE_DIR are
+// HLSD_FARC_HTTP/WS/HLSD_TARGET_SEGMENT_DURATION/CACHE_DIR are
 // likewise left zero when unset and caught by validate's existing checks.
 func loadEnv(cfg *Config) error {
-	cfg.HTTP.IP = envOr("HLS_SERVER_HTTP_IP", "0.0.0.0")
-	port, err := envInt("HLS_SERVER_HTTP_PORT")
+	cfg.HTTP.IP = envOr("HLSD_HTTP_IP", "0.0.0.0")
+	port, err := envInt("HLSD_HTTP_PORT")
 	if err != nil {
 		return err
 	}
 	cfg.HTTP.Port = port
 
-	cfg.Metrics.IP = envOr("HLS_SERVER_METRICS_IP", "0.0.0.0")
-	cfg.Metrics.Port, err = envInt("HLS_SERVER_METRICS_PORT")
+	cfg.Metrics.IP = envOr("HLSD_METRICS_IP", "0.0.0.0")
+	cfg.Metrics.Port, err = envInt("HLSD_METRICS_PORT")
 	if err != nil {
 		return err
 	}
 
-	cfg.Farcd.HTTP = os.Getenv("HLS_SERVER_FARC_HTTP")
-	cfg.Farcd.WS = os.Getenv("HLS_SERVER_FARC_WS")
+	cfg.Farcd.HTTP = os.Getenv("HLSD_FARC_HTTP")
+	cfg.Farcd.WS = os.Getenv("HLSD_FARC_WS")
 
-	if v := os.Getenv("HLS_SERVER_TARGET_SEGMENT_DURATION"); v != "" {
+	if v := os.Getenv("HLSD_TARGET_SEGMENT_DURATION"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return fmt.Errorf("hlsconfig: env HLS_SERVER_TARGET_SEGMENT_DURATION=%q: %w", v, err)
+			return fmt.Errorf("hlsconfig: env HLSD_TARGET_SEGMENT_DURATION=%q: %w", v, err)
 		}
 		cfg.TargetSegmentDuration = Duration(d)
 	}
 
-	cfg.CacheBackend = envOr("HLS_SERVER_CACHE_BACKEND", "disk")
+	cfg.CacheBackend = envOr("HLSD_CACHE_BACKEND", "disk")
 
-	cfg.CacheDir = os.Getenv("HLS_SERVER_CACHE_DIR")
-	quota, err := envInt64("HLS_SERVER_CACHE_QUOTA_BYTES")
+	cfg.CacheDir = os.Getenv("HLSD_CACHE_DIR")
+	quota, err := envInt64("HLSD_CACHE_QUOTA_BYTES")
 	if err != nil {
 		return err
 	}
 	cfg.CacheQuotaBytes = quota
 
-	cfg.S3Endpoint = os.Getenv("HLS_SERVER_S3_ENDPOINT")
-	cfg.S3Bucket = os.Getenv("HLS_SERVER_S3_BUCKET")
-	cfg.S3AccessKey = os.Getenv("HLS_SERVER_S3_ACCESS_KEY")
-	cfg.S3SecretKey = os.Getenv("HLS_SERVER_S3_SECRET_KEY")
-	cfg.S3UseSSL = os.Getenv("HLS_SERVER_S3_USE_SSL") == "true"
+	cfg.S3Endpoint = os.Getenv("HLSD_S3_ENDPOINT")
+	cfg.S3Bucket = os.Getenv("HLSD_S3_BUCKET")
+	cfg.S3AccessKey = os.Getenv("HLSD_S3_ACCESS_KEY")
+	cfg.S3SecretKey = os.Getenv("HLSD_S3_SECRET_KEY")
+	cfg.S3UseSSL = os.Getenv("HLSD_S3_USE_SSL") == "true"
 
-	cfg.LogDir = os.Getenv("HLS_SERVER_LOG_DIR")
+	cfg.LogDir = os.Getenv("HLSD_LOG_DIR")
 
 	return nil
 }
@@ -300,7 +300,7 @@ func (cfg *Config) validate() error {
 	}
 
 	// cache_dir is required regardless of cache_backend: it also roots
-	// hls_server's persistent TOC cache (issue
+	// hlsd's persistent TOC cache (issue
 	// .scratch/hls-toc-bootstrap/issues/02-persistent-toc-cache-and-catalog-diff.md),
 	// which s3 exempts the *segment* cache from needing a local dir for, but
 	// never the TOC cache.

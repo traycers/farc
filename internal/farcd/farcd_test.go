@@ -310,7 +310,7 @@ func TestRun_UpdateChannelOverHTTP_StorageChanged_PublishesRemovedThenCreated(t 
 }
 
 // TestRun_UpdateChannelOverHTTP_StorageUnchanged_PublishesNoGlobalEvent
-// regression-tests the "don't churn hls_server's index for a no-op storage
+// regression-tests the "don't churn hlsd's index for a no-op storage
 // change" behavior: a PUT that only edits rtsp_url/capture_policy, leaving
 // storage the same, must not publish anything.
 func TestRun_UpdateChannelOverHTTP_StorageUnchanged_PublishesNoGlobalEvent(t *testing.T) {
@@ -360,7 +360,7 @@ func TestRun_UpdateChannelOverHTTP_StorageUnchanged_PublishesNoGlobalEvent(t *te
 	// channel.rtsp.connect_failed/connected/disconnected can still arrive
 	// here for the freshly-restarted ingest -- this test's actual concern
 	// (per its own doc comment) is specifically that a same-storage update
-	// must not churn hls_server's index via channel.removed/channel.created,
+	// must not churn hlsd's index via channel.removed/channel.created,
 	// not that zero events of any kind occur.
 	deadline := time.Now().Add(300 * time.Millisecond)
 	for {

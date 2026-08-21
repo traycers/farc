@@ -16,7 +16,7 @@ async function ok(res: Response): Promise<Response> {
   return res
 }
 
-// getTimeline fetches hls_server's precomputed video-presence timeline
+// getTimeline fetches hlsd's precomputed video-presence timeline
 // (.scratch/player-redesign/issues/01-hls-server-timeline-endpoint.md) for
 // every channel in one request.
 export async function getTimeline(channels: number[], t1: bigint, t2: bigint): Promise<ChannelTimeline[]> {

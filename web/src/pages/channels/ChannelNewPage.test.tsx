@@ -1,13 +1,17 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import ChannelNewPage from './ChannelNewPage'
 import { listChannels, listStorages } from '../../api/farcd'
+import { createChannel } from '../../api/apid'
 
 vi.mock('../../api/farcd', () => ({
   listStorages: vi.fn(async () => []),
   listChannels: vi.fn(async () => []),
-  createChannel: vi.fn(async () => {}),
+}))
+
+vi.mock('../../api/apid', () => ({
+  createChannel: vi.fn(async () => ({ farcd: 'ok', mediamtx: 'ok' })),
 }))
 
 function renderPage(initialEntries: string[] = ['/channels/new']) {
@@ -46,6 +50,25 @@ describe('ChannelNewPage default storage selection', () => {
     renderPage(['/channels/new?storage=unknown'])
 
     expect(await screen.findByRole('combobox', { name: /storage/i })).toHaveValue('s1')
+  })
+})
+
+describe('ChannelNewPage submit', () => {
+  it('creates the channel via apid, not farcd directly (.scratch/live-page/issues/03)', async () => {
+    vi.mocked(listStorages).mockResolvedValueOnce([
+      { id: 's1', name: 'Storage One', path: '/data/s1', geometry: { FblockSize: 1, N: 1, MaxChannels: 8 }, pool: { Size: 4, WarningAt: 2, BackpressureAt: 4 } },
+    ])
+    renderPage(['/channels/new?storage=s1'])
+
+    fireEvent.change(screen.getByPlaceholderText('rtsp://camera1/stream'), { target: { value: 'rtsp://camera/1' } })
+    fireEvent.click(screen.getByRole('button', { name: /add channel/i }))
+
+    await waitFor(() => expect(createChannel).toHaveBeenCalled())
+    expect(vi.mocked(createChannel).mock.calls[0][0]).toMatchObject({
+      rtsp_url: 'rtsp://camera/1',
+      storage: 's1',
+      capture_policy: { type: 'continuous' },
+    })
   })
 })
 
