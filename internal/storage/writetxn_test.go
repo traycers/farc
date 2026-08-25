@@ -17,25 +17,25 @@ func TestUnit_BeginFblockWrite_ReturnsHeaderAndTransitionsIndexToInProgress(t *t
 		t.Fatalf("newUUIDv4: %v", err)
 	}
 
-	idx, h, err := u.beginFblockWrite(1000, uuid, nil, 900, 950)
+	idx, prolog, catalog, err := u.beginFblockWrite(1000, uuid, nil, 900, 950)
 	if err != nil {
 		t.Fatalf("beginFblockWrite: %v", err)
 	}
 
-	if h.Catalog.State(idx) != fblock.InProgress {
-		t.Fatalf("Catalog.State(%d) = %v, want InProgress", idx, h.Catalog.State(idx))
+	if catalog.State(idx) != fblock.InProgress {
+		t.Fatalf("Catalog.State(%d) = %v, want InProgress", idx, catalog.State(idx))
 	}
-	if h.Catalog.UUID[idx] != uuid {
-		t.Fatalf("Catalog.UUID[%d] = %x, want %x", idx, h.Catalog.UUID[idx], uuid)
+	if catalog.UUID[idx] != uuid {
+		t.Fatalf("Catalog.UUID[%d] = %x, want %x", idx, catalog.UUID[idx], uuid)
 	}
-	if h.Catalog.Begin[idx] != 900 || h.Catalog.End[idx] != 950 {
-		t.Fatalf("Catalog.Begin/End[%d] = %d/%d, want 900/950", idx, h.Catalog.Begin[idx], h.Catalog.End[idx])
+	if catalog.Begin[idx] != 900 || catalog.End[idx] != 950 {
+		t.Fatalf("Catalog.Begin/End[%d] = %d/%d, want 900/950", idx, catalog.Begin[idx], catalog.End[idx])
 	}
-	if h.Prolog.WriteSequence == 0 {
+	if prolog.WriteSequence == 0 {
 		t.Fatal("Prolog.WriteSequence = 0, want non-zero")
 	}
-	if h.Prolog.CatalogTime != 1000 {
-		t.Fatalf("Prolog.CatalogTime = %d, want 1000", h.Prolog.CatalogTime)
+	if prolog.CatalogTime != 1000 {
+		t.Fatalf("Prolog.CatalogTime = %d, want 1000", prolog.CatalogTime)
 	}
 
 	// The live index must reflect the same transition -- beginFblockWrite
@@ -58,11 +58,11 @@ func TestUnit_BeginFblockWrite_PublishesFblockDeletedWhenReusingReadySlot(t *tes
 	if err != nil {
 		t.Fatalf("newUUIDv4: %v", err)
 	}
-	idx, h, err := u.beginFblockWrite(1, firstUUID, nil, 1, 2)
+	idx, prolog, _, err := u.beginFblockWrite(1, firstUUID, nil, 1, 2)
 	if err != nil {
 		t.Fatalf("beginFblockWrite (first): %v", err)
 	}
-	if err := u.completeFblockWrite(idx, firstUUID, 1, 2, h.Prolog.WriteSequence, 2, 0, 0, 0); err != nil {
+	if err := u.completeFblockWrite(idx, firstUUID, 1, 2, prolog.WriteSequence, 2, 0, 0, 0); err != nil {
 		t.Fatalf("completeFblockWrite (first): %v", err)
 	}
 	drainEvents(events) // WriteStarted + WriteCompleted from the first cycle, not under test here
@@ -77,7 +77,7 @@ func TestUnit_BeginFblockWrite_PublishesFblockDeletedWhenReusingReadySlot(t *tes
 	if err != nil {
 		t.Fatalf("newUUIDv4: %v", err)
 	}
-	idx2, _, err := u.beginFblockWrite(farFuture, secondUUID, nil, 100, 200)
+	idx2, _, _, err := u.beginFblockWrite(farFuture, secondUUID, nil, 100, 200)
 	if err != nil {
 		t.Fatalf("beginFblockWrite (second): %v", err)
 	}
@@ -106,7 +106,7 @@ func TestUnit_BeginFblockWrite_PublishesStorageAlertWhenNoFreeFblocks(t *testing
 	}
 	// Occupies the only slot and leaves it in_progress (never completed) --
 	// so the next call has neither an uninitialized nor a ready slot to pick.
-	if _, _, err := u.beginFblockWrite(1, uuid, nil, 1, 2); err != nil {
+	if _, _, _, err := u.beginFblockWrite(1, uuid, nil, 1, 2); err != nil {
 		t.Fatalf("beginFblockWrite (first): %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestUnit_BeginFblockWrite_PublishesStorageAlertWhenNoFreeFblocks(t *testing
 	if err != nil {
 		t.Fatalf("newUUIDv4: %v", err)
 	}
-	_, _, err = u.beginFblockWrite(2, otherUUID, nil, 2, 3)
+	_, _, _, err = u.beginFblockWrite(2, otherUUID, nil, 2, 3)
 	if err == nil {
 		t.Fatal("beginFblockWrite (second) = nil error, want ErrNoSpace")
 	}
@@ -143,7 +143,7 @@ func TestUnit_CompleteFblockWrite_TransitionsToReadyAndRecordsHealth(t *testing.
 	if err != nil {
 		t.Fatalf("newUUIDv4: %v", err)
 	}
-	idx, h, err := u.beginFblockWrite(10, uuid, nil, 10, 20)
+	idx, prolog, _, err := u.beginFblockWrite(10, uuid, nil, 10, 20)
 	if err != nil {
 		t.Fatalf("beginFblockWrite: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestUnit_CompleteFblockWrite_TransitionsToReadyAndRecordsHealth(t *testing.
 
 	writesBefore, failuresBefore, _, bytesWrittenBefore := u.Health().Stats()
 
-	if err := u.completeFblockWrite(idx, uuid, 10, 20, h.Prolog.WriteSequence, 30, 500, 64, 8); err != nil {
+	if err := u.completeFblockWrite(idx, uuid, 10, 20, prolog.WriteSequence, 30, 500, 64, 8); err != nil {
 		t.Fatalf("completeFblockWrite: %v", err)
 	}
 
@@ -194,7 +194,7 @@ func TestUnit_FailFblockWrite_MarksBadAndRecordsHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUUIDv4: %v", err)
 	}
-	idx, _, err := u.beginFblockWrite(10, uuid, nil, 10, 20)
+	idx, _, _, err := u.beginFblockWrite(10, uuid, nil, 10, 20)
 	if err != nil {
 		t.Fatalf("beginFblockWrite: %v", err)
 	}

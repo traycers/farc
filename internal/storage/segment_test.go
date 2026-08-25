@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
 	"github.com/traycers/farc/internal/fcontainer"
 	"github.com/traycers/farc/internal/ioengine"
 	"github.com/traycers/farc/mediatree"
@@ -95,8 +96,8 @@ func TestUnit_PoolSlots_ReflectsReservedSegmentAndDefaults(t *testing.T) {
 		if s.State != SlotFree {
 			t.Fatalf("slot %d state = %v, want SlotFree (nothing reserved yet)", i, s.State)
 		}
-		if s.PrologSize == 0 || s.CatalogSize == 0 || s.EpilogSize != fblock.EpilogSize {
-			t.Fatalf("slot %d defaults = %+v, want non-zero PrologSize/CatalogSize and EpilogSize=%d", i, s, fblock.EpilogSize)
+		if s.PrologSize == 0 || s.CatalogSize == 0 || s.EpilogSize != uint32(fblockv2.EpilogSizeV2) {
+			t.Fatalf("slot %d defaults = %+v, want non-zero PrologSize/CatalogSize and EpilogSize=%d", i, s, fblockv2.EpilogSizeV2)
 		}
 	}
 
@@ -153,10 +154,10 @@ func TestSegment_PeriodicFlushWritesBeforeClose(t *testing.T) {
 	// this happens before Close is the whole point of this test.
 	impl := seg.(*segmentImpl)
 	deadline := time.Now().Add(2 * time.Second)
-	for impl.handle.Written() <= impl.headerLen && time.Now().Before(deadline) {
+	for impl.handle.Written() <= 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if impl.handle.Written() <= impl.headerLen {
+	if impl.handle.Written() <= 0 {
 		t.Fatal("timed out waiting for a periodic flush to write some content before Close")
 	}
 
@@ -220,9 +221,11 @@ func TestSegment_WriteFailureMarksFblockBadAndOpensFreshSegment(t *testing.T) {
 		t.Fatalf("EncodeParams: %v", err)
 	}
 	catalogSize := fblock.CatalogSize(geo.MaxChannels, geo.N)
-	offs := fblock.ComputeOffsets(uint32(len(paramsBuf)), catalogSize, 1) // ioengine.OpenStandard, Alignment()==1
-	corruptStart := int64(fblockOffset(geo, 0)) + int64(offs.ContentOffset)
-	corruptEnd := int64(fblockOffset(geo, 0)) + int64(geo.FblockSize)
+	corruptStart := int64(fblockOffset(geo, 0)) + contentValueOffsetV2(uint32(len(paramsBuf)), catalogSize, 1) // ioengine.OpenStandard, Alignment()==1
+	// Stop short of the epilog region: Open()'s startup scan
+	// (scanForFreshestCatalogV2) reads fblock 0's epilog to find the
+	// freshest catalog before any write happens, so it must stay intact.
+	corruptEnd := int64(fblockOffset(geo, 0)) + int64(geo.FblockSize) - int64(fblockv2.EpilogSizeV2)
 	cb := &corruptingBackend{Backend: backend, rangeStart: corruptStart, rangeEnd: corruptEnd}
 
 	u, err := Open(OpenConfig{Backend: cb})

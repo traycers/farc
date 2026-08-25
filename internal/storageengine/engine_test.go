@@ -1,6 +1,7 @@
 package storageengine
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"sync"
@@ -340,6 +341,55 @@ func TestEnqueueOpenWrite_SkipsWriteWhenBelowAlignment(t *testing.T) {
 	wantLen := int64(len(header) + 8) // Written() excludes the trailer
 	if handle.Written() != wantLen {
 		t.Fatalf("Written() = %d, want %d once alignment reached", handle.Written(), wantLen)
+	}
+}
+
+// TestEnqueueOpenWrite_JobOffsetNotAlignedOnItsOwn covers the case
+// ADR-023's v2.0 content node introduces: an open job whose own offset
+// (a node's value region, right after its fixedHeaderSize-byte header)
+// isn't itself a multiple of the backend's Alignment(), independent of
+// where its data happens to land. Every real periodic flush must still
+// land as an aligned WriteAt (ADR-010) even though the job's offset alone
+// doesn't guarantee that -- stepWriteLocked's write-verify falls back to
+// a read-modify-write over the smallest covering aligned block rather
+// than rejecting the write outright.
+func TestEnqueueOpenWrite_JobOffsetNotAlignedOnItsOwn(t *testing.T) {
+	backend := newFakeBackendAligned(4096, 64)
+	e := New(backend, Config{FchunkSize: 64, ReadChunkSize: 64, WarningAt: 100, BackpressureAt: 200})
+
+	const jobOffset = 29 // e.g. fixedHeaderSize, never a multiple of a real Alignment()
+	handle := e.EnqueueOpenWrite(jobOffset, nil, 0)
+
+	content1 := bytes.Repeat([]byte("A"), 64)
+	if err := handle.Append(content1); err != nil {
+		t.Fatalf("Append(content1): %v", err)
+	}
+	drain(e)
+	if handle.Written() != int64(len(content1)) {
+		t.Fatalf("Written() = %d, want %d", handle.Written(), len(content1))
+	}
+	got := backend.data[jobOffset : jobOffset+int64(len(content1))]
+	if string(got) != string(content1) {
+		t.Fatalf("value region after first flush = %q, want %q", got, content1)
+	}
+
+	content2 := bytes.Repeat([]byte("B"), 64)
+	if err := handle.Append(content2); err != nil {
+		t.Fatalf("Append(content2): %v", err)
+	}
+	drain(e)
+	if handle.Written() != int64(len(content1)+len(content2)) {
+		t.Fatalf("Written() after second flush = %d, want %d", handle.Written(), len(content1)+len(content2))
+	}
+	got2 := backend.data[jobOffset+int64(len(content1)) : jobOffset+int64(len(content1))+int64(len(content2))]
+	if string(got2) != string(content2) {
+		t.Fatalf("value region after second flush = %q, want %q", got2, content2)
+	}
+
+	ticket := handle.Close()
+	drain(e)
+	if _, err := ticket.Wait(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

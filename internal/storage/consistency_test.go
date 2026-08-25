@@ -49,10 +49,10 @@ func TestConsistencyCheck_RecoversPartialInProgress(t *testing.T) {
 
 	impl := seg.(*segmentImpl)
 	deadline := time.Now().Add(2 * time.Second)
-	for impl.handle.Written() <= impl.headerLen && time.Now().Before(deadline) {
+	for impl.handle.Written() <= 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if impl.handle.Written() <= impl.headerLen {
+	if impl.handle.Written() <= 0 {
 		t.Fatal("timed out waiting for a periodic flush before simulating the crash")
 	}
 
@@ -103,25 +103,15 @@ func TestConsistencyCheck_NoTrailerAtAllStillBecomesBad(t *testing.T) {
 	imgPath := filepath.Join(dir, "storage.img")
 
 	u := initAndOpen(t, dir, geo, "")
-	seg, _, _, err := u.BeginSegment([]uint16{1}, 1000)
+	_, _, _, err := u.BeginSegment([]uint16{1}, 1000)
 	if err != nil {
 		t.Fatalf("BeginSegment: %v", err)
 	}
-	// No AddStreamParams/AddFrames at all -- only the header itself is
-	// physically written (promoteLocked's EnqueueOpenWrite), no trailer
-	// ever gets appended. Wait for the header write itself to land and be
-	// confirmed before tearing down, so this test actually exercises
-	// "header intact, no trailer" rather than racing a teardown before
-	// even the header made it to disk (which would leave fblock 0 looking
-	// merely uninitialized, not in_progress, on reopen).
-	impl := seg.(*segmentImpl)
-	deadline := time.Now().Add(2 * time.Second)
-	for impl.handle.Written() < impl.headerLen && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if impl.handle.Written() < impl.headerLen {
-		t.Fatal("timed out waiting for the header write to be confirmed")
-	}
+	// No AddStreamParams/AddFrames at all -- only the static nodes
+	// (root/params/catalog, epilog Count==3) are physically written, by
+	// promoteLocked's own synchronous writeStaticNodesV2 call, before
+	// BeginSegment even returns -- no polling needed to reach "header
+	// intact, no trailer" the way v1.0's async EnqueueOpenWrite required.
 
 	if err := u.Close(); err != nil {
 		t.Fatalf("simulated crash teardown: %v", err)

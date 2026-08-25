@@ -455,19 +455,13 @@ func (e *Engine) stepWriteLocked(level Level) {
 	off := job.offset + job.pos
 	buf := job.data[job.pos : job.pos+chunkLen]
 
-	_, err := e.backend.WriteAt(buf, off)
+	result, err := e.writeVerifyChunkLocked(off, buf)
 	if err != nil {
 		e.finishWriteLocked(job, WriteResult{}, err)
 		return
 	}
-	readBack := make([]byte, chunkLen)
-	_, err = e.backend.ReadAt(readBack, off)
-	if err != nil {
-		e.finishWriteLocked(job, WriteResult{}, err)
-		return
-	}
-	if !bytes.Equal(buf, readBack) {
-		e.finishWriteLocked(job, WriteResult{Corrupted: true, FailedOffset: off}, nil)
+	if result.Corrupted {
+		e.finishWriteLocked(job, result, nil)
 		return
 	}
 
@@ -482,6 +476,72 @@ func (e *Engine) stepWriteLocked(level Level) {
 	if job.pos >= int64(len(job.data)) && (!job.open || job.closed) {
 		e.finishWriteLocked(job, WriteResult{}, nil)
 	}
+}
+
+// writeVerifyChunkLocked writes buf at off and reads it back for
+// comparison, reporting a corrupted result (not an error) on mismatch --
+// same write-verify contract stepWriteLocked always had. When off and
+// len(buf) are already alignment-safe (every ordinary job, and every
+// open-job flush whose own offset happens to land on a boundary), this is
+// exactly the original single WriteAt + ReadAt, no extra I/O.
+//
+// Otherwise -- a caller-chosen job offset that doesn't happen to be
+// alignment-safe on its own, e.g. a v2.0 content node's value region
+// starting right after its own fixedHeaderSize-byte header (ADR-023),
+// where the node format fixes that header at a size independent of any
+// backend's Alignment() -- WriteAt itself must still land on an aligned,
+// aligned-length block (ADR-010), so the smallest such block covering
+// [off, off+len(buf)) is read back first, buf is spliced into it at its
+// real position, and the whole block is written. The bytes outside buf's
+// own span are just echoed from whatever's already there (dead space a
+// later write in the same node will fill in for real, or a neighboring
+// node's own already-verified bytes this call must not disturb) -- never
+// invented, so nothing already on disk is lost. Only buf's own bytes are
+// compared for corruption: the echoed pad wasn't this call's to
+// guarantee, and reporting FailedOffset anywhere but off would blame the
+// wrong region.
+func (e *Engine) writeVerifyChunkLocked(off int64, buf []byte) (WriteResult, error) {
+	alignment := e.alignmentLocked()
+	if off%alignment == 0 && int64(len(buf))%alignment == 0 {
+		_, err := e.backend.WriteAt(buf, off)
+		if err != nil {
+			return WriteResult{}, err
+		}
+		return e.verifyChunkLocked(off, buf)
+	}
+
+	alignedOff := off - off%alignment
+	alignedEnd := off + int64(len(buf))
+	if rem := alignedEnd % alignment; rem != 0 {
+		alignedEnd += alignment - rem
+	}
+	block := make([]byte, alignedEnd-alignedOff)
+	_, err := e.backend.ReadAt(block, alignedOff)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	copy(block[off-alignedOff:], buf)
+
+	_, err = e.backend.WriteAt(block, alignedOff)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	return e.verifyChunkLocked(off, buf)
+}
+
+// verifyChunkLocked reads back exactly buf's own span (ReadAt tolerates
+// any offset/length, ADR-010) and compares it against what was meant to
+// be there.
+func (e *Engine) verifyChunkLocked(off int64, buf []byte) (WriteResult, error) {
+	readBack := make([]byte, len(buf))
+	_, err := e.backend.ReadAt(readBack, off)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if !bytes.Equal(buf, readBack) {
+		return WriteResult{Corrupted: true, FailedOffset: off}, nil
+	}
+	return WriteResult{}, nil
 }
 
 func (e *Engine) finishWriteLocked(job *writeJob, res WriteResult, err error) {

@@ -3,7 +3,6 @@ package storage
 import (
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/traycers/farc/fblock"
 	"github.com/traycers/farc/internal/index"
@@ -20,56 +19,20 @@ var ErrStorageCorrupted = errors.New("storage: deeply corrupted, needs recovery 
 // geometry (docs/docs/archive/04-storage-operations.md §4.2.1 step 1).
 // Geometry fields are identical across every fblock by construction, so
 // fblock 0 — always present after Init — is as good a source as any.
+// v2.0 (ADR-023): delegates to probeGeometryV2 (startup_v2.go).
 func probeGeometry(backend ioengine.Backend) (Geometry, error) {
-	buf := make([]byte, fblock.FixedPrologSize)
-	_, err := backend.ReadAt(buf, 0)
-	if err != nil {
-		return Geometry{}, fmt.Errorf("storage: probe geometry: %w", err)
-	}
-	prolog, err := fblock.DecodeFixedProlog(buf)
-	if err != nil {
-		return Geometry{}, fmt.Errorf("%w: fblock 0 unreadable: %w", ErrStorageCorrupted, err)
-	}
-	return Geometry{
-		FblockSize:  prolog.FblockSize,
-		N:           prolog.CatalogEntryCount,
-		MaxChannels: prolog.MaxChannels,
-	}, nil
+	return probeGeometryV2(backend)
 }
 
 // scanForFreshestCatalog is Startup path 2 phases 2-3 (docs/docs/archive/
 // 04-storage-operations.md §4.2.2-§4.2.3): read every fblock's fixed prolog,
 // rank candidates by write_sequence descending, and return the first
-// (highest-write_sequence) one whose full header — importantly, its
-// catalog CRC — actually validates.
+// (highest-write_sequence) one whose catalog node actually validates.
+// v2.0 (ADR-023): delegates to scanForFreshestCatalogV2 (startup_v2.go),
+// which locates the catalog node via the epilog directory (Count>=3)
+// instead of a header CRC.
 func scanForFreshestCatalog(backend ioengine.Backend, geo Geometry) (*fblock.Catalog, uint32, error) {
-	type candidate struct {
-		idx uint32
-		seq uint64
-	}
-	var candidates []candidate
-	for i := uint32(0); i < geo.N; i++ {
-		prolog, err := readFixedProlog(backend, geo, i)
-		if err != nil {
-			continue // ErrUninitialized or a bad read: not a candidate
-		}
-		candidates = append(candidates, candidate{i, prolog.WriteSequence})
-	}
-	if len(candidates) == 0 {
-		return nil, 0, fmt.Errorf("%w: no fblock with a valid magic_prolog found", ErrStorageCorrupted)
-	}
-	sort.Slice(candidates, func(a, b int) bool { return candidates[a].seq > candidates[b].seq })
-
-	for _, c := range candidates {
-		h, diag, err := readHeader(backend, geo, c.idx)
-		if err != nil {
-			continue
-		}
-		if diag.CatalogValid {
-			return h.Catalog, c.idx, nil
-		}
-	}
-	return nil, 0, fmt.Errorf("%w: every candidate fblock's catalog snapshot is corrupted", ErrStorageCorrupted)
+	return scanForFreshestCatalogV2(backend, geo)
 }
 
 // OpenConfig configures Startup (docs/docs/archive/04-storage-operations.md
@@ -110,18 +73,14 @@ func Open(cfg OpenConfig) (*Unit, error) {
 		}
 	}
 
-	// Current operative Params come from the cursor fblock's own header —
+	// Current operative Params come from the cursor fblock's own prolog —
 	// the freshest write's params are the Storage's current ones (operator
 	// changes to write_mode/retention.days only take effect in the next
 	// write onward, matching every other per-fblock field).
-	hCursor, diag, err := readHeader(cfg.Backend, geo, cursor)
+	prolog, params, err := readParamsAndPrologV2(cfg.Backend, geo, cursor)
 	if err != nil {
-		return nil, fmt.Errorf("storage: open: read cursor fblock %d header: %w", cursor, err)
+		return nil, fmt.Errorf("storage: open: read cursor fblock %d prolog/params: %w", cursor, err)
 	}
-	if diag.Status() != fblock.HeaderIntact {
-		return nil, fmt.Errorf("%w: cursor fblock %d header is not intact (%v)", ErrStorageCorrupted, cursor, diag.Status())
-	}
-	params := hCursor.Params
 
 	// If the freshest-write_sequence fblock is still Uninitialized in the
 	// catalog, it's fblock 0's bootstrap write (Init never counts it as
@@ -140,21 +99,21 @@ func Open(cfg OpenConfig) (*Unit, error) {
 	}
 
 	if cfg.CatalogPath != "" {
-		err := syncSSDCatalog(cfg.CatalogPath, mgr, hCursor.Prolog)
+		err := syncSSDCatalog(cfg.CatalogPath, mgr, prolog.WriteSequence, prolog.CatalogTime)
 		if err != nil {
 			return nil, fmt.Errorf("storage: open: rebuild SSD catalog: %w", err)
 		}
 	}
 
-	return newUnit(cfg.Backend, geo, params, mgr, cfg.CatalogPath, cfg.Tuning, cfg.PoolTuning, hCursor.Prolog.WriteSequence), nil
+	return newUnit(cfg.Backend, geo, params, mgr, cfg.CatalogPath, cfg.Tuning, cfg.PoolTuning, prolog.WriteSequence), nil
 }
 
-// syncSSDCatalog saves mgr's current snapshot to path, tagged with
-// prolog's write_sequence/catalog_time and mgr's current cursor.
-func syncSSDCatalog(path string, mgr *index.Manager, prolog fblock.FixedProlog) error {
+// syncSSDCatalog saves mgr's current snapshot to path, tagged with the
+// cursor fblock's write_sequence/catalog_time and mgr's current cursor.
+func syncSSDCatalog(path string, mgr *index.Manager, writeSequence, catalogTime uint64) error {
 	meta := SSDCatalogMeta{
-		WriteSequence: prolog.WriteSequence,
-		CatalogTime:   prolog.CatalogTime,
+		WriteSequence: writeSequence,
+		CatalogTime:   catalogTime,
 		Cursor:        mgr.Cursor(),
 	}
 	return SaveSSDCatalog(path, mgr.Snapshot(), meta)

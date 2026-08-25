@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
 	"github.com/traycers/farc/internal/ioengine"
 	"github.com/traycers/farc/internal/storageengine"
 )
@@ -59,7 +60,7 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 	if err != nil {
 		return fmt.Errorf("storage: init: encode params: %w", err)
 	}
-	err = fblock.CheckMinContainerShare(cfg.Geometry.FblockSize, uint32(len(paramsBuf)), catalogSize, cfg.Params.MinContainerShare, backend.Alignment())
+	err = fblockv2.CheckMinContainerShare(cfg.Geometry.FblockSize, uint32(len(paramsBuf)), catalogSize, cfg.Params.MinContainerShare, backend.Alignment())
 	if err != nil {
 		return fmt.Errorf("storage: init: %w", err)
 	}
@@ -73,20 +74,21 @@ func Init(backend ioengine.Backend, cfg InitConfig) error {
 	// content by SelectNextIndex/the write cursor — see docs/docs/archive/
 	// 04-storage-operations.md §3.1 step 4 and §6.1.
 	cat := fblock.NewCatalog(cfg.Geometry.MaxChannels, cfg.Geometry.N)
-
-	h := &fblock.Header{
-		Prolog: fblock.FixedProlog{
-			FormatVersionMajor: 1,
-			FormatVersionMinor: 0,
-			MaxChannels:        cfg.Geometry.MaxChannels,
-			WriteSequence:      1,
-			CatalogTime:        cfg.Now,
-			FblockSize:         cfg.Geometry.FblockSize,
-		},
-		Params:  cfg.Params,
-		Catalog: cat,
+	catalogBuf, err := fblock.EncodeCatalog(cat)
+	if err != nil {
+		return fmt.Errorf("storage: init: encode catalog: %w", err)
 	}
-	buf, err := assembleFblock(h, nil, nil, backend.Alignment())
+
+	prolog := fblockv2.FixedProlog{
+		FormatVersionMajor: 2,
+		FormatVersionMinor: 0,
+		MaxChannels:        cfg.Geometry.MaxChannels,
+		WriteSequence:      1,
+		CatalogTime:        cfg.Now,
+		FblockSize:         cfg.Geometry.FblockSize,
+		CatalogEntryCount:  cfg.Geometry.N,
+	}
+	buf, err := fblockv2.AssembleFblock(prolog, paramsBuf, catalogBuf, nil, nil, backend.Alignment(), cfg.Geometry.FblockSize)
 	if err != nil {
 		return fmt.Errorf("storage: init: assemble fblock 0: %w", err)
 	}

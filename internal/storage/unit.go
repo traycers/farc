@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
 	"github.com/traycers/farc/internal/index"
 	"github.com/traycers/farc/internal/ioengine"
 	"github.com/traycers/farc/internal/storageengine"
@@ -112,19 +113,20 @@ func (u *Unit) PoolTuning() PoolTuning { return u.pool.Tuning() }
 // prolog/catalog/epilog filled from this Storage's *current*
 // geometry/params — Storage-wide constants, identical for every fblock at
 // this moment, computed fresh here rather than cached on Pool (which has
-// no back-reference to Unit). Encodes a throwaway header purely to learn
-// its params/catalog byte sizes, mirroring exactly what promoteLocked
-// itself computes when a segment is actually promoted.
+// no back-reference to Unit). Encodes throwaway params/catalog purely to
+// learn their v2.0 node sizes, mirroring exactly what promoteLocked itself
+// computes when a segment is actually promoted.
 func (u *Unit) PoolSlots() ([]SlotStatus, error) {
-	h := &fblock.Header{Params: u.currentParams(), Catalog: u.mgr.Snapshot()}
-	_, err := fblock.EncodeHeader(h)
+	paramsBuf, err := fblock.EncodeParams(u.currentParams())
 	if err != nil {
-		return nil, fmt.Errorf("storage: pool slots: encode header for current sizes: %w", err)
+		return nil, fmt.Errorf("storage: pool slots: encode params for current sizes: %w", err)
 	}
+	catalogSize := fblock.CatalogSize(u.geo.MaxChannels, u.geo.N)
+	alignment := u.backend.Alignment()
 	defaults := SectionSizes{
-		PrologSize:  fblock.FixedPrologSize + h.Prolog.ParamsSize,
-		CatalogSize: h.Prolog.CatalogSize,
-		EpilogSize:  fblock.EpilogSize,
+		PrologSize:  uint32(fblockv2.FixedPrologSizeV2) + uint32(fblockv2.NodeTotalSize(int64(len(paramsBuf)), alignment)),
+		CatalogSize: uint32(fblockv2.NodeTotalSize(int64(catalogSize), alignment)),
+		EpilogSize:  uint32(fblockv2.EpilogSizeV2),
 	}
 	return u.pool.Slots(defaults), nil
 }

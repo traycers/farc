@@ -5,18 +5,18 @@ import (
 	"fmt"
 
 	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
 	"github.com/traycers/farc/internal/index"
 	"github.com/traycers/farc/internal/ioengine"
 	"github.com/traycers/farc/mediatree"
-	"github.com/traycers/farc/toc"
 )
 
 // ConsistencyCheck resolves any in_progress fblock(s) left over from a
 // crash (docs/docs/archive/04-storage-operations.md §5), after indices are
 // already loaded into mgr via either Startup path.
 //
-// Unlike a plain header/epilog check, real recovery (recoverPartialWrite,
-// below) DOES write to the main disk — reconstructing and physically
+// Unlike a plain header/epilog check, real recovery (recoverPartialWriteV2,
+// consistency_v2.go) DOES write to the main disk — reconstructing and physically
 // writing a valid TOC+epilogue is the only way to make a partially-written
 // fblock genuinely ready-readable again, a deliberate, documented exception
 // to what this function used to guarantee. Every other outcome (Bad, or a
@@ -56,7 +56,12 @@ func ConsistencyCheck(backend ioengine.Backend, geo Geometry, mgr *index.Manager
 		// unconditionally, no epilogue check needed.
 		bestSeq := uint64(0)
 		for _, idx := range inProgress {
-			prolog, err := readFixedProlog(backend, geo, idx)
+			buf := make([]byte, fblockv2.FixedPrologSizeV2)
+			_, err := backend.ReadAt(buf, int64(fblockOffset(geo, idx)))
+			if err != nil {
+				continue
+			}
+			prolog, err := fblockv2.DecodeFixedProlog(buf)
 			if err == nil && prolog.WriteSequence >= bestSeq {
 				bestSeq = prolog.WriteSequence
 				candidate = idx
@@ -72,7 +77,8 @@ func ConsistencyCheck(backend ioengine.Backend, geo Geometry, mgr *index.Manager
 		}
 	}
 
-	complete, err := verifyWriteCompletion(backend, geo, candidate)
+	alignment := backend.Alignment()
+	_, complete, err := verifyWriteCompletionV2(backend, geo, candidate)
 	if err != nil {
 		return fmt.Errorf("storage: consistency check: fblock %d: %w", candidate, err)
 	}
@@ -80,7 +86,7 @@ func ConsistencyCheck(backend ioengine.Backend, geo Geometry, mgr *index.Manager
 		return mgr.CompleteWrite(candidate, cat.UUID[candidate], cat.Begin[candidate], cat.End[candidate])
 	}
 
-	uuid, begin, end, ok, err := recoverPartialWrite(backend, geo, candidate)
+	uuid, begin, end, ok, err := recoverPartialWriteV2(backend, geo, candidate, alignment)
 	if err != nil {
 		return fmt.Errorf("storage: consistency check: recover fblock %d: %w", candidate, err)
 	}
@@ -88,81 +94,6 @@ func ConsistencyCheck(backend ioengine.Backend, geo Geometry, mgr *index.Manager
 		return mgr.CompleteWrite(candidate, uuid, begin, end)
 	}
 	return mgr.MarkBad(candidate)
-}
-
-// recoverPartialWrite attempts ADR-017's real recovery for an in_progress
-// fblock whose epilogue isn't valid (verifyWriteCompletion returned false)
-// but whose header IS intact — meaning at least one periodic-flush trigger
-// (segment.go's combined data+magic-trailer write) landed durably. It walks
-// the raw content bytes decoding mediatree.Elements up to the last
-// confirmed magic trailer (fblock.FindTrailer — unambiguous, since every
-// earlier trigger's trailer was already overwritten by the next real
-// content batch, only the most recent one ever survives on disk), builds a
-// TOC from whatever decoded cleanly, and physically writes it plus a fresh
-// epilogue, zero-padding from the trailer's old position onward exactly as
-// a real Close would have. Returns ok=false (caller falls back to MarkBad)
-// if the header itself isn't intact (a crash before even the first trigger
-// completed), if no trailer can be found at all (not even one trigger
-// landed), or if no frame timestamp can be recovered to determine end.
-func recoverPartialWrite(backend ioengine.Backend, geo Geometry, idx uint32) (uuid [16]byte, begin, end uint64, ok bool, err error) {
-	h, diag, err := readHeader(backend, geo, idx)
-	if err != nil {
-		return uuid, 0, 0, false, err
-	}
-	if diag.Status() != fblock.HeaderIntact {
-		return uuid, 0, 0, false, nil
-	}
-
-	base := int64(fblockOffset(geo, idx))
-	offs := fblock.ComputeOffsets(h.Prolog.ParamsSize, h.Prolog.CatalogSize, backend.Alignment())
-	// tocSize=0 gives the largest possible content region -- a safe upper
-	// bound to read (it never exceeds the fblock's own reserved slot,
-	// since a real, nonzero TOC only ever shrinks this further).
-	contentCap := fblock.ContentSize(h.Prolog.FblockSize, h.Prolog.ParamsSize, h.Prolog.CatalogSize, 0, backend.Alignment())
-	if contentCap <= 0 {
-		return uuid, 0, 0, false, nil
-	}
-	buf := make([]byte, contentCap)
-	_, err = backend.ReadAt(buf, base+int64(offs.ContentOffset))
-	if err != nil {
-		return uuid, 0, 0, false, fmt.Errorf("read content: %w", err)
-	}
-
-	trailerOff, found := fblock.FindTrailer(buf)
-	if !found {
-		return uuid, 0, 0, false, nil
-	}
-	elems, offsets := mediatree.DecodeContentPartial(buf[:trailerOff])
-	if len(elems) == 0 {
-		return uuid, 0, 0, false, nil
-	}
-	recoveredBegin, recoveredEnd, haveFrames := recoveredTimeRange(elems)
-	if !haveFrames {
-		return uuid, 0, 0, false, nil
-	}
-
-	columns, err := toc.Build(elems, offsets)
-	if err != nil {
-		return uuid, 0, 0, false, fmt.Errorf("build TOC: %w", err)
-	}
-	tocBuf, err := toc.Encode(columns)
-	if err != nil {
-		return uuid, 0, 0, false, fmt.Errorf("encode TOC: %w", err)
-	}
-
-	recoveredContent := buf[:trailerOff]
-	tail, err := assembleTail(recoveredContent, tocBuf, h.Prolog.FblockSize, h.Prolog.ParamsSize, h.Prolog.CatalogSize, backend.Alignment(), trailerOff)
-	if err != nil {
-		return uuid, 0, 0, false, fmt.Errorf("assemble recovered tail: %w", err)
-	}
-
-	tailOffset := base + int64(offs.ContentOffset) + trailerOff
-	_, err = backend.WriteAt(tail, tailOffset)
-	if err != nil {
-		return uuid, 0, 0, false, fmt.Errorf("write recovered tail: %w", err)
-	}
-
-	return h.Catalog.UUID[idx], recoveredBegin, recoveredEnd, true, nil
 }
 
 // recoveredTimeRange scans elems for every frame timestamp (video or
@@ -190,51 +121,4 @@ func recoveredTimeRange(elems []mediatree.Element) (begin, end uint64, ok bool) 
 		}
 	}
 	return begin, end, ok
-}
-
-// verifyWriteCompletion reads fblock idx's own header+epilog+content+TOC
-// from the main disk and reports whether the write reached WriteComplete
-// (docs/docs/archive/03-storage-format.md §9.1, fblock.EpilogDiagnosis) —
-// the only outcome that maps to Ready; everything else maps to Bad.
-func verifyWriteCompletion(backend ioengine.Backend, geo Geometry, idx uint32) (bool, error) {
-	h, diag, err := readHeader(backend, geo, idx)
-	if err != nil {
-		return false, fmt.Errorf("read header: %w", err)
-	}
-	if diag.Status() != fblock.HeaderIntact {
-		return false, nil // header itself untrustworthy -> Bad
-	}
-
-	epilog, err := readEpilog(backend, geo, idx)
-	if err != nil {
-		return false, nil //nolint:nilerr // ErrIncompleteWrite (or a short read) IS this function's "Bad" determination, not a fault in the check itself
-	}
-
-	contentSize := fblock.ContentSize(h.Prolog.FblockSize, h.Prolog.ParamsSize, h.Prolog.CatalogSize, epilog.TOCSize, backend.Alignment())
-	if contentSize < 0 {
-		return false, nil
-	}
-	base := int64(fblockOffset(geo, idx))
-	offs := fblock.ComputeOffsets(h.Prolog.ParamsSize, h.Prolog.CatalogSize, backend.Alignment())
-
-	contentBuf := make([]byte, contentSize)
-	_, err = backend.ReadAt(contentBuf, base+int64(offs.ContentOffset))
-	if err != nil {
-		return false, fmt.Errorf("read content: %w", err)
-	}
-	tocBuf := make([]byte, epilog.TOCSize)
-	if epilog.TOCSize > 0 {
-		tocStart := base + int64(geo.FblockSize) - int64(fblock.TOCOffsetFromEnd(epilog.TOCSize))
-		_, err = backend.ReadAt(tocBuf, tocStart)
-		if err != nil {
-			return false, fmt.Errorf("read toc: %w", err)
-		}
-	}
-
-	epilogDiag := fblock.EpilogDiagnosis{
-		EpilogValid:  true,
-		ContentValid: fblock.CRC32(contentBuf) == epilog.CRC32Content,
-		TOCValid:     fblock.CRC32(tocBuf) == epilog.CRC32TOC,
-	}
-	return epilogDiag.Status() == fblock.WriteComplete, nil
 }

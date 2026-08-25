@@ -1,6 +1,9 @@
 package storage
 
-import "github.com/traycers/farc/fblock"
+import (
+	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
+)
 
 // beginFblockWrite is the fblock write transaction's begin phase, shared by
 // segmentImpl's promoteLocked and closeLocked's retry loop: selects the
@@ -10,16 +13,16 @@ import "github.com/traycers/farc/fblock"
 // catalog snapshot with the new fcontainer's identity, bumps
 // write_sequence, and best-effort mirrors the result to the SSD catalog.
 //
-// Returns the selected index and a fully populated *fblock.Header --
-// callers differ only in what they do next (assembleHeaderAndMagic +
-// EnqueueOpenWrite for an as-yet-contentless open write, vs assembleFblock
-// + EnqueueWrite once content/TOC are already known), so that choice is
-// left to them.
-func (u *Unit) beginFblockWrite(now uint64, uuid [16]byte, positions map[uint16]uint16, begin, end uint64) (uint32, *fblock.Header, error) {
+// Returns the selected index, the fixed prolog for the write (v2.0 —
+// ADR-023), and the catalog snapshot to embed as the catalog node's value
+// -- callers encode/write these however their situation calls for
+// (writeStaticNodesV2 for an as-yet-contentless open write, or a full
+// fblockv2.AssembleFblock once content/TOC are already known).
+func (u *Unit) beginFblockWrite(now uint64, uuid [16]byte, positions map[uint16]uint16, begin, end uint64) (uint32, fblockv2.FixedProlog, *fblock.Catalog, error) {
 	idx, err := u.mgr.SelectNextIndex(now)
 	if err != nil {
 		u.notify.Publish(Event{Name: EventStorageAlert, Severity: "critical", Reason: AlertNoFreeFblocks})
-		return 0, nil, err
+		return 0, fblockv2.FixedProlog{}, nil, err
 	}
 
 	prev := u.mgr.Snapshot()
@@ -28,7 +31,7 @@ func (u *Unit) beginFblockWrite(now uint64, uuid [16]byte, positions map[uint16]
 
 	err = u.mgr.BeginWrite(idx)
 	if err != nil {
-		return 0, nil, err
+		return 0, fblockv2.FixedProlog{}, nil, err
 	}
 	u.notify.Publish(Event{Name: EventFblockWriteStarted, Index: idx, UUID: uuid})
 	if wasReady {
@@ -38,7 +41,7 @@ func (u *Unit) beginFblockWrite(now uint64, uuid [16]byte, positions map[uint16]
 	for _, pos := range positions {
 		err = u.mgr.SetChannelBit(idx, pos, true)
 		if err != nil {
-			return 0, nil, err
+			return 0, fblockv2.FixedProlog{}, nil, err
 		}
 	}
 
@@ -50,19 +53,16 @@ func (u *Unit) beginFblockWrite(now uint64, uuid [16]byte, positions map[uint16]
 	seq := u.nextWriteSequence()
 	u.saveSSDCatalogBestEffort(snap, SSDCatalogMeta{WriteSequence: seq, CatalogTime: now, Cursor: idx})
 
-	h := &fblock.Header{
-		Prolog: fblock.FixedProlog{
-			FormatVersionMajor: 1,
-			FormatVersionMinor: 0,
-			MaxChannels:        u.geo.MaxChannels,
-			WriteSequence:      seq,
-			CatalogTime:        now,
-			FblockSize:         u.geo.FblockSize,
-		},
-		Params:  u.currentParams(),
-		Catalog: snap,
+	prolog := fblockv2.FixedProlog{
+		FormatVersionMajor: 2,
+		FormatVersionMinor: 0,
+		MaxChannels:        u.geo.MaxChannels,
+		WriteSequence:      seq,
+		CatalogTime:        now,
+		FblockSize:         u.geo.FblockSize,
+		CatalogEntryCount:  u.geo.N,
 	}
-	return idx, h, nil
+	return idx, prolog, snap, nil
 }
 
 // completeFblockWrite is the transaction's complete phase: transitions idx

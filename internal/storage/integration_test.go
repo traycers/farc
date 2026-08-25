@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
 	"github.com/traycers/farc/internal/fcontainer"
 	"github.com/traycers/farc/internal/index"
 	"github.com/traycers/farc/internal/ioengine"
@@ -17,6 +18,17 @@ import (
 
 func smallGeometry() Geometry {
 	return Geometry{FblockSize: 8192, N: 4, MaxChannels: 8}
+}
+
+// contentValueOffsetV2 computes where a fresh fblock's content node's
+// *value* region starts (root+params+catalog nodes, then skip the content
+// node's own fixed header) — for tests that need to corrupt exactly that
+// region without depending on writeStaticNodesV2's internals directly.
+func contentValueOffsetV2(paramsSize, catalogSize uint32, alignment int) int64 {
+	rootSize := fblockv2.NodeTotalSize(0, alignment)
+	paramsNodeSize := fblockv2.NodeTotalSize(int64(paramsSize), alignment)
+	catalogNodeSize := fblockv2.NodeTotalSize(int64(catalogSize), alignment)
+	return int64(fblockv2.FixedPrologSizeV2) + rootSize + paramsNodeSize + catalogNodeSize + int64(fblockv2.FixedHeaderSize)
 }
 
 func smallParams() fblock.Params {
@@ -255,19 +267,24 @@ func writeRawFblockAt(t *testing.T, eng *storageengine.Engine, geo Geometry, par
 	cat.Begin[idx] = begin
 	cat.End[idx] = end
 
-	h := &fblock.Header{
-		Prolog: fblock.FixedProlog{
-			FormatVersionMajor: 1,
-			MaxChannels:        geo.MaxChannels,
-			WriteSequence:      seq,
-			FblockSize:         geo.FblockSize,
-		},
-		Params:  params,
-		Catalog: cat,
-	}
-	buf, err := assembleFblock(h, content, nil, 1) // ioengine.OpenStandard, Alignment()==1
+	paramsBuf, err := fblock.EncodeParams(params)
 	if err != nil {
-		t.Fatalf("assembleFblock: %v", err)
+		t.Fatalf("EncodeParams: %v", err)
+	}
+	catalogBuf, err := fblock.EncodeCatalog(cat)
+	if err != nil {
+		t.Fatalf("EncodeCatalog: %v", err)
+	}
+	prolog := fblockv2.FixedProlog{
+		FormatVersionMajor: 2,
+		MaxChannels:        geo.MaxChannels,
+		WriteSequence:      seq,
+		FblockSize:         geo.FblockSize,
+		CatalogEntryCount:  geo.N,
+	}
+	buf, err := fblockv2.AssembleFblock(prolog, paramsBuf, catalogBuf, content, nil, 1, geo.FblockSize) // ioengine.OpenStandard, Alignment()==1
+	if err != nil {
+		t.Fatalf("AssembleFblock: %v", err)
 	}
 	ticket := eng.EnqueueWrite(int64(fblockOffset(geo, idx)), buf)
 	for eng.Step() {
@@ -473,9 +490,11 @@ func TestWriteFcontainer_MidFchunkFailureRetriesOnNewIndex(t *testing.T) {
 		t.Fatalf("EncodeParams: %v", err)
 	}
 	catalogSize := fblock.CatalogSize(geo.MaxChannels, geo.N)
-	offs := fblock.ComputeOffsets(uint32(len(paramsBuf)), catalogSize, 1) // ioengine.OpenStandard, Alignment()==1
-	corruptStart := int64(fblockOffset(geo, 0)) + int64(offs.ContentOffset)
-	corruptEnd := int64(fblockOffset(geo, 0)) + int64(geo.FblockSize)
+	corruptStart := int64(fblockOffset(geo, 0)) + contentValueOffsetV2(uint32(len(paramsBuf)), catalogSize, 1) // ioengine.OpenStandard, Alignment()==1
+	// Stop short of the epilog region: Open()'s startup scan
+	// (scanForFreshestCatalogV2) reads fblock 0's epilog to find the
+	// freshest catalog before any write happens, so it must stay intact.
+	corruptEnd := int64(fblockOffset(geo, 0)) + int64(geo.FblockSize) - int64(fblockv2.EpilogSizeV2)
 	cb := &corruptingBackend{Backend: backend, rangeStart: corruptStart, rangeEnd: corruptEnd}
 
 	u, err := Open(OpenConfig{Backend: cb})

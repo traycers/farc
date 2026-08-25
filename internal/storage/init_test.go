@@ -50,39 +50,32 @@ func TestInit_WritesReadableFblock0(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	buf := make([]byte, geo.FblockSize)
-	if _, err := backend.ReadAt(buf, 0); err != nil {
-		t.Fatalf("ReadAt fblock0: %v", err)
-	}
-	h, diag, err := fblock.DecodeHeader(buf)
+	tree, err := readFblockV2(backend, geo, 0)
 	if err != nil {
-		t.Fatalf("DecodeHeader: %v", err)
+		t.Fatalf("readFblockV2: %v", err)
 	}
-	if diag.Status() != fblock.HeaderIntact {
-		t.Fatalf("header status = %v, want Intact", diag.Status())
+	if tree.Prolog.FblockSize != geo.FblockSize || tree.Prolog.MaxChannels != geo.MaxChannels {
+		t.Fatalf("prolog geometry mismatch: %+v", tree.Prolog)
 	}
-	if h.Prolog.FblockSize != geo.FblockSize || h.Prolog.MaxChannels != geo.MaxChannels {
-		t.Fatalf("prolog geometry mismatch: %+v", h.Prolog)
+	if tree.Prolog.WriteSequence != 1 {
+		t.Fatalf("write_sequence = %d, want 1", tree.Prolog.WriteSequence)
 	}
-	if h.Prolog.WriteSequence != 1 {
-		t.Fatalf("write_sequence = %d, want 1", h.Prolog.WriteSequence)
+
+	cat, err := fblock.DecodeCatalog(tree.Catalog.Value, geo.MaxChannels, geo.N)
+	if err != nil {
+		t.Fatalf("DecodeCatalog: %v", err)
 	}
-	if h.Catalog.State(0) != fblock.Uninitialized {
-		t.Fatalf("embedded self-state = %v, want Uninitialized (bootstrap write never counts as real content)", h.Catalog.State(0))
+	if cat.State(0) != fblock.Uninitialized {
+		t.Fatalf("embedded self-state = %v, want Uninitialized (bootstrap write never counts as real content)", cat.State(0))
 	}
 	for i := uint32(1); i < geo.N; i++ {
-		if h.Catalog.State(i) != fblock.Uninitialized {
-			t.Fatalf("fblock %d state = %v, want Uninitialized", i, h.Catalog.State(i))
+		if cat.State(i) != fblock.Uninitialized {
+			t.Fatalf("fblock %d state = %v, want Uninitialized", i, cat.State(i))
 		}
 	}
 
-	epilogBuf := buf[geo.FblockSize-uint64(fblock.EpilogSize):]
-	epilog, err := fblock.DecodeEpilog(epilogBuf)
-	if err != nil {
-		t.Fatalf("DecodeEpilog: %v", err)
-	}
-	if epilog.TOCSize != 0 {
-		t.Fatalf("epilog.TOCSize = %d, want 0", epilog.TOCSize)
+	if len(tree.TOC.Value) != 0 {
+		t.Fatalf("toc value = %q, want empty", tree.TOC.Value)
 	}
 
 	// SSD catalog mirror must match the main disk: fblock 0 stays

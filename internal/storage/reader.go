@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
 	"github.com/traycers/farc/toc"
 )
 
@@ -50,31 +50,38 @@ func (u *Unit) readRange(offset, length int64) ([]byte, error) {
 	return buf, nil
 }
 
-func (u *Unit) readEpilogAt(idx uint32) (fblock.Epilog, error) {
-	off := int64(fblockOffset(u.geo, idx)) + int64(u.geo.FblockSize) - int64(fblock.EpilogSize)
-	buf, err := u.readRange(off, int64(fblock.EpilogSize))
+// readEpilogAt reads and decodes fblock idx's v2.0 epilog — fixed size,
+// fixed offset from the end, found without scanning (ADR-023 §12.5).
+func (u *Unit) readEpilogAt(idx uint32) (fblockv2.Epilog, error) {
+	off := int64(fblockOffset(u.geo, idx)) + int64(u.geo.FblockSize) - int64(fblockv2.EpilogSizeV2)
+	buf, err := u.readRange(off, int64(fblockv2.EpilogSizeV2))
 	if err != nil {
-		return fblock.Epilog{}, err
+		return fblockv2.Epilog{}, err
 	}
-	return fblock.DecodeEpilog(buf)
+	return fblockv2.DecodeEpilog(buf)
 }
 
-// contentBaseOffset returns the absolute offset where fblock idx's Content
-// section begins. Each fblock is self-contained (ADR-002) and may have
-// been written under a different params_size/catalog_size than others (if
-// operator params changed since), so this always reads that fblock's own
-// fixed prolog rather than assuming Unit's current geometry-adjacent sizes.
+// contentNodeOffsetAndSize returns fblock idx's content node's absolute
+// start offset and total on-disk size (header+value+padding+trailer),
+// read directly from its epilog row — no geometry arithmetic needed
+// (ADR-023 §"Решение": this is exactly what the epilog directory is for).
+func (u *Unit) contentNodeOffsetAndSize(idx uint32) (int64, uint64, error) {
+	epilog, err := u.readEpilogAt(idx)
+	if err != nil {
+		return 0, 0, err
+	}
+	row := epilog.Rows[fblockv2.NodeTypeContent]
+	return int64(fblockOffset(u.geo, idx)) + int64(row.Offset), row.Size, nil
+}
+
+// contentBaseOffset returns the absolute offset where fblock idx's content
+// *value* begins (skipping the content node's own fixed header).
 func (u *Unit) contentBaseOffset(idx uint32) (int64, error) {
-	buf, err := u.readRange(int64(fblockOffset(u.geo, idx)), int64(fblock.FixedPrologSize))
+	nodeOffset, _, err := u.contentNodeOffsetAndSize(idx)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("storage: reader: fblock %d content offset: %w", idx, err)
 	}
-	prolog, err := fblock.DecodeFixedProlog(buf)
-	if err != nil {
-		return 0, err
-	}
-	offs := fblock.ComputeOffsets(prolog.ParamsSize, prolog.CatalogSize, u.backend.Alignment())
-	return int64(fblockOffset(u.geo, idx)) + int64(offs.ContentOffset), nil
+	return nodeOffset + int64(fblockv2.FixedHeaderSize), nil
 }
 
 // ReadTOC resolves uuid to its Ready fblock and reads/decodes its TOC
@@ -88,15 +95,19 @@ func (u *Unit) ReadTOC(uuid [16]byte) (*toc.Columns, error) {
 	if err != nil {
 		return nil, fmt.Errorf("storage: reader: read epilog for fblock %d: %w", idx, err)
 	}
-	if epilog.TOCSize == 0 {
+	tocRow := epilog.Rows[fblockv2.NodeTypeTOC]
+	if tocRow.Size == 0 {
 		return nil, fmt.Errorf("storage: reader: fcontainer %x has an empty TOC", uuid)
 	}
-	tocStart := int64(fblockOffset(u.geo, idx)) + int64(u.geo.FblockSize) - int64(fblock.TOCOffsetFromEnd(epilog.TOCSize))
-	buf, err := u.readRange(tocStart, int64(epilog.TOCSize))
+	nodeBuf, err := u.readRange(int64(fblockOffset(u.geo, idx))+int64(tocRow.Offset), int64(tocRow.Size))
 	if err != nil {
 		return nil, fmt.Errorf("storage: reader: read TOC for fblock %d: %w", idx, err)
 	}
-	return toc.Decode(buf)
+	node, _, err := fblockv2.DecodeNode(nodeBuf)
+	if err != nil {
+		return nil, fmt.Errorf("storage: reader: decode TOC node for fblock %d: %w", idx, err)
+	}
+	return toc.Decode(node.Value)
 }
 
 // ContentSize returns the total size of uuid's Content section — for a
@@ -108,16 +119,24 @@ func (u *Unit) ContentSize(uuid [16]byte) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("storage: reader: fcontainer %x not found (not Ready)", uuid)
 	}
-	base, err := u.contentBaseOffset(idx)
-	if err != nil {
-		return 0, fmt.Errorf("storage: reader: fblock %d content offset: %w", idx, err)
-	}
 	epilog, err := u.readEpilogAt(idx)
 	if err != nil {
 		return 0, fmt.Errorf("storage: reader: read epilog for fblock %d: %w", idx, err)
 	}
-	tocStart := int64(fblockOffset(u.geo, idx)) + int64(u.geo.FblockSize) - int64(fblock.TOCOffsetFromEnd(epilog.TOCSize))
-	return tocStart - base, nil
+	contentRow := epilog.Rows[fblockv2.NodeTypeContent]
+	// The row's Size is the node's total on-disk footprint (header+value+
+	// padding+trailer); the real value length is what ReadTOC/ReadRange
+	// callers actually want, so decode the node's header to get value_size
+	// rather than assuming the two are equal.
+	nodeBuf, err := u.readRange(int64(fblockOffset(u.geo, idx))+int64(contentRow.Offset), int64(contentRow.Size))
+	if err != nil {
+		return 0, fmt.Errorf("storage: reader: read content node for fblock %d: %w", idx, err)
+	}
+	node, _, err := fblockv2.DecodeNode(nodeBuf)
+	if err != nil {
+		return 0, fmt.Errorf("storage: reader: decode content node for fblock %d: %w", idx, err)
+	}
+	return int64(len(node.Value)), nil
 }
 
 // ReadRange reads size bytes at offset within uuid's Content section
@@ -129,7 +148,7 @@ func (u *Unit) ReadRange(uuid [16]byte, offset, size uint64) ([]byte, error) {
 	}
 	base, err := u.contentBaseOffset(idx)
 	if err != nil {
-		return nil, fmt.Errorf("storage: reader: fblock %d content offset: %w", idx, err)
+		return nil, err
 	}
 	buf, err := u.readRange(base+int64(offset), int64(size))
 	if err != nil {
@@ -150,7 +169,7 @@ func (u *Unit) ReadRanges(uuid [16]byte, ranges []Range) ([][]byte, error) {
 	}
 	base, err := u.contentBaseOffset(idx)
 	if err != nil {
-		return nil, fmt.Errorf("storage: reader: fblock %d content offset: %w", idx, err)
+		return nil, err
 	}
 
 	order := make([]int, len(ranges))

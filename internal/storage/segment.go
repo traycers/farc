@@ -3,11 +3,13 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/traycers/farc/fblock"
+	fblockv2 "github.com/traycers/farc/fblock/v2"
 	"github.com/traycers/farc/internal/fcontainer"
 	"github.com/traycers/farc/internal/storageengine"
 	"github.com/traycers/farc/mediatree"
@@ -66,14 +68,15 @@ type segmentImpl struct {
 	backlog     []byte            // encoded, not-yet-Appended content bytes, while not yet promoted
 	contentLen  int64             // total encoded content bytes ever added (sum of every pushReadyLocked tail) -- unlike contentBytes()/Written(), not lagged by the async periodic-flush engine goroutine; isFullLocked's own source of truth, since Close()'s eventual full mediatree.EncodeContent(elems) is exactly this same running total by construction (ADR-017 already relies on incremental tail encodings concatenating byte-for-byte into the same result as encoding everything at once)
 
-	uuid        [16]byte
-	idx         uint32
-	promoted    bool
-	handle      *storageengine.WriteHandle
-	headerLen   int64 // len(headerAndMagic) -- WriteHandle.Written()'s baseline
-	paramsSize  uint32
-	catalogSize uint32
-	writeSeq    uint64
+	uuid          [16]byte
+	idx           uint32
+	promoted      bool
+	handle        *storageengine.WriteHandle // content node's open-write job -- opened at its *value* region, no header baseline (ADR-023 §"Решение": the node's own header isn't written until Close, once value_size is final)
+	contentOffset uint64                     // content node's start, relative to the fblock's own base offset
+	epilog        fblockv2.Epilog            // Count==3 (root/params/catalog) once promoted; Close brings it to 5
+	paramsSize    uint32
+	catalogSize   uint32
+	writeSeq      uint64
 
 	begin, end uint64
 	haveFrame  bool
@@ -135,22 +138,17 @@ func (u *Unit) BeginSegment(channels []uint16, now uint64) (Segment, PoolStatus,
 	return seg, status, u.contentCapacityEstimate(), nil
 }
 
-// contentCapacityEstimate builds a throwaway header from the current
-// catalog snapshot purely to learn what ParamsSize/CatalogSize would be
-// (fblock.EncodeHeader's side effect), then returns the resulting content
+// contentCapacityEstimate encodes the current params/catalog purely to
+// learn their v2.0 node sizes, then returns the resulting content
 // capacity with toc_size=0 -- an upper bound, not the exact final capacity
 // (a real TOC is never zero-sized once a segment has any content).
 func (u *Unit) contentCapacityEstimate() int64 {
-	h := &fblock.Header{
-		Prolog:  fblock.FixedProlog{FblockSize: u.geo.FblockSize, MaxChannels: u.geo.MaxChannels},
-		Params:  u.currentParams(),
-		Catalog: u.mgr.Snapshot(),
-	}
-	_, err := fblock.EncodeHeader(h)
+	paramsBuf, err := fblock.EncodeParams(u.currentParams())
 	if err != nil {
 		return 0
 	}
-	return fblock.ContentSize(h.Prolog.FblockSize, h.Prolog.ParamsSize, h.Prolog.CatalogSize, 0, u.backend.Alignment())
+	catalogSize := fblock.CatalogSize(u.geo.MaxChannels, u.geo.N)
+	return fblockv2.ContentSize(u.geo.FblockSize, uint32(len(paramsBuf)), catalogSize, 0, u.backend.Alignment())
 }
 
 // promoteLocked implements poolSlot -- called by Pool while holding Pool's
@@ -176,7 +174,10 @@ func (s *segmentImpl) closing() bool {
 // order) strictly before setting that flag.
 func (s *segmentImpl) contentBytes() int64 {
 	if s.promotedAtomic.Load() {
-		return s.handle.Written() - s.headerLen
+		// v2.0's content open-write job is opened at the node's *value*
+		// region directly (no header baseline, ADR-023 §"Решение"), so
+		// Written() already reports pure content bytes.
+		return s.handle.Written()
 	}
 	return s.backlogLenAtomic.Load()
 }
@@ -193,31 +194,45 @@ func (s *segmentImpl) promoteLocked(now uint64, occupied int) error {
 	defer s.mu.Unlock()
 
 	u := s.unit
-	idx, h, err := u.beginFblockWrite(now, s.uuid, s.positions, s.begin, s.end)
+	idx, prolog, catalog, err := u.beginFblockWrite(now, s.uuid, s.positions, s.begin, s.end)
 	if err != nil {
 		return err
 	}
 
-	headerAndMagic, err := assembleHeaderAndMagic(h, u.backend.Alignment())
+	params := u.currentParams()
+	paramsBuf, err := fblock.EncodeParams(params)
 	if err != nil {
-		return fmt.Errorf("storage: segment: assemble header for fblock %d: %w", idx, err)
+		return fmt.Errorf("storage: segment: encode params for fblock %d: %w", idx, err)
+	}
+	catalogBuf, err := fblock.EncodeCatalog(catalog)
+	if err != nil {
+		return fmt.Errorf("storage: segment: encode catalog for fblock %d: %w", idx, err)
+	}
+
+	base := int64(fblockOffset(u.geo, idx))
+	alignment := u.backend.Alignment()
+	epilog, contentOffset, err := writeStaticNodesV2(u.engine, base, u.geo.FblockSize, prolog, paramsBuf, catalogBuf, alignment)
+	if err != nil {
+		return fmt.Errorf("storage: segment: write static nodes for fblock %d: %w", idx, err)
 	}
 
 	s.idx = idx
 	s.promoted = true
-	s.headerLen = int64(len(headerAndMagic))
-	s.paramsSize = h.Prolog.ParamsSize
-	s.catalogSize = h.Prolog.CatalogSize
-	s.writeSeq = h.Prolog.WriteSequence
+	s.contentOffset = contentOffset
+	s.epilog = epilog
+	s.paramsSize = uint32(len(paramsBuf))
+	s.catalogSize = uint32(len(catalogBuf))
+	s.writeSeq = prolog.WriteSequence
 
-	timeout := time.Duration(h.Params.FlushTimeoutNS) * time.Nanosecond
+	timeout := time.Duration(params.FlushTimeoutNS) * time.Nanosecond
 	// Under backlog (more than this one segment queued in the pool),
 	// ADR-017's timeout is ignored entirely -- write as fast as possible
 	// to drain the backlog, paced by fchunk_size alone.
 	if occupied > 1 {
 		timeout = 0
 	}
-	s.handle = u.engine.EnqueueOpenWrite(int64(fblockOffset(u.geo, idx)), headerAndMagic, timeout)
+	valueBase := base + int64(contentOffset) + int64(fblockv2.FixedHeaderSize)
+	s.handle = u.engine.EnqueueOpenWrite(valueBase, nil, timeout)
 	if len(s.backlog) > 0 {
 		err = s.handle.Append(s.backlog)
 		if err != nil {
@@ -290,7 +305,7 @@ func (s *segmentImpl) isFullLocked() bool {
 		return false
 	}
 	tocEst := toc.EncodedSize(uint32(s.filler.Len()))
-	capacity := fblock.ContentSize(s.unit.geo.FblockSize, s.paramsSize, s.catalogSize, tocEst, s.unit.backend.Alignment())
+	capacity := fblockv2.ContentSize(s.unit.geo.FblockSize, s.paramsSize, s.catalogSize, tocEst, s.unit.backend.Alignment())
 	// A margin of one fchunk_size reserves headroom for whatever single
 	// batch triggers the close -- Filler has no rollback, so that batch is
 	// already irrevocably in s.filler by the time this fblock is deemed
@@ -504,12 +519,21 @@ func (s *segmentImpl) closeLocked(now uint64) ([16]byte, error) {
 	}
 
 	for {
-		idx, h, err := u.beginFblockWrite(now, s.uuid, s.positions, s.begin, s.end)
+		idx, prolog, catalog, err := u.beginFblockWrite(now, s.uuid, s.positions, s.begin, s.end)
 		if err != nil {
 			return s.uuid, err
 		}
 
-		buf, err := assembleFblock(h, contentBuf, tocBuf, u.backend.Alignment())
+		paramsBuf, err := fblock.EncodeParams(u.currentParams())
+		if err != nil {
+			return s.uuid, fmt.Errorf("storage: segment: encode params for fblock %d: %w", idx, err)
+		}
+		catalogBuf, err := fblock.EncodeCatalog(catalog)
+		if err != nil {
+			return s.uuid, fmt.Errorf("storage: segment: encode catalog for fblock %d: %w", idx, err)
+		}
+
+		buf, err := fblockv2.AssembleFblock(prolog, paramsBuf, catalogBuf, contentBuf, tocBuf, u.backend.Alignment(), u.geo.FblockSize)
 		if err != nil {
 			return s.uuid, fmt.Errorf("storage: segment: assemble fblock %d: %w", idx, err)
 		}
@@ -528,7 +552,7 @@ func (s *segmentImpl) closeLocked(now uint64) ([16]byte, error) {
 			continue
 		}
 
-		err = u.completeFblockWrite(idx, s.uuid, s.begin, s.end, h.Prolog.WriteSequence, now, uint32(len(contentBuf)), h.Prolog.CatalogSize, uint32(len(tocBuf)))
+		err = u.completeFblockWrite(idx, s.uuid, s.begin, s.end, prolog.WriteSequence, now, uint32(len(contentBuf)), uint32(len(catalogBuf)), uint32(len(tocBuf)))
 		if err != nil {
 			return s.uuid, err
 		}
@@ -542,29 +566,18 @@ func (s *segmentImpl) closeLocked(now uint64) ([16]byte, error) {
 	}
 }
 
-// writeTailLocked writes the segment's tail — remaining un-flushed content
-// (from WriteHandle.Written() onward) zero-padded to capacity, + magic_toc
-// + toc + epilog — as one plain EnqueueWrite overwriting the last magic
-// trailer, and completes the write on success. Returns ok=false (caller
-// falls back to a full rewrite) if this write itself corrupts.
-func (s *segmentImpl) writeTailLocked(contentBuf, tocBuf []byte, now uint64) (ok bool, err error) {
+// enqueueAndCheck writes data at offset through s.unit's engine and
+// reports ok=false (having already marked s.idx Bad, ADR-023's progressive
+// write is finalized one small job at a time, any of which can corrupt)
+// if the write-verify itself fails. what names the write for error
+// messages only.
+func (s *segmentImpl) enqueueAndCheck(offset int64, data []byte, what string) (ok bool, err error) {
 	u := s.unit
-	written := s.handle.Written()
-	contentSoFar := written - s.headerLen
-	if contentSoFar < 0 || contentSoFar > int64(len(contentBuf)) {
-		return false, fmt.Errorf("storage: segment: inconsistent flush accounting for fblock %d (written=%d headerLen=%d contentLen=%d)", s.idx, written, s.headerLen, len(contentBuf))
-	}
-
-	tail, err := assembleTail(contentBuf, tocBuf, u.geo.FblockSize, s.paramsSize, s.catalogSize, u.backend.Alignment(), contentSoFar)
-	if err != nil {
-		return false, fmt.Errorf("storage: segment: assemble tail for fblock %d: %w", s.idx, err)
-	}
-
-	ticket := u.engine.EnqueueWrite(int64(fblockOffset(u.geo, s.idx))+s.handle.TrailerOffset(), tail)
+	ticket := u.engine.EnqueueWrite(offset, data)
 	res, werr := ticket.Wait()
 	if werr != nil {
 		u.health.RecordWrite(true)
-		return false, fmt.Errorf("storage: segment: write tail for fblock %d: %w", s.idx, werr)
+		return false, fmt.Errorf("storage: segment: write %s for fblock %d: %w", what, s.idx, werr)
 	}
 	if res.Corrupted {
 		err = u.failFblockWrite(s.idx, s.uuid)
@@ -572,6 +585,70 @@ func (s *segmentImpl) writeTailLocked(contentBuf, tocBuf []byte, now uint64) (ok
 			return false, err
 		}
 		return false, nil
+	}
+	return true, nil
+}
+
+// writeTailLocked finishes the content node (header — now that
+// value_size is final — plus the tail: remaining un-flushed value bytes,
+// padding, crc32_header/crc32_value, magic_finish, overwriting the last
+// magic trailer), brings the epilog to Count==4, writes the TOC node, and
+// brings the epilog to Count==5 (ADR-023 §"Решение") — one write per
+// step, any of which can corrupt and abort (caller falls back to a full
+// rewrite at a fresh index). Completes the write on success.
+func (s *segmentImpl) writeTailLocked(contentBuf, tocBuf []byte, now uint64) (ok bool, err error) {
+	u := s.unit
+	alignment := u.backend.Alignment()
+	base := int64(fblockOffset(u.geo, s.idx))
+	fblockEnd := base + int64(u.geo.FblockSize)
+
+	written := s.handle.Written()
+	if written < 0 || written > int64(len(contentBuf)) {
+		return false, fmt.Errorf("storage: segment: inconsistent flush accounting for fblock %d (written=%d contentLen=%d)", s.idx, written, len(contentBuf))
+	}
+
+	header, crc32Header, err := fblockv2.EncodeNodeHeader(fblockv2.NodeTypeContent, 3, 0, 2, int64(len(contentBuf)))
+	if err != nil {
+		return false, fmt.Errorf("storage: segment: encode content header for fblock %d: %w", s.idx, err)
+	}
+	ok, err = s.enqueueAndCheck(base+int64(s.contentOffset), header, "content header")
+	if err != nil || !ok {
+		return ok, err
+	}
+
+	crc32Value := crc32.ChecksumIEEE(contentBuf)
+	tail := append(append([]byte{}, contentBuf[written:]...), fblockv2.EncodeNodeTail(int64(len(contentBuf)), alignment, crc32Header, crc32Value)...)
+	valueBase := base + int64(s.contentOffset) + int64(fblockv2.FixedHeaderSize)
+	ok, err = s.enqueueAndCheck(valueBase+s.handle.TrailerOffset(), tail, "content tail")
+	if err != nil || !ok {
+		return ok, err
+	}
+
+	contentTotalSize := uint64(fblockv2.NodeTotalSize(int64(len(contentBuf)), alignment))
+	s.epilog.Rows[3] = fblockv2.EpilogRow{Type: fblockv2.NodeTypeContent, ID: 3, Offset: s.contentOffset, Size: contentTotalSize, CRC32: crc32Value}
+	s.epilog.Count = 4
+	epilogOffset, epilogBlock := writeEpilogAligned(fblockEnd, s.epilog, alignment)
+	ok, err = s.enqueueAndCheck(epilogOffset, epilogBlock, "epilog (count=4)")
+	if err != nil || !ok {
+		return ok, err
+	}
+
+	tocOffset := s.contentOffset + contentTotalSize
+	tocEncoded, err := fblockv2.EncodeNode(fblockv2.Node{Type: fblockv2.NodeTypeTOC, ID: 4, Parent: 0, Sibling: 3, Value: tocBuf}, alignment)
+	if err != nil {
+		return false, fmt.Errorf("storage: segment: encode toc node for fblock %d: %w", s.idx, err)
+	}
+	ok, err = s.enqueueAndCheck(base+int64(tocOffset), tocEncoded, "toc")
+	if err != nil || !ok {
+		return ok, err
+	}
+
+	s.epilog.Rows[4] = fblockv2.EpilogRow{Type: fblockv2.NodeTypeTOC, ID: 4, Offset: tocOffset, Size: uint64(len(tocEncoded)), CRC32: crc32.ChecksumIEEE(tocBuf)}
+	s.epilog.Count = 5
+	epilogOffset, epilogBlock = writeEpilogAligned(fblockEnd, s.epilog, alignment)
+	ok, err = s.enqueueAndCheck(epilogOffset, epilogBlock, "epilog (count=5)")
+	if err != nil || !ok {
+		return ok, err
 	}
 
 	err = u.completeFblockWrite(s.idx, s.uuid, s.begin, s.end, s.writeSeq, now, uint32(len(contentBuf)), s.catalogSize, uint32(len(tocBuf)))
