@@ -191,7 +191,7 @@ func TestServer_GetLiveURLs(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.URLs["1"] != "http://mediamtx:8889/1/whep" || out.URLs["2"] != "http://mediamtx:8889/2/whep" {
+	if out.URLs["1"] != "http://mediamtx:38889/1/whep" || out.URLs["2"] != "http://mediamtx:38889/2/whep" {
 		t.Fatalf("urls = %+v", out.URLs)
 	}
 }

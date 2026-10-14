@@ -37,7 +37,7 @@ type Client struct {
 }
 
 // New creates a Client. httpBase and wsBase are base URLs with no trailing
-// slash, e.g. "http://127.0.0.1:8080" and "ws://127.0.0.1:8081".
+// slash, e.g. "http://127.0.0.1:30080" and "ws://127.0.0.1:30081".
 func New(httpBase, wsBase string) *Client {
 	return &Client{
 		httpBase: strings.TrimSuffix(httpBase, "/"),

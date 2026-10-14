@@ -66,8 +66,8 @@ func (a Addr) String() string { return fmt.Sprintf("%s:%d", a.IP, a.Port) }
 // §2.1). Sourced from env (HLSD_FARC_HTTP/WS), not the JSON file —
 // see this package's doc comment — hence no json tags.
 type Farcd struct {
-	HTTP string // e.g. "http://10.0.0.1:8080"
-	WS   string // e.g. "ws://10.0.0.1:8081"
+	HTTP string // e.g. "http://10.0.0.1:30080"
+	WS   string // e.g. "ws://10.0.0.1:30081"
 }
 
 // Channel is one entry in the top-level "channels" list: which farcd-side

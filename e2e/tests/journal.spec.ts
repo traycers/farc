@@ -11,7 +11,7 @@ import { test, expect, type Page } from '@playwright/test'
 // test doesn't attempt (see JournalPage's own doc note on that being
 // best-effort / out of scope without live video).
 
-const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:18081'
+const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:38081'
 const STORAGE_ID = 'journal-storage'
 const CONTINUOUS_CHANNEL = 91
 const EVENT_CHANNEL = 92
@@ -58,7 +58,7 @@ async function createChannel(channel: number, policyType: 'continuous' | 'event'
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: channel,
-        rtsp_url: 'rtsp://mediamtx:8554/ch1',
+        rtsp_url: 'rtsp://mediamtx:38554/ch1',
         storage: STORAGE_ID,
         capture_policy: {
           type: policyType,

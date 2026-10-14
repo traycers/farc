@@ -14,8 +14,8 @@ const storages: StorageInfo[] = [
 // stores, .scratch/live-page/spec.md) -- deliberately NOT what the edit
 // form should show; that comes from apid's getCameraURL mock below.
 const channels: ChannelInfo[] = [
-  { channel: 1, rtsp_url: 'rtsp://mediamtx:8554/1', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0 },
-  { channel: 2, rtsp_url: 'rtsp://mediamtx:8554/2', storage: 's2', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0 },
+  { channel: 1, rtsp_url: 'rtsp://mediamtx:38554/1', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0 },
+  { channel: 2, rtsp_url: 'rtsp://mediamtx:38554/2', storage: 's2', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0 },
 ]
 
 vi.mock('../../api/farcd', () => ({

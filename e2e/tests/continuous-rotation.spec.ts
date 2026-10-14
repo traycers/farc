@@ -15,7 +15,7 @@ import { test, expect, type Page } from '@playwright/test'
 // reached Ready (writeTailLocked errored on the tail write). Fixed; this
 // test is the e2e verification for that ticket's fix.
 
-const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:18081'
+const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:38081'
 const STORAGE_ID = 'rotation-storage'
 const CHANNEL = 95
 
@@ -68,7 +68,7 @@ async function createChannel(): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: CHANNEL,
-        rtsp_url: 'rtsp://mediamtx:8554/ch1',
+        rtsp_url: 'rtsp://mediamtx:38554/ch1',
         storage: STORAGE_ID,
         capture_policy: {
           type: 'continuous',

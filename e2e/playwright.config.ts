@@ -24,7 +24,7 @@ export default defineConfig({
   retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: process.env.E2E_WEB_URL ?? 'http://localhost:18080',
+    baseURL: process.env.E2E_WEB_URL ?? 'http://localhost:38080',
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
   },

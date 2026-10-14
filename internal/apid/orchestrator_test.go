@@ -128,8 +128,8 @@ func (f *fakeMediamtxClient) DeletePath(_ context.Context, name string) error {
 }
 
 const (
-	rtspBase = "rtsp://mediamtx:8554"
-	whepBase = "http://mediamtx:8889"
+	rtspBase = "rtsp://mediamtx:38554"
+	whepBase = "http://mediamtx:38889"
 )
 
 func TestOrchestrator_CreateChannel_FreshChannel(t *testing.T) {
@@ -150,7 +150,7 @@ func TestOrchestrator_CreateChannel_FreshChannel(t *testing.T) {
 	if len(farcd.createCalls) != 1 {
 		t.Fatalf("farcd create calls = %d, want 1", len(farcd.createCalls))
 	}
-	if got := farcd.createCalls[0].RTSPURL; got != "rtsp://mediamtx:8554/1" {
+	if got := farcd.createCalls[0].RTSPURL; got != "rtsp://mediamtx:38554/1" {
 		t.Fatalf("farcd create rtsp_url = %q, want mediamtx re-serve URL, not the camera URL", got)
 	}
 	if len(mtx.addCalls) != 1 || mtx.paths["1"] != "rtsp://camera/1" {
@@ -224,7 +224,7 @@ func TestOrchestrator_UpdateChannel(t *testing.T) {
 	if !result.FarcdOK || result.FarcdErr != nil || !result.MediamtxOK || result.MediamtxErr != nil {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(farcd.updateCalls) != 1 || farcd.updateCalls[0].RTSPURL != "rtsp://mediamtx:8554/1" || farcd.updateCalls[0].Name != "renamed" {
+	if len(farcd.updateCalls) != 1 || farcd.updateCalls[0].RTSPURL != "rtsp://mediamtx:38554/1" || farcd.updateCalls[0].Name != "renamed" {
 		t.Fatalf("farcd update calls = %+v", farcd.updateCalls)
 	}
 	if mtx.paths["1"] != "rtsp://camera/1-new" {
@@ -273,7 +273,7 @@ func TestOrchestrator_GetLiveURLs(t *testing.T) {
 
 	urls := o.GetLiveURLs([]uint16{1, 2})
 
-	if urls[1] != "http://mediamtx:8889/1/whep" || urls[2] != "http://mediamtx:8889/2/whep" {
+	if urls[1] != "http://mediamtx:38889/1/whep" || urls[2] != "http://mediamtx:38889/2/whep" {
 		t.Fatalf("urls = %+v", urls)
 	}
 	if len(mtx.addCalls)+len(mtx.patchCalls)+len(mtx.deleteCalls) != 0 {

@@ -6,13 +6,13 @@
 # mediamtx.dev.yml's dev-only "test" path -- every path in production comes
 # from apid, dynamically. See that file's own comments for the full
 # rationale behind each setting below.
-rtspAddress: :8554
+rtspAddress: :38554
 
 api: yes
-apiAddress: :9997
+apiAddress: :39997
 
 webrtc: yes
-webrtcAddress: :8889
+webrtcAddress: :38889
 
 # Widened from mediamtx's own default (api/metrics/pprof restricted to
 # ips: ["127.0.0.1", "::1"]) so apid, running in its own container, can

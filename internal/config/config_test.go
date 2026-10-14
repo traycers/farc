@@ -14,10 +14,10 @@ import (
 // automatically-restored environment.
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("FARC_HTTP_PORT", "8080")
-	t.Setenv("FARC_WS_PORT", "8081")
+	t.Setenv("FARC_HTTP_PORT", "30080")
+	t.Setenv("FARC_WS_PORT", "30081")
 	t.Setenv("FARC_WS_MAX_CONNECTIONS", "100")
-	t.Setenv("FARC_METRICS_PORT", "9090")
+	t.Setenv("FARC_METRICS_PORT", "30090")
 }
 
 // docExample is docs/docs/archive/04-storage-operations.md §2.1's own
@@ -64,13 +64,13 @@ func TestLoad_DocExample(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.HTTP.String() != "0.0.0.0:8080" {
+	if cfg.HTTP.String() != "0.0.0.0:30080" {
 		t.Fatalf("HTTP = %s", cfg.HTTP)
 	}
-	if cfg.WS.String() != "0.0.0.0:8081" || cfg.WS.MaxConnections != 100 {
+	if cfg.WS.String() != "0.0.0.0:30081" || cfg.WS.MaxConnections != 100 {
 		t.Fatalf("WS = %+v", cfg.WS)
 	}
-	if cfg.Metrics.String() != "0.0.0.0:9090" {
+	if cfg.Metrics.String() != "0.0.0.0:30090" {
 		t.Fatalf("Metrics = %s", cfg.Metrics)
 	}
 	if len(cfg.Storages) != 1 || cfg.Storages[0].ID != "disk0" || cfg.Storages[0].Path != "/dev/sdb1" || cfg.Storages[0].CatalogPath != "/mnt/ssd/disk0.catalog" {
@@ -98,16 +98,16 @@ func TestLoad_DocExample(t *testing.T) {
 
 func TestLoad_CustomEnvAddr(t *testing.T) {
 	t.Setenv("FARC_HTTP_IP", "127.0.0.1")
-	t.Setenv("FARC_HTTP_PORT", "18080")
-	t.Setenv("FARC_WS_PORT", "18081")
-	t.Setenv("FARC_METRICS_PORT", "19090")
+	t.Setenv("FARC_HTTP_PORT", "38080")
+	t.Setenv("FARC_WS_PORT", "38081")
+	t.Setenv("FARC_METRICS_PORT", "38090")
 
 	const doc = `{"storages": [{"id":"disk0","path":"/dev/sdb1"}], "channels": []}`
 	cfg, err := Load(writeConfig(t, doc))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.HTTP.String() != "127.0.0.1:18080" {
+	if cfg.HTTP.String() != "127.0.0.1:38080" {
 		t.Fatalf("HTTP = %s", cfg.HTTP)
 	}
 }
@@ -193,7 +193,7 @@ func TestLoad_HTTPOrWSSectionInJSONRejected(t *testing.T) {
 	// http/ws/metrics moved to env -- their JSON keys must now be rejected
 	// by DisallowUnknownFields, not silently ignored.
 	const doc = `{
-  "http": {"ip":"0.0.0.0","port":8080},
+  "http": {"ip":"0.0.0.0","port":30080},
   "storages": [{"id":"disk0","path":"/dev/sdb1"}],
   "channels": []
 }`

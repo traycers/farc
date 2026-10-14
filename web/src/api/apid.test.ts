@@ -104,7 +104,7 @@ describe('getLiveURLs', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        new Response(JSON.stringify({ urls: { '1': 'http://mediamtx:8889/1/whep', '2': 'http://mediamtx:8889/2/whep' } }), {
+        new Response(JSON.stringify({ urls: { '1': 'http://mediamtx:38889/1/whep', '2': 'http://mediamtx:38889/2/whep' } }), {
           status: 200,
         }),
       )
@@ -114,7 +114,7 @@ describe('getLiveURLs', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/apid/channels/live-urls?ids=1,2')
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(urls).toEqual({ 1: 'http://mediamtx:8889/1/whep', 2: 'http://mediamtx:8889/2/whep' })
+    expect(urls).toEqual({ 1: 'http://mediamtx:38889/1/whep', 2: 'http://mediamtx:38889/2/whep' })
   })
 
   it('returns an empty map without a request for an empty id list', async () => {

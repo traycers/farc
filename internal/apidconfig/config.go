@@ -36,7 +36,7 @@ func (a Addr) String() string { return fmt.Sprintf("%s:%d", a.IP, a.Port) }
 // remove (internal/api/channels.go's routes). Sourced from env
 // (APID_FARC_HTTP), not the JSON file -- hence no json tags.
 type Farcd struct {
-	HTTP string // e.g. "http://10.0.0.1:8080"
+	HTTP string // e.g. "http://10.0.0.1:30080"
 }
 
 // Mediamtx is the mediamtx instance apid talks to via its control API
@@ -44,15 +44,15 @@ type Farcd struct {
 // paths. Sourced from env (APID_MEDIAMTX_API_BASE/APID_MEDIAMTX_RTSP_BASE),
 // not the JSON file -- hence no json tags.
 type Mediamtx struct {
-	APIBase string // e.g. "http://mediamtx:9997"
+	APIBase string // e.g. "http://mediamtx:39997"
 
 	// RTSPBase is mediamtx's RTSP re-serve base (its default rtspAddress,
-	// ":8554") -- farcd's ingest pulls a channel's stream from
+	// ":38554") -- farcd's ingest pulls a channel's stream from
 	// "{RTSPBase}/{channel_id}" instead of the camera directly
 	// (.scratch/live-page/spec.md's "single RTSP connection to the
 	// camera" decision), so apid builds each channel's farcd-side
 	// rtsp_url from this.
-	RTSPBase string // e.g. "rtsp://mediamtx:8554"
+	RTSPBase string // e.g. "rtsp://mediamtx:38554"
 }
 
 // Config is apid's whole process configuration.
@@ -64,7 +64,7 @@ type Config struct {
 	Mediamtx Mediamtx `json:"-"`
 
 	// WebRTCPublicBase is the base URL a *browser* uses to reach mediamtx's
-	// WHEP endpoint (mediamtx's webrtcAddress, default ":8889") -- may
+	// WHEP endpoint (mediamtx's webrtcAddress, default ":38889") -- may
 	// differ from Mediamtx.APIBase's host/port, since APIBase only needs to
 	// be reachable from apid's own container, not from the public web.
 	// apid appends "/{channel_id}/whep" to this to build each channel's

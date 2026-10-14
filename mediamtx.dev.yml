@@ -8,16 +8,16 @@
 # camera directly -- see that spec's "single RTSP connection to the
 # camera" decision) over rtspAddress. webrtc below is what the web app's
 # Live page actually plays.
-rtspAddress: :8554
+rtspAddress: :38554
 
 # Control API (apid's target -- POST/PATCH/DELETE /v3/config/paths/...,
 # https://mediamtx.org/docs/features/control-api) -- off by default.
 api: yes
-apiAddress: :9997
+apiAddress: :39997
 
 # WebRTC/WHEP (the web app's Live page's video source).
 webrtc: yes
-webrtcAddress: :8889
+webrtcAddress: :38889
 
 # mediamtx's default authInternalUsers scopes the "api"/"metrics"/"pprof"
 # actions to ips: ["127.0.0.1", "::1"] -- apid calls the control API from a

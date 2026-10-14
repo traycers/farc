@@ -24,12 +24,12 @@ import { test, expect } from '@playwright/test'
 // journal.spec.ts, matching this repo's existing per-spec convention
 // (continuous-rotation.spec.ts, journal.spec.ts each own theirs too).
 
-const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:18081'
+const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:38081'
 // hlsd has no published host port in production (internal/hlsapi's
 // server is only reachable from other containers on the compose network);
 // this test runs inside that network (see e2e/README-less docker-run
 // invocation), so the compose service name resolves directly.
-const HLS_URL = process.env.E2E_HLS_URL ?? 'http://localhost:18090'
+const HLS_URL = process.env.E2E_HLS_URL ?? 'http://localhost:38090'
 const STORAGE_ID = 'gap-skip-storage'
 const CHANNEL = 93
 
@@ -90,7 +90,7 @@ async function createChannel(): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: CHANNEL,
-        rtsp_url: 'rtsp://mediamtx:8554/ch1',
+        rtsp_url: 'rtsp://mediamtx:38554/ch1',
         storage: STORAGE_ID,
         capture_policy: {
           type: 'event',

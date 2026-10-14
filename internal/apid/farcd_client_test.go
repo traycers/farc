@@ -15,7 +15,7 @@ func TestFarcdClient_CreateListUpdateRemoveChannel(t *testing.T) {
 
 	created, err := client.CreateChannel(ctx, apid.CreateChannelRequest{
 		ID:                1,
-		RTSPURL:           "rtsp://mediamtx:8554/1",
+		RTSPURL:           "rtsp://mediamtx:38554/1",
 		Storage:           "s1",
 		CapturePolicyType: "continuous",
 		Name:              "front door",
@@ -23,7 +23,7 @@ func TestFarcdClient_CreateListUpdateRemoveChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateChannel: %v", err)
 	}
-	if created.Channel != 1 || created.RTSPURL != "rtsp://mediamtx:8554/1" || created.Storage != "s1" || created.Name != "front door" {
+	if created.Channel != 1 || created.RTSPURL != "rtsp://mediamtx:38554/1" || created.Storage != "s1" || created.Name != "front door" {
 		t.Fatalf("CreateChannel result = %+v", created)
 	}
 
@@ -36,7 +36,7 @@ func TestFarcdClient_CreateListUpdateRemoveChannel(t *testing.T) {
 	}
 
 	updated, err := client.UpdateChannel(ctx, 1, apid.UpdateChannelRequest{
-		RTSPURL:           "rtsp://mediamtx:8554/1",
+		RTSPURL:           "rtsp://mediamtx:38554/1",
 		Storage:           "s1",
 		CapturePolicyType: "continuous",
 		Name:              "front door (renamed)",
@@ -85,7 +85,7 @@ func TestFarcdClient_CreateChannel_ErrorSurfacesFarcdMessage(t *testing.T) {
 
 	_, err := client.CreateChannel(ctx, apid.CreateChannelRequest{
 		ID:                1,
-		RTSPURL:           "rtsp://mediamtx:8554/1",
+		RTSPURL:           "rtsp://mediamtx:38554/1",
 		Storage:           "does-not-exist",
 		CapturePolicyType: "continuous",
 	})

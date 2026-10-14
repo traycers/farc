@@ -41,8 +41,8 @@ type Orchestrator struct {
 	farcd    FarcdClient
 	mediamtx MediamtxClient
 
-	rtspBase         string // mediamtx's RTSP re-serve base, e.g. "rtsp://mediamtx:8554"
-	webrtcPublicBase string // mediamtx's browser-facing WHEP base, e.g. "http://mediamtx:8889"
+	rtspBase         string // mediamtx's RTSP re-serve base, e.g. "rtsp://mediamtx:38554"
+	webrtcPublicBase string // mediamtx's browser-facing WHEP base, e.g. "http://mediamtx:38889"
 }
 
 // NewOrchestrator creates an Orchestrator. rtspBase/webrtcPublicBase come

@@ -16,13 +16,13 @@ services:
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
-      - "8554:8554"
+      - "38554:38554"
     expose:
-      - "9997"
+      - "39997"
       # WebRTC/WHEP -- reached through the web service's nginx /api/whep
       # proxy, not published to the host (same as the release compose
       # file, .scratch/live-page-fixes/issues/03).
-      - "8889"
+      - "38889"
     restart: unless-stopped
 
   # Publishes e2e/media/sample.mp4 into mediamtx on loop, as two independent
@@ -33,7 +33,7 @@ services:
     entrypoint: []
     command: >
       ffmpeg -re -stream_loop -1 -i /media/sample.mp4
-      -c copy -f rtsp rtsp://mediamtx:8554/ch1
+      -c copy -f rtsp rtsp://mediamtx:38554/ch1
     volumes:
       - ./media:/media:ro
     depends_on:
@@ -45,7 +45,7 @@ services:
     entrypoint: []
     command: >
       ffmpeg -re -stream_loop -1 -i /media/sample.mp4
-      -c copy -f rtsp rtsp://mediamtx:8554/ch2
+      -c copy -f rtsp rtsp://mediamtx:38554/ch2
     volumes:
       - ./media:/media:ro
     depends_on:
@@ -58,17 +58,17 @@ services:
       dockerfile: Dockerfile.farc
     environment:
       FARC_HTTP_IP: "0.0.0.0"
-      FARC_HTTP_PORT: "8080"
+      FARC_HTTP_PORT: "30080"
       FARC_WS_IP: "0.0.0.0"
-      FARC_WS_PORT: "8081"
+      FARC_WS_PORT: "30081"
       FARC_WS_MAX_CONNECTIONS: "100"
       FARC_METRICS_IP: "0.0.0.0"
-      FARC_METRICS_PORT: "9090"
+      FARC_METRICS_PORT: "30090"
     ports:
       # exposed so tests/setup.ts (running on the host, outside this
       # compose network) can call farcd's HTTP API directly to create the
       # test storage/channels and poll candidates.
-      - "18081:8080"
+      - "38081:30080"
     volumes:
       - farc_config:/etc/farc
       - farc_data:/data
@@ -82,11 +82,11 @@ services:
       dockerfile: Dockerfile.hlsd
     environment:
       HLSD_HTTP_IP: "0.0.0.0"
-      HLSD_HTTP_PORT: "8090"
+      HLSD_HTTP_PORT: "30091"
       HLSD_METRICS_IP: "0.0.0.0"
-      HLSD_METRICS_PORT: "9091"
-      HLSD_FARC_HTTP: "http://farc:8080"
-      HLSD_FARC_WS: "ws://farc:8081"
+      HLSD_METRICS_PORT: "30092"
+      HLSD_FARC_HTTP: "http://farc:30080"
+      HLSD_FARC_WS: "ws://farc:30081"
       HLSD_TARGET_SEGMENT_DURATION: "2s"
       # Required regardless of cache_backend (internal/hlsconfig also roots
       # staging dirs under it) -- s3 mode below doesn't exempt it.
@@ -96,13 +96,15 @@ services:
       # two-channel-playback.spec.ts already drives real cache-miss-then-hit
       # playback, so it covers the new backend with no test changes needed.
       HLSD_CACHE_BACKEND: "s3"
-      HLSD_S3_ENDPOINT: "seaweedfs:8333"
+      HLSD_S3_ENDPOINT: "seaweedfs:38333"
       HLSD_S3_BUCKET: "hls-segments"
       HLSD_S3_ACCESS_KEY: "hlsd"
       HLSD_S3_SECRET_KEY: "changeme"
       HLSD_S3_USE_SSL: "false"
     volumes:
       - hlsd_config:/etc/hlsd
+    ports:
+      - "38090:30091"
     depends_on:
       - farc
       - seaweedfs
@@ -115,14 +117,14 @@ services:
   # hlsd starts serving (hlsd itself never creates its bucket).
   seaweedfs:
     image: chrislusf/seaweedfs:latest
-    command: server -s3 -s3.port=8333 -dir=/data
+    command: server -s3 -s3.port=38333 -dir=/data
     restart: unless-stopped
 
   seaweedfs-init:
     image: chrislusf/seaweedfs:latest
     entrypoint: []
     command: >
-      sh -c "sleep 3 && echo 's3.bucket.create -name hls-segments' | weed shell -master=seaweedfs:9333"
+      sh -c "sleep 3 && echo 's3.bucket.create -name hls-segments' | weed shell -master=seaweedfs:39333"
     depends_on:
       - seaweedfs
     restart: "no"
@@ -133,12 +135,12 @@ services:
       dockerfile: Dockerfile.apid
     environment:
       APID_HTTP_IP: "0.0.0.0"
-      APID_HTTP_PORT: "8100"
+      APID_HTTP_PORT: "30100"
       APID_METRICS_IP: "0.0.0.0"
-      APID_METRICS_PORT: "9101"
-      APID_FARC_HTTP: "http://farc:8080"
-      APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
-      APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
+      APID_METRICS_PORT: "30101"
+      APID_FARC_HTTP: "http://farc:30080"
+      APID_MEDIAMTX_API_BASE: "http://mediamtx:39997"
+      APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:38554"
       # Relative path -- the browser reaches WHEP through nginx's
       # same-origin proxy (web/nginx.conf's /api/whep/ block,
       # .scratch/live-page-fixes/issues/03), not mediamtx's port directly.
@@ -154,7 +156,7 @@ services:
     build:
       context: ../web
     ports:
-      - "18080:80"
+      - "38080:38080"
     depends_on:
       - farc
       - hlsd

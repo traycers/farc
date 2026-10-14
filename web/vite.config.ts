@@ -11,14 +11,14 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/farcd': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:30080',
         ws: true,
         rewrite: (p) => p.replace(/^\/api\/farcd/, ''),
       },
-      '/api/hls': { target: 'http://localhost:8090', rewrite: (p) => p.replace(/^\/api\/hls/, '') },
-      '/api/apid': { target: 'http://localhost:8100', rewrite: (p) => p.replace(/^\/api\/apid/, '') },
+      '/api/hls': { target: 'http://localhost:30091', rewrite: (p) => p.replace(/^\/api\/hls/, '') },
+      '/api/apid': { target: 'http://localhost:30100', rewrite: (p) => p.replace(/^\/api\/apid/, '') },
       '/api/whep': {
-        target: 'http://localhost:8889',
+        target: 'http://localhost:38889',
         rewrite: (p) => p.replace(/^\/api\/whep/, ''),
         // Dev-mode equivalent of nginx's proxy_redirect (web/nginx.conf) --
         // mediamtx's WHEP Location response header is path-absolute with no
@@ -36,7 +36,7 @@ export default defineConfig({
         },
       },
       '/api/events': {
-        target: 'http://localhost:8081',
+        target: 'http://localhost:30081',
         ws: true,
         rewrite: (p) => p.replace(/^\/api\/events/, ''),
       },

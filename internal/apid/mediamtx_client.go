@@ -39,7 +39,7 @@ type MediamtxHTTPClient struct {
 }
 
 // NewMediamtxClient creates a MediamtxHTTPClient. base is mediamtx's
-// control-API base URL, e.g. "http://mediamtx:9997".
+// control-API base URL, e.g. "http://mediamtx:39997".
 func NewMediamtxClient(base string) *MediamtxHTTPClient {
 	return &MediamtxHTTPClient{base: strings.TrimSuffix(base, "/"), hc: &http.Client{}}
 }

@@ -17,7 +17,7 @@
 // actually reaches Ready post-refactor -- see continuous-rotation.spec.ts's
 // waitForFblockReady for the only mechanism that does.
 
-const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:18081'
+const FARC_URL = process.env.E2E_FARC_URL ?? 'http://localhost:38081'
 
 export const STORAGE_ID = 'e2e-storage'
 export const CHANNEL_1 = 1
@@ -69,7 +69,7 @@ async function createChannel(channel: number, rtspPath: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       id: channel,
-      rtsp_url: `rtsp://mediamtx:8554/${rtspPath}`,
+      rtsp_url: `rtsp://mediamtx:38554/${rtspPath}`,
       storage: STORAGE_ID,
       capture_policy: {
         type: 'continuous',

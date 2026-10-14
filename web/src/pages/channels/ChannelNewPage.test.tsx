@@ -28,7 +28,7 @@ describe('ChannelNewPage rtsp_url generate button', () => {
 
     fireEvent.click(await screen.findByTestId('rtsp-url-generate-btn'))
 
-    expect(screen.getByPlaceholderText('rtsp://camera1/stream')).toHaveValue('rtsp://mediamtx:8554/test')
+    expect(screen.getByPlaceholderText('rtsp://camera1/stream')).toHaveValue('rtsp://mediamtx:38554/test')
   })
 })
 

@@ -144,7 +144,7 @@ export default function ChannelNewPage() {
                     type="button"
                     className="btn btn-outline-secondary"
                     data-testid="rtsp-url-generate-btn"
-                    onClick={() => setRtspURL('rtsp://mediamtx:8554/test')}
+                    onClick={() => setRtspURL('rtsp://mediamtx:38554/test')}
                   >
                     Generate
                   </button>

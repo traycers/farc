@@ -13,10 +13,10 @@ import (
 // environment.
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("HLSD_HTTP_PORT", "8090")
-	t.Setenv("HLSD_METRICS_PORT", "9091")
-	t.Setenv("HLSD_FARC_HTTP", "http://10.0.0.1:8080")
-	t.Setenv("HLSD_FARC_WS", "ws://10.0.0.1:8081")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
+	t.Setenv("HLSD_METRICS_PORT", "30092")
+	t.Setenv("HLSD_FARC_HTTP", "http://10.0.0.1:30080")
+	t.Setenv("HLSD_FARC_WS", "ws://10.0.0.1:30081")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "6s")
 	t.Setenv("HLSD_CACHE_DIR", "/var/cache/hlsd")
 	t.Setenv("HLSD_CACHE_QUOTA_BYTES", "10737418240")
@@ -48,13 +48,13 @@ func TestLoad_DocExample(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.HTTP.String() != "0.0.0.0:8090" {
+	if cfg.HTTP.String() != "0.0.0.0:30091" {
 		t.Fatalf("HTTP = %s", cfg.HTTP)
 	}
-	if cfg.Metrics.String() != "0.0.0.0:9091" {
+	if cfg.Metrics.String() != "0.0.0.0:30092" {
 		t.Fatalf("Metrics = %s", cfg.Metrics)
 	}
-	if cfg.Farcd.HTTP != "http://10.0.0.1:8080" || cfg.Farcd.WS != "ws://10.0.0.1:8081" {
+	if cfg.Farcd.HTTP != "http://10.0.0.1:30080" || cfg.Farcd.WS != "ws://10.0.0.1:30081" {
 		t.Fatalf("Farcd = %+v", cfg.Farcd)
 	}
 	if len(cfg.Channels) != 1 || cfg.Channels[0].ID != 42 || cfg.Channels[0].Storage != "disk0" {
@@ -73,8 +73,8 @@ func TestLoad_DocExample(t *testing.T) {
 
 func TestLoad_CustomEnvAddr(t *testing.T) {
 	t.Setenv("HLSD_HTTP_IP", "127.0.0.1")
-	t.Setenv("HLSD_HTTP_PORT", "18090")
-	t.Setenv("HLSD_METRICS_PORT", "19091")
+	t.Setenv("HLSD_HTTP_PORT", "38091")
+	t.Setenv("HLSD_METRICS_PORT", "39092")
 	t.Setenv("HLSD_FARC_HTTP", "http://h")
 	t.Setenv("HLSD_FARC_WS", "ws://h")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "2s")
@@ -85,7 +85,7 @@ func TestLoad_CustomEnvAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.HTTP.String() != "127.0.0.1:18090" {
+	if cfg.HTTP.String() != "127.0.0.1:38091" {
 		t.Fatalf("HTTP = %s", cfg.HTTP)
 	}
 }
@@ -103,7 +103,7 @@ func TestLoad_MissingHTTPPortEnvRejected(t *testing.T) {
 }
 
 func TestLoad_MissingMetricsPortEnvRejected(t *testing.T) {
-	t.Setenv("HLSD_HTTP_PORT", "8090")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
 	t.Setenv("HLSD_FARC_HTTP", "http://h")
 	t.Setenv("HLSD_FARC_WS", "ws://h")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "6s")
@@ -130,7 +130,7 @@ func TestLoad_HTTPOrFarcdSectionInJSONRejected(t *testing.T) {
 	// http/farcd moved to env -- their JSON keys must now be rejected by
 	// DisallowUnknownFields, not silently ignored.
 	for _, doc := range []string{
-		`{"http": {"ip":"0.0.0.0","port":8090}, "channels": []}`,
+		`{"http": {"ip":"0.0.0.0","port":30091}, "channels": []}`,
 		`{"farcd": {"http":"http://h","ws":"ws://h"}, "channels": []}`,
 	} {
 		if _, err := Load(writeConfig(t, doc)); err == nil {
@@ -140,7 +140,7 @@ func TestLoad_HTTPOrFarcdSectionInJSONRejected(t *testing.T) {
 }
 
 func TestLoad_MissingFarcHTTPEnvRejected(t *testing.T) {
-	t.Setenv("HLSD_HTTP_PORT", "8090")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
 	t.Setenv("HLSD_FARC_WS", "ws://h")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "6s")
 	t.Setenv("HLSD_CACHE_DIR", "/tmp/cache")
@@ -152,7 +152,7 @@ func TestLoad_MissingFarcHTTPEnvRejected(t *testing.T) {
 }
 
 func TestLoad_MissingFarcWSEnvRejected(t *testing.T) {
-	t.Setenv("HLSD_HTTP_PORT", "8090")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
 	t.Setenv("HLSD_FARC_HTTP", "http://h")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "6s")
 	t.Setenv("HLSD_CACHE_DIR", "/tmp/cache")
@@ -180,7 +180,7 @@ func TestLoad_DuplicateChannelIDRejected(t *testing.T) {
 }
 
 func TestLoad_MissingTargetSegmentDurationEnvRejected(t *testing.T) {
-	t.Setenv("HLSD_HTTP_PORT", "8090")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
 	t.Setenv("HLSD_FARC_HTTP", "http://h")
 	t.Setenv("HLSD_FARC_WS", "ws://h")
 	t.Setenv("HLSD_CACHE_DIR", "/tmp/cache")
@@ -192,7 +192,7 @@ func TestLoad_MissingTargetSegmentDurationEnvRejected(t *testing.T) {
 }
 
 func TestLoad_MissingCacheDirEnvRejected(t *testing.T) {
-	t.Setenv("HLSD_HTTP_PORT", "8090")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
 	t.Setenv("HLSD_FARC_HTTP", "http://h")
 	t.Setenv("HLSD_FARC_WS", "ws://h")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "6s")
@@ -211,7 +211,7 @@ func TestLoad_MissingCacheDirEnvRejected(t *testing.T) {
 // *segment* cache -- s3 exempts a deployment from a local segment cache
 // dir, but never from a local TOC cache dir.
 func TestLoad_MissingCacheDirEnvRejected_S3Backend(t *testing.T) {
-	t.Setenv("HLSD_HTTP_PORT", "8090")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
 	t.Setenv("HLSD_FARC_HTTP", "http://h")
 	t.Setenv("HLSD_FARC_WS", "ws://h")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "6s")
@@ -226,7 +226,7 @@ func TestLoad_MissingCacheDirEnvRejected_S3Backend(t *testing.T) {
 }
 
 func TestLoad_InvalidDurationEnvRejected(t *testing.T) {
-	t.Setenv("HLSD_HTTP_PORT", "8090")
+	t.Setenv("HLSD_HTTP_PORT", "30091")
 	t.Setenv("HLSD_FARC_HTTP", "http://h")
 	t.Setenv("HLSD_FARC_WS", "ws://h")
 	t.Setenv("HLSD_TARGET_SEGMENT_DURATION", "6 seconds")

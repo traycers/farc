@@ -48,13 +48,13 @@ describe('connectWhep', () => {
 
     const video = document.createElement('video')
     const controller = new AbortController()
-    await connectWhep('http://mediamtx:8889/1/whep', video, controller.signal)
+    await connectWhep('http://mediamtx:38889/1/whep', video, controller.signal)
 
     expect(pc?.transceivers).toEqual([
       { kind: 'video', direction: 'recvonly' },
       { kind: 'audio', direction: 'recvonly' },
     ])
-    expect(fetchMock).toHaveBeenCalledWith('http://mediamtx:8889/1/whep', {
+    expect(fetchMock).toHaveBeenCalledWith('http://mediamtx:38889/1/whep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp' },
       body: 'fake-offer-sdp',
@@ -67,7 +67,7 @@ describe('connectWhep', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 404, statusText: 'Not Found' })))
 
     const video = document.createElement('video')
-    await expect(connectWhep('http://mediamtx:8889/1/whep', video, new AbortController().signal)).rejects.toThrow(
+    await expect(connectWhep('http://mediamtx:38889/1/whep', video, new AbortController().signal)).rejects.toThrow(
       /404/,
     )
   })
@@ -117,10 +117,10 @@ describe('connectWhep', () => {
 
     const video = document.createElement('video')
     const controller = new AbortController()
-    await connectWhep('http://mediamtx:8889/1/whep', video, controller.signal)
+    await connectWhep('http://mediamtx:38889/1/whep', video, controller.signal)
 
     controller.abort()
     await vi.waitFor(() => expect(pc?.closed).toBe(true))
-    expect(fetchMock).toHaveBeenCalledWith('http://mediamtx:8889/v3/whep/1/session', { method: 'DELETE' })
+    expect(fetchMock).toHaveBeenCalledWith('http://mediamtx:38889/v3/whep/1/session', { method: 'DELETE' })
   })
 })

@@ -13,7 +13,7 @@ vi.mock('../api/farcd', () => ({
 }))
 
 vi.mock('../api/apid', () => ({
-  getLiveURLs: vi.fn(async (ids: number[]) => Object.fromEntries(ids.map((id) => [id, `http://mediamtx:8889/${id}/whep`]))),
+  getLiveURLs: vi.fn(async (ids: number[]) => Object.fromEntries(ids.map((id) => [id, `http://mediamtx:38889/${id}/whep`]))),
 }))
 
 let onJournalEvent: (e: JournalEvent) => void = () => {}
@@ -44,8 +44,8 @@ describe('LivePage', () => {
     localStorage.clear()
     onJournalEvent = () => {}
     channels = [
-      { channel: 1, name: 'front door', rtsp_url: 'rtsp://mediamtx:8554/1', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0, recording: true },
-      { channel: 2, name: 'back yard', rtsp_url: 'rtsp://mediamtx:8554/2', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0, recording: false, last_connect_error: 'timeout' },
+      { channel: 1, name: 'front door', rtsp_url: 'rtsp://mediamtx:38554/1', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0, recording: true },
+      { channel: 2, name: 'back yard', rtsp_url: 'rtsp://mediamtx:38554/2', storage: 's1', capture_policy_type: 'continuous', prerecord_ns: 0, postrecord_ns: 0, recording: false, last_connect_error: 'timeout' },
     ]
   })
 
@@ -84,7 +84,7 @@ describe('LivePage', () => {
 
     await screen.findByTestId('mock-live-tile-1')
     expect(getLiveURLs).toHaveBeenCalledWith([1])
-    expect(screen.getByTestId('mock-live-tile-1')).toHaveAttribute('data-whep-url', 'http://mediamtx:8889/1/whep')
+    expect(screen.getByTestId('mock-live-tile-1')).toHaveAttribute('data-whep-url', 'http://mediamtx:38889/1/whep')
   })
 
   it('unchecking a channel removes its tile from the grid', async () => {

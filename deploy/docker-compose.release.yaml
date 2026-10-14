@@ -14,30 +14,30 @@ services:
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
-      - "8554:8554"
+      - "38554:38554"
     expose:
       # Control API (mediamtx.yml's api/apiAddress) -- apid's target,
       # deliberately not published to the host.
-      - "9997"
+      - "39997"
       # WebRTC/WHEP -- the web app's Live page reaches this through nginx's
       # same-origin /api/whep proxy (web/nginx.conf,
       # .scratch/live-page-fixes/issues/03-whep-proxy-through-nginx.md),
       # not directly from the browser, so this doesn't need host
       # publishing either -- only nginx's container needs to reach it, over
       # this compose network.
-      - "8889"
+      - "38889"
     restart: unless-stopped
 
   apid:
     image: apid:__VERSION__
     environment:
       APID_HTTP_IP: "0.0.0.0"
-      APID_HTTP_PORT: "8100"
+      APID_HTTP_PORT: "30100"
       APID_METRICS_IP: "0.0.0.0"
-      APID_METRICS_PORT: "9101"
-      APID_FARC_HTTP: "http://farc:8080"
-      APID_MEDIAMTX_API_BASE: "http://mediamtx:9997"
-      APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:8554"
+      APID_METRICS_PORT: "30101"
+      APID_FARC_HTTP: "http://farc:30080"
+      APID_MEDIAMTX_API_BASE: "http://mediamtx:39997"
+      APID_MEDIAMTX_RTSP_BASE: "rtsp://mediamtx:38554"
       # Relative path, not mediamtx's own address -- the browser reaches
       # WHEP through nginx's same-origin proxy (web/nginx.conf's
       # /api/whep/ block, .scratch/live-page-fixes/issues/03), not
@@ -55,12 +55,12 @@ services:
     image: farc:__VERSION__
     environment:
       FARC_HTTP_IP: "0.0.0.0"
-      FARC_HTTP_PORT: "8080"
+      FARC_HTTP_PORT: "30080"
       FARC_WS_IP: "0.0.0.0"
-      FARC_WS_PORT: "8081"
+      FARC_WS_PORT: "30081"
       FARC_WS_MAX_CONNECTIONS: "100"
       FARC_METRICS_IP: "0.0.0.0"
-      FARC_METRICS_PORT: "9090"
+      FARC_METRICS_PORT: "30090"
     volumes:
       - farc_config:/etc/farc
       - farc_data:/data
@@ -70,16 +70,16 @@ services:
     image: hlsd:__VERSION__
     environment:
       HLSD_HTTP_IP: "0.0.0.0"
-      HLSD_HTTP_PORT: "8090"
+      HLSD_HTTP_PORT: "30091"
       HLSD_METRICS_IP: "0.0.0.0"
-      HLSD_METRICS_PORT: "9091"
-      HLSD_FARC_HTTP: "http://farc:8080"
-      HLSD_FARC_WS: "ws://farc:8081"
+      HLSD_METRICS_PORT: "30092"
+      HLSD_FARC_HTTP: "http://farc:30080"
+      HLSD_FARC_WS: "ws://farc:30081"
       HLSD_TARGET_SEGMENT_DURATION: "2s"
       HLSD_CACHE_BACKEND: "disk"
       HLSD_CACHE_DIR: "/var/cache/hlsd"
       HLSD_CACHE_QUOTA_BYTES: "10737418240"
-      HLSD_S3_ENDPOINT: "seaweedfs:8333"
+      HLSD_S3_ENDPOINT: "seaweedfs:38333"
       HLSD_S3_BUCKET: "hls-segments"
       HLSD_S3_ACCESS_KEY: "hlsd"
       HLSD_S3_SECRET_KEY: "changeme"
@@ -98,7 +98,7 @@ services:
   # template here.
   seaweedfs:
     image: chrislusf/seaweedfs:latest
-    command: server -s3 -s3.port=8333 -dir=/data
+    command: server -s3 -s3.port=38333 -dir=/data
     profiles:
       - s3
     volumes:
@@ -108,7 +108,7 @@ services:
   web:
     image: web:__VERSION__
     ports:
-      - "18881:80"
+      - "38881:38080"
     depends_on:
       - farc
       - hlsd
@@ -122,6 +122,7 @@ services:
   # so there's nothing to template here.
   prometheus:
     image: prom/prometheus:v2.55.1
+    command: --config.file=/etc/prometheus/prometheus.yml --web.listen-address=0.0.0.0:39090
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -129,6 +130,7 @@ services:
 
   loki:
     image: grafana/loki:2.9.9
+    command: -config.file=/etc/loki/local-config.yaml -server.http-listen-port=33100
     volumes:
       - loki_data:/loki
     restart: unless-stopped
@@ -146,10 +148,11 @@ services:
   grafana:
     image: grafana/grafana:11.3.1
     ports:
-      - "3000:3000"
+      - "33000:33000"
     environment:
       GF_SECURITY_ADMIN_USER: "admin"
       GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_SERVER_HTTP_PORT: "33000"
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro

@@ -79,7 +79,7 @@ type FarcdHTTPClient struct {
 }
 
 // NewFarcdClient creates a FarcdHTTPClient. base is farcd's HTTP API base
-// URL with no trailing slash requirement, e.g. "http://farc:8080".
+// URL with no trailing slash requirement, e.g. "http://farc:30080".
 func NewFarcdClient(base string) *FarcdHTTPClient {
 	return &FarcdHTTPClient{base: strings.TrimSuffix(base, "/"), hc: &http.Client{}}
 }

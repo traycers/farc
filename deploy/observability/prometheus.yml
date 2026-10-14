@@ -6,12 +6,12 @@ global:
 scrape_configs:
   - job_name: farc
     static_configs:
-      - targets: ["farc:9090"]
+      - targets: ["farc:30090"]
 
   - job_name: hlsd
     static_configs:
-      - targets: ["hlsd:9091"]
+      - targets: ["hlsd:30092"]
 
   - job_name: apid
     static_configs:
-      - targets: ["apid:9101"]
+      - targets: ["apid:30101"]

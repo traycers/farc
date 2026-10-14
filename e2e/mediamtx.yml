@@ -4,7 +4,7 @@
 # ffmpeg-ch1/ffmpeg-ch2 services in docker-compose.e2e.yaml (kept as their
 # own containers rather than mediamtx's runOnInit hooks, since the official
 # mediamtx image isn't guaranteed to bundle ffmpeg).
-rtspAddress: :8554
+rtspAddress: :38554
 
 # Control API (apid's target, .scratch/live-page/spec.md) + WebRTC/WHEP --
 # kept in sync with mediamtx.dev.yml's own additions even though no
@@ -13,10 +13,10 @@ rtspAddress: :8554
 # this keeps e2e's apid service (docker-compose.e2e.yaml) able to
 # provision paths against a real mediamtx.
 api: yes
-apiAddress: :9997
+apiAddress: :39997
 
 webrtc: yes
-webrtcAddress: :8889
+webrtcAddress: :38889
 
 authInternalUsers:
   - user: any
